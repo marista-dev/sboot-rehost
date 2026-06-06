@@ -1,0 +1,25 @@
+
+autoboot aborted..
+S-BOOT # help
+Following commands are supported:
+* dramtest
+* reset
+* usb
+* upload
+* findenv
+* saveenv
+* setenv
+* printenv
+* load_cp_header
+* display
+* uarten
+* uartdis
+* dprm
+* check_nad_dram
+* drawimg
+* debore
+* sod
+* ufs_sod
+* help
+To get commands help, Type "help <command>"
+S-BOOT #

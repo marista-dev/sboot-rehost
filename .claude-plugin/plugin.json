@@ -1,0 +1,20 @@
+{
+  "name": "sboot-rehost",
+  "description": "Samsung S-Boot BL3 rehosting helper for QEMU — firmware in, real shell out. Drives static analysis, machine.c generation, iterative fault loop, and 5/5 honesty verification.",
+  "version": "0.1.0",
+  "author": {
+    "name": "sboot-rehost contributors"
+  },
+  "homepage": "https://github.com/wonjun-ma/sboot-rehost",
+  "repository": "https://github.com/wonjun-ma/sboot-rehost",
+  "license": "MIT",
+  "keywords": [
+    "qemu",
+    "rehosting",
+    "samsung",
+    "s-boot",
+    "exynos",
+    "firmware-analysis",
+    "reverse-engineering"
+  ]
+}

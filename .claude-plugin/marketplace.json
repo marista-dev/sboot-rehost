@@ -1,0 +1,19 @@
+{
+  "name": "sboot-rehost-marketplace",
+  "owner": {
+    "name": "sboot-rehost contributors"
+  },
+  "description": "Samsung S-Boot rehosting plugins",
+  "plugins": [
+    {
+      "name": "sboot-rehost",
+      "source": "./",
+      "description": "Samsung S-Boot BL3 rehosting — firmware in, real shell out",
+      "version": "0.1.0",
+      "category": "reverse-engineering",
+      "tags": ["qemu", "samsung", "s-boot", "exynos", "firmware"],
+      "homepage": "https://github.com/wonjun-ma/sboot-rehost",
+      "license": "MIT"
+    }
+  ]
+}

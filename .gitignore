@@ -1,0 +1,57 @@
+# Firmware binaries — NEVER commit. Users provide their own.
+*.bin
+*.lz4
+*.tar
+*.tar.md5
+*.zip
+sboot*
+bl3*
+
+# QEMU build artifacts
+build/
+*.o
+*.obj
+*.so
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Logs / runtime
+/tmp/
+*.log
+console_*.txt
+run_*.txt
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Working directory artifacts (사용자가 새 펌웨어 작업하는 디렉터리는 git 추적 안 함)
+INPUT.md
+STATIC.md
+STUBS.md
+PROGRESS.md
+VERIFICATION.md
+01_firmware/
+02_unpacked/
+03_bl3/
+04_static-analysis/
+05_qemu/
+06_machine/
+07_logs/
+08_docs/
+10_reproduce/
+
+# ★ 예외: examples 폴더의 INPUT.md 는 추적
+!examples/*/INPUT.md
+!examples/*/EXPECTED_OUTPUT.txt
+!examples/*/machine.c
+!examples/*/README.md
