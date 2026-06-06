@@ -14,7 +14,7 @@
 claude
 
 # 2) 마켓플레이스 추가 + 플러그인 설치 (한 줄씩)
-> /plugin marketplace add wonjun-ma/sboot-rehost
+> /plugin marketplace add marista-dev/sboot-rehost
 > /plugin install sboot-rehost@sboot-rehost-marketplace
 
 # 3) 같은 명령을 끝까지 반복
