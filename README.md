@@ -1,7 +1,6 @@
 # sboot-rehost
 
 > Samsung S-Boot BL3 rehosting helper for Claude Code.
-> 펌웨어 1 개 던지면 QEMU 안에서 진짜 S-Boot 셸까지 자동으로 도달.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
