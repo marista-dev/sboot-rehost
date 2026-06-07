@@ -9,7 +9,7 @@
       "name": "sboot-rehost",
       "source": "./",
       "description": "Samsung S-Boot BL3 rehosting — firmware in, real shell out",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "reverse-engineering",
       "tags": ["qemu", "samsung", "s-boot", "exynos", "firmware"],
       "homepage": "https://github.com/marista-dev/sboot-rehost",

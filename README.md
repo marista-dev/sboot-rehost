@@ -1,27 +1,48 @@
 # sboot-rehost
 
 > Samsung S-Boot BL3 rehosting helper for Claude Code.
+> 펌웨어 1 개 던지면 QEMU 안에서 진짜 S-Boot 셸까지 자동으로 도달.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
-## Quick Start (3 분)
+## Quick Start
+
+### 1) 설치 (한 번)
 
 ```bash
-# 1) Claude Code 진입
 claude
-
-# 2) 마켓플레이스 추가 + 플러그인 설치 (한 줄씩)
 > /plugin marketplace add marista-dev/sboot-rehost
 > /plugin install sboot-rehost@sboot-rehost-marketplace
+```
 
-# 3) 같은 명령을 끝까지 반복
+### 2) 첫 사용 — `/rehost` 가 모든 안내 제공
+
+```bash
 > /rehost
 ```
 
-업데이트:
-```
+`/rehost` 가 **상태별로 자동 안내**:
+
+| 호출 차수 | 상태 | `/rehost` 가 하는 일 |
+|---|---|---|
+| 1번째 | 의존성 없음 | apt + QEMU 10.2.2 설치 안내 → 동의 시 자동 (~18 분, sudo 한 번) |
+| 2번째 | 환경 OK, 펌웨어 미지정 | **펌웨어 준비 안내** (필요 파일 / 추출 방법 / 등급 설명) → 준비됐는지 확인 → 4 질문 (펌웨어 경로, 모델, 등급, 참조자산) |
+| 3번째~ | 입력 OK | 정적 분석 → 머신 빌드 → 회차 루프 → 5/5 검증 → 재현 키트 |
+
+사용자는 **펌웨어 준비도, 설치도, 입력도 `/rehost` 호출 안에서 모두 안내받음**. 갑자기 파일 경로 묻지 않음.
+
+### 3) 펌웨어 준비 (안내는 `/rehost` 가 알려주지만, 미리 알고 싶다면)
+
+- BL3 본체 `.bin` 파일 (보통 4 MB 이상)
+- 출처: samfw.com / sammobile.com 의 본인 기기용 `BL_*.tar.md5`
+- 추출: `tar xf BL_*.tar.md5` → `lz4 -d sboot.bin.lz4 sboot.bin`
+- 본인 기기용만 사용 (라이선스)
+
+### 업데이트
+
+```bash
 > /plugin marketplace update sboot-rehost-marketplace
 ```
 
@@ -58,7 +79,7 @@ S-BOOT #
 | 상태 | 트리거 | `/rehost` 가 하는 일 |
 |---|---|---|
 | **S0** | 의존성 (QEMU, capstone) 없음 | `scripts/setup_env.sh` 자동 실행 (~18 분) |
-| **S1** | `INPUT.md` 없음 | 펌웨어 경로 / 모델 / 등급 / 참조자산 4 가지 묻기 |
+| **S1** | `INPUT.md` 없음 | **Briefing** (펌웨어 준비물 안내) → **Ready check** (지금/도움/나중에) → **Intake** (4 질문) |
 | **S2** | `STATIC.md` 없음 | `bl3-analyzer` agent: 8 도출 (entry, linker, load, Δ, cmd 테이블, list head, shell 함수, carve 판정) |
 | **S3** | `STUBS.md` 없음 | `stub-locator` agent: 4 보조 도출 (vtable, heap, handoff, timeout) |
 | **S4** | `machine.c` 없음 | 템플릿 13 슬롯 채워서 작성 + ninja 빌드 |

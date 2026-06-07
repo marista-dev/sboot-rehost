@@ -27,35 +27,146 @@ description: Samsung S-Boot BL3 rehosting의 모든 단계 (의존성 설치 →
 - `python3 -c "import capstone"` 가 실패
 
 **실행**:
-1. 사용자에게 "의존성 설치 (~18 분, sudo 필요) 진행해도 될까요?" 확인
-2. 동의 시 `bash <PLUGIN_DIR>/scripts/setup_env.sh` 실행
-3. 끝나면 보고: "환경 셋업 완료. 다시 /rehost 호출하세요."
+1. 사용자에게 안내:
+   ```
+   sboot-rehost 시작 전 의존성 (QEMU 10.2.2 + capstone) 설치가 필요합니다.
+   ~18 분 소요, sudo 권한 필요 (apt install).
+
+   이 단계는 한 번만 하면 됩니다. 다음 펌웨어 작업 시에는 S1 부터 시작.
+   ```
+2. AskUserQuestion 으로 동의:
+   - "지금 설치" — `bash <PLUGIN_DIR>/scripts/setup_env.sh` 실행
+   - "나중에" — 종료, 사용자가 수동 셋업 안내
+3. 끝나면 보고:
+   ```
+   환경 셋업 완료. 다시 /rehost 호출하면 펌웨어 작업 안내가 시작됩니다.
+   ```
 
 **위반 시 (의존성 있는 척)**: 가짜 stub 으로 진행 금지. 실제 capstone import
 + qemu --version 확인까지 끝낸 후만 다음.
 
 ---
 
-### S1 — 작업 디렉터리 미설정
+### S1 — 작업 디렉터리 미설정 (3 phase: Briefing → Ready check → Intake)
 
 **검사**: 작업 디렉터리에 `INPUT.md` 없음
 
-**실행**:
-1. **AskUserQuestion 으로 4 가지 질문 한 번에**:
-   - Q1 (펌웨어): "BL3 본체 파일 (sboot.bin) 절대 경로"
-   - Q2 (모델): "모델 식별자 (예: SM-S921N)"
-   - Q3 (등급): A (help 만) / B (특정 명령) / C (autoboot)
-   - Q4 (참조): 유사 SoC 머신.c 또는 다른 분석가 자료 경로 (옵션, 없으면 빈 칸)
-2. 자동 추출:
-   - md5sum (Bash 호출)
-   - 파일 크기
-3. SoC / build / carrier 는 옵션 — 사용자가 README 에 명시 안 했으면
-   "미확정" 으로 시작 (정직성 §4)
-4. 작업 디렉터리에 다음 생성:
-   - 표준 8 폴더 (01_firmware ~ 08_docs)
-   - INPUT.md (Table B 슬롯 채워서)
-   - PROGRESS.md (templates/PROGRESS.md.tmpl 사용, 0 회차만 기록)
-5. 보고: "INPUT.md 생성 완료. 다음 /rehost 호출 시 정적 분석 시작."
+이 단계는 **사용자가 펌웨어를 아직 준비 안 했을 수 있다고 가정**하고, 먼저
+안내 → 준비 확인 → 본격 입력 순으로 진행. 절대 갑자기 파일 경로부터 묻지 말 것.
+
+**Phase 1A — Briefing (안내 출력)**
+
+사용자에게 한 화면 안내를 먼저 보여줌 (텍스트 출력, 질문 아님):
+
+```
+==================================================
+sboot-rehost — 펌웨어 리호스팅 시작
+==================================================
+
+이 플러그인은 Samsung S-Boot BL3 펌웨어를 QEMU 에서 실행해
+실제 S-Boot 셸 출력에 도달하는 과정을 자동화합니다.
+
+다음 단계로 진행됩니다:
+  S2  정적 분석 (BL3 entry/linker/load/Δ 등 8 도출, ~3 분)
+  S3  보조 도출 (vtable/heap/handoff/timeout 4 값, ~2 분)
+  S4  머신 .c 생성 + ninja 빌드 (~5 분)
+  S5  회차 루프 (정지점 → 패치, 10 회차 × 약 30 초)
+  S6  정직성 5/5 검증
+  S7  재현 키트 생성
+
+--- 시작 전 준비물 ---
+
+1. ★ BL3 본체 파일 (필수)
+   - 보통 4 MB 이상의 `.bin` (예: sboot_bl3.bin)
+   - sboot.bin (BL1+BL2+BL3 컨테이너) 만 있다면 BL3 본체 carve 필요
+   - 본인 기기용 펌웨어만 사용 (라이선스 준수)
+   - 권장 위치: <현재 작업 디렉터리>/01_firmware/
+
+2. 모델 식별자
+   - 예: SM-S921N, SM-G977N
+   - 펌웨어 파일명에 보통 포함됨
+
+3. 목표 등급
+   - A = help 명령까지 (가장 안정적, ~30 분)
+   - B = 특정 명령 핸들러 실행 (UFS/PMIC 일부 모델 필요)
+   - C = autoboot 전체 (대부분 풀 모델 필요, 본 플러그인 범위 초과)
+
+4. (선택) 참조 자산
+   - 유사 SoC 의 머신.c 또는 다른 분석가의 분석 자료
+   - 30+ 회차 whack-a-mole 방지에 큰 도움
+
+--- 작업 디렉터리 ---
+  현재 cwd: <PATH>
+  여기에 INPUT.md / PROGRESS.md / 01_firmware/ ... 생성됩니다.
+  cwd 변경 필요 시 종료 후 다시 시작.
+
+==================================================
+```
+
+**Phase 1B — Ready check (AskUserQuestion 1 개)**
+
+```
+Q: 준비 상태는?
+   - "지금 시작" — 4 가지 입력 (펌웨어 경로 등) 받기
+   - "도움 필요" — 펌웨어 추출 / 다운로드 안내 추가 출력
+   - "나중에" — 종료. 준비되면 /rehost 재호출
+```
+
+- "나중에" 선택 시: 한 줄 안내 후 종료
+  ```
+  알겠습니다. 펌웨어 준비되면 같은 디렉터리에서 /rehost 재호출.
+  종료.
+  ```
+
+- "도움 필요" 선택 시: 추가 가이드 출력 후 다시 Ready check 반복
+  ```
+  --- 펌웨어 확보 가이드 ---
+  1. samfw.com / sammobile.com 에서 본인 모델의 BL_*.tar.md5 다운로드
+  2. tar xf BL_*.tar.md5 → sboot.bin.lz4 또는 sboot.bin 확보
+  3. lz4 -d sboot.bin.lz4 sboot.bin  (필요 시)
+  4. BL3 carve:
+     - sboot.bin 이 ≥ 4 MB 면 그대로 사용 가능
+     - 작으면 (carve 가능성) BL3 본체만 추출 필요
+     - 본 플러그인은 carve 자체는 자동화 안 함 — 다른 분석가 자료 참조 권장
+  ```
+
+- "지금 시작" 선택 시: Phase 1C 진행
+
+**Phase 1C — Intake (AskUserQuestion 4 개 한 화면)**
+
+이때만 본격 입력 받음:
+
+- Q1 (펌웨어 경로): "BL3 본체 파일 절대 경로 (예: /mnt/c/.../sboot_bl3.bin)"
+- Q2 (모델): "모델 식별자 (예: SM-S921N)"
+- Q3 (등급): A / B / C
+- Q4 (참조 자산): 콤마 구분 경로 (없으면 빈 칸 또는 "없음")
+
+자동 추출 (입력 받은 후):
+- 파일 존재 확인 (없으면 사용자에게 다시 묻기)
+- md5sum 자동 계산
+- 파일 크기 자동
+- 4 MB 미만이면 bl3-analyzer 단계로 가기 전에 critic 신호 4 미리 경고
+  ("BL3 가 4 MB 미만 — carve 가능성. 그래도 진행할까요?")
+
+SoC / build / carrier 는 추가로 묻지 않고 "미확정" 으로 시작 (정직성 §4).
+
+**작업 디렉터리 셋업**:
+- 표준 8 폴더 (01_firmware ~ 08_docs) 생성
+- BL3 파일을 01_firmware/ 로 복사 (사용자 동의 후 — 원본 보존)
+- INPUT.md 작성 (Table B 슬롯 채워서)
+- PROGRESS.md 작성 (templates/PROGRESS.md.tmpl)
+
+**보고**:
+```
+INPUT.md 생성 완료.
+
+| 모델 | <Q2> |
+| 등급 | <Q3> |
+| BL3 | <Q1> (<size> bytes, md5 <md5>) |
+| 작업 디렉터리 | <cwd> |
+
+다음 /rehost 호출 시 정적 분석 (S2) 시작 (~3 분).
+```
 
 **INPUT.md 형식**:
 ```markdown
