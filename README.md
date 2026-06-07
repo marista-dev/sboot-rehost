@@ -17,38 +17,27 @@ claude
 > /plugin install sboot-rehost@sboot-rehost-marketplace
 ```
 
-### 2) 첫 사용 — `/rehost` 가 모든 안내 제공
+### 2) 두 명령으로 끝
 
 ```bash
+# 첫 호출 — 셋업 + 펌웨어 가이드 + 4 질문
+> /rehost-init
+
+# 두 번째 호출 — 병렬 멀티에이전트로 본격 실행
 > /rehost
 ```
 
-`/rehost` 가 **상태별로 자동 안내**:
+흐름:
 
-| 호출 차수 | 상태 | `/rehost` 가 하는 일 |
-|---|---|---|
-| 1번째 | 의존성 없음 | apt + QEMU 10.2.2 설치 안내 → 동의 시 자동 (~18 분, sudo 한 번) |
-| 2번째 | 환경 OK, 펌웨어 미지정 | **펌웨어 준비 안내** (필요 파일 / 추출 방법 / 등급 설명) → 준비됐는지 확인 → 4 질문 (펌웨어 경로, 모델, 등급, 참조자산) |
-| 3번째~ | 입력 OK | 정적 분석 → 머신 빌드 → 회차 루프 → 5/5 검증 → 재현 키트 |
+| 명령 | 역할 |
+|---|---|
+| **`/rehost-init`** | **셋업** — 의존성 백그라운드 설치 + 폴더 구조 (8 폴더) 생성 + 펌웨어 다운로드/추출 안내 (samfw.com 어디서 받아서 어디에 넣을지) + 사용자 4 질문 (펌웨어 경로 / 모델 / 등급 / 참조) → INPUT.md 생성 |
+| **`/rehost`** | **본 실행** — `workflows/pipeline.js` 호출. 5 phase 자동: ① 정적 분석 (병렬 멀티에이전트) → ② 머신 .c + ninja → ③ 회차 루프 (직렬, max 30 회) → ④ 5/5 정직성 검증 → ⑤ 재현 키트 |
+| `/rehost-status` (옵션) | 진행 상황 한 화면 요약 |
 
-사용자는 **펌웨어 준비도, 설치도, 입력도 `/rehost` 호출 안에서 모두 안내받음**. 갑자기 파일 경로 묻지 않음.
-
-### 3) 펌웨어 준비 (안내는 `/rehost` 가 알려주지만, 미리 알고 싶다면)
-
-- BL3 본체 `.bin` 파일 (보통 4 MB 이상)
-- 출처: samfw.com / sammobile.com 의 본인 기기용 `BL_*.tar.md5`
-- 추출: `tar xf BL_*.tar.md5` → `lz4 -d sboot.bin.lz4 sboot.bin`
-- 본인 기기용만 사용 (라이선스)
-
-### 업데이트
-
-```bash
-> /plugin marketplace update sboot-rehost-marketplace
-```
-
-`/rehost` 가 매번 호출될 때마다 현재 상태를 감지해 다음 단계 1 개를 자동
-수행. 사용자는 첫 호출에서 펌웨어 경로 / 모델 / 목표 등급 4 가지만 답하면
-됨.
+`/rehost-init` 끝나면 사용자 추가 입력 없이 `/rehost` 한 번으로 끝까지.
+중간에 critic 가 위기 5 신호 (방향 오류 / carve 의심 / 등급 미스매치 등)
+감지하면 사용자에게 분기 요청.
 
 ---
 
@@ -74,71 +63,45 @@ S-BOOT #
 
 ---
 
-## 작동 방식 — 상태 머신
-
-| 상태 | 트리거 | `/rehost` 가 하는 일 |
-|---|---|---|
-| **S0** | 의존성 (QEMU, capstone) 없음 | `scripts/setup_env.sh` 자동 실행 (~18 분) |
-| **S1** | `INPUT.md` 없음 | **Briefing** (펌웨어 준비물 안내) → **Ready check** (지금/도움/나중에) → **Intake** (4 질문) |
-| **S2** | `STATIC.md` 없음 | `bl3-analyzer` agent: 8 도출 (entry, linker, load, Δ, cmd 테이블, list head, shell 함수, carve 판정) |
-| **S3** | `STUBS.md` 없음 | `stub-locator` agent: 4 보조 도출 (vtable, heap, handoff, timeout) |
-| **S4** | `machine.c` 없음 | 템플릿 13 슬롯 채워서 작성 + ninja 빌드 |
-| **S5** | `PROGRESS.md` 회차 0 | `iter-loop.js` workflow: 10 회차 자동 (fault → fix → critic 점검) |
-| **S6** | UART 에 BL3 ASCII ≥ 3 토큰 | `reality-verifier` agent: 정직성 5/5 검증 |
-| **S7** | 5/5 통과 | `10_reproduce/` 재현 키트 생성 |
-
-매 단계마다 정직성 규칙 7 항 + 검증 5/5 자동 적용. 30 회차 누적 시 `critic`
-agent 가 자동 발화: "방향 맞아? entry redirect 더 앞으로 옮길지 검토."
-
----
-
-## 필요 환경
-
-- **OS**: Ubuntu 22.04+ 또는 WSL2 (Ubuntu 22.04+)
-- **디스크**: 약 3 GB 여유 (QEMU 빌드 산출물 포함)
-- **Claude Code**: 최신 버전 (slash 명령, AskUserQuestion, Workflow 지원)
-- **인터넷**: QEMU 10.2.2 다운로드용 (한 번)
-
-자동 설치되는 것:
-- apt: `build-essential ninja-build pkg-config libglib2.0-dev libpixman-1-dev libslirp-dev python3 python3-pip socat lz4 file`
-- pip: `meson capstone lz4 keystone-engine`
-- QEMU 10.2.2 (aarch64-softmmu 만)
-
----
-
-## 플러그인 구조
+## 작동 방식 — 2 단계 + 5 phase
 
 ```
-sboot-rehost/
-├── .claude-plugin/plugin.json     플러그인 매니페스트
-├── CLAUDE.md                      ★ 항상 로드: 정직성 7 + 5/5 + 위기 5 신호
-├── methodology/                   읽기 전용 참조 문서
-│   ├── instruction.md             원본 방법론
-│   ├── general_tables.md          Table A~I 일반화
-│   └── worked_example.md          S921N 풀이 회고
-├── skills/
-│   ├── rehost/SKILL.md            /rehost — 상태 머신 (S0~S7)
-│   └── rehost-status/SKILL.md     /rehost-status — 진행 요약
-├── agents/
-│   ├── bl3-analyzer.md            8 도출
-│   ├── stub-locator.md            4 보조 도출
-│   ├── fault-fixer.md             fault → 패치 (Table F)
-│   ├── reality-verifier.md        5/5 검증 (Table G)
-│   └── critic.md                  위기 5 신호 (Table H)
-├── workflows/
-│   └── iter-loop.js               회차 루프 (qemu → fix → critic)
-├── templates/
-│   ├── machine.c.tmpl             13 슬롯 머신 골격
-│   └── PROGRESS.md.tmpl
-├── scripts/
-│   ├── setup_env.sh               의존성 자동 설치
-│   ├── carve_disasm.py            capstone 래퍼
-│   ├── run_qemu.sh                표준 실행 인자
-│   └── verify_byte_match.py       Table G #2-3
-└── examples/s921n-exynos2400/     완성 worked example
-    ├── INPUT.md
-    ├── EXPECTED_OUTPUT.txt
-    └── machine.c
+사용자가 호출하는 명령은 2 개
+
+┌─────────────────────────────────────────────────────┐
+│  /rehost-init         (1 회, ~20 분 — 대부분 의존성 빌드)
+└─────────────────────────────────────────────────────┘
+  Step 1: 의존성 검사
+  Step 2: (미설치 시) setup_env.sh 백그라운드 실행 (~18 분)
+  Step 3: 표준 8 폴더 생성 (01_firmware/ ~ 08_docs/)
+  Step 4: BRIEFING 출력 — samfw.com 어디서, BL_*.tar.md5 어떻게 풀어,
+                         어떤 파일이 sboot.bin 인지, 어디에 두는지
+  Step 5: Ready check  — "지금 시작 / 도움 더 필요 / 나중에"
+  Step 6: Intake       — AskUserQuestion 4 (경로/모델/등급/참조)
+  Step 7: INPUT.md + PROGRESS.md 작성
+  Step 8: 완료 보고
+
+┌─────────────────────────────────────────────────────┐
+│  /rehost              (1 회, ~30 분 ~ 수 시간)
+└─────────────────────────────────────────────────────┘
+  Phase 1: Static Analysis  ★ 병렬 멀티에이전트
+    - bl3-analyzer: 8 도출 (carve/entry/linker/load/Δ/cmd_table/head/shell)
+    - stub-locator: 4 sub-task 병렬 (vtable/heap/handoff/timeout)
+    → STATIC.md + STUBS.md
+
+  Phase 2: Machine Build    (직렬)
+    - machine.c.tmpl 의 13 슬롯 채움 → 06_machine/machine.c
+    - QEMU 트리 통합 + ninja
+
+  Phase 3: Iteration Loop   (직렬, 한 회차 한 변경)
+    - iter-loop.js 가 max 30 회차 자동
+    - 매 회차: qemu → fault-fixer → 패치 → critic 점검
+
+  Phase 4: 5/5 Verification (직렬)
+    - reality-verifier — Table G 5 항목
+
+  Phase 5: Reproduce Kit    (직렬)
+    - 10_reproduce/ 생성
 ```
 
 ---
@@ -158,7 +121,77 @@ sboot-rehost/
 
 5/5 = REAL. 4/5 이하 = FORCED 라고 보고 (성공 표시 금지).
 
+---
 
+## 필요 환경
+
+- **OS**: Ubuntu 22.04+ 또는 WSL2 (Ubuntu 22.04+)
+- **디스크**: 약 3 GB 여유 (QEMU 빌드 산출물 포함)
+- **Claude Code**: 최신 버전 (slash 명령, AskUserQuestion, Workflow 지원)
+- **인터넷**: QEMU 10.2.2 다운로드용 (한 번)
+
+자동 설치되는 것 (`/rehost-init` 의 Step 2):
+- apt: `build-essential ninja-build pkg-config libglib2.0-dev libpixman-1-dev libslirp-dev python3 python3-pip socat lz4 file`
+- pip: `meson capstone lz4 keystone-engine`
+- QEMU 10.2.2 (aarch64-softmmu 만)
+
+---
+
+## 플러그인 구조
+
+```
+sboot-rehost/
+├── .claude-plugin/
+│   ├── plugin.json                플러그인 매니페스트
+│   └── marketplace.json           자체 마켓플레이스 (1 인 리포)
+├── CLAUDE.md                      ★ 항상 로드: 정직성 7 + 5/5 + 위기 5 신호
+├── methodology/                   읽기 전용 참조 문서
+│   ├── instruction.md             원본 방법론
+│   ├── general_tables.md          Table A~I 일반화
+│   └── worked_example.md          S921N 풀이 회고
+├── skills/
+│   ├── rehost-init/SKILL.md       /rehost-init — 셋업 + 가이드 + 4 질문
+│   ├── rehost/SKILL.md            /rehost — 본 실행 (pipeline.js 호출)
+│   └── rehost-status/SKILL.md     /rehost-status — 진행 요약
+├── agents/
+│   ├── bl3-analyzer.md            8 도출
+│   ├── stub-locator.md            4 보조 도출
+│   ├── fault-fixer.md             fault → 패치 (Table F)
+│   ├── reality-verifier.md        5/5 검증 (Table G)
+│   └── critic.md                  위기 5 신호 (Table H)
+├── workflows/
+│   ├── pipeline.js                ★ /rehost 가 호출 — 5 phase 멀티에이전트
+│   └── iter-loop.js               회차 루프 (pipeline 의 Phase 3 위임)
+├── templates/
+│   ├── machine.c.tmpl             13 슬롯 머신 골격
+│   └── PROGRESS.md.tmpl
+├── scripts/
+│   ├── setup_env.sh               의존성 자동 설치
+│   ├── carve_disasm.py            capstone 래퍼
+│   ├── run_qemu.sh                표준 실행 인자
+│   └── verify_byte_match.py       Table G #2-3
+└── examples/s921n-exynos2400/     완성 worked example
+    ├── INPUT.md
+    ├── EXPECTED_OUTPUT.txt        308 bytes (S-BOOT # help ...)
+    └── machine.c                  454 줄
+```
+
+---
+
+## 멀티에이전트 병렬화 지점
+
+`/rehost` → `pipeline.js` 안에서:
+
+| Phase | 병렬 가능 | 어떻게 |
+|---|---|---|
+| 1 (Static) | ★ 부분 | bl3-analyzer 가 shell_func 도출 후 → stub-locator 의 4 sub-task (vtable/heap/handoff/timeout) 가 `parallel()` 으로 동시 실행 |
+| 2 (Machine) | ✗ | machine.c 작성 → ninja 직렬 |
+| 3 (Iterate) | ✗ | 한 회차 한 변경 (instruction.md §7.3 규칙). 회차 사이 직렬 |
+| 4 (Verify) | ✗ | reality-verifier 1 회 호출 |
+| 5 (Package) | ✗ | 파일 복사 |
+
+병렬 이득이 큰 곳은 Phase 1 의 stub-locator 4 sub-task. 회차 루프는
+의도적으로 직렬 (정직성 §7.3).
 
 ---
 
@@ -183,6 +216,3 @@ sboot-rehost/
 
 MIT. 펌웨어 바이너리는 본 리포에 포함되지 않음 — 사용자 본인이 정식 채널로
 확보 (예: samfw.com 의 본인 기기용 펌웨어).
-
----
-
