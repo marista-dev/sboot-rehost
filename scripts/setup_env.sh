@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # setup_env.sh — sboot-rehost 의 의존성 자동 설치
-# /rehost 의 S0 단계가 호출. 사용자 동의 후만 실행.
+# /rehost-init 또는 실행 명령의 S0 단계가 호출. 사용자 동의 후만 실행.
 # 소요: 약 18 분 (대부분 QEMU 빌드)
 
 set -e
@@ -16,7 +16,10 @@ sudo apt-get install -y \
     build-essential ninja-build pkg-config \
     libglib2.0-dev libpixman-1-dev libslirp-dev \
     python3 python3-pip python3-venv \
-    socat unzip wget curl tar lz4 file
+    socat unzip wget curl tar lz4 file \
+    flex bison device-tree-compiler   # 트랙 2: 커널/DTB (dtc=fdtdump, flex/bison=QEMU dtc)
+# 트랙 2 K3 (dm-linear/모듈 로드 캡스톤) 은 aarch64 크로스툴체인 추가 필요 —
+# 무루트 확보는 worked example 의 get_xtool.sh (공식 Ubuntu .deb apt-get download) 참고.
 
 # ---- 2) pip ----
 echo "=== [2/3] pip 패키지 (capstone, meson 등) ==="
@@ -70,4 +73,4 @@ which meson && meson --version || true
 
 echo
 echo "OK: 환경 셋업 완료."
-echo "다음 단계: Claude Code 에서 /rehost 호출"
+echo "다음 단계: Claude Code 에서 /rehost-sboot (트랙 1) 또는 /rehost-kernel (트랙 2) 호출"

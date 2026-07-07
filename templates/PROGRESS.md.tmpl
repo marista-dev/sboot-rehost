@@ -10,12 +10,14 @@
 
 | 항목 | 값 |
 |---|---|
+| 트랙 | {{TRACK}} (1 sboot-shell / 2 kernel-storage) |
+| 자율 실행 | {{AUTONOMOUS}} (true=자동 결정, false=대화형) |
 | 모델 | {{MODEL}} |
 | SoC | {{SOC}} |
 | 빌드 | {{BUILD}} |
-| BL3 md5 | {{MD5}} |
-| BL3 크기 | {{SIZE}} bytes |
-| 목표 등급 | {{TARGET}} |
+| 자산 md5 | {{MD5}} (트랙 1: BL3 / 트랙 2: Image) |
+| 자산 크기 | {{SIZE}} bytes |
+| 목표 등급 | {{TARGET}} (트랙 1: A/B/C / 트랙 2: K1/K2/K3) |
 | 작업 디렉터리 | {{WORKDIR}} |
 | QEMU | 10.2.2 |
 | 시작 일자 | {{DATE}} |
@@ -31,7 +33,7 @@
 
 | 회차 | 정지점 | 한 변경 |
 |---|---|---|
-| - | (회차 진입 전) | INPUT.md 생성, 8 폴더 셋업 |
+| - | (회차 진입 전) | INPUT.md 생성, 작업 폴더 셋업 |
 
 ---
 
@@ -51,12 +53,12 @@
 
 ---
 
-## 최종 검증 (instruction.md §11 — Table G 5/5)
+## 최종 검증 (CLAUDE.md 5/5 — 트랙별)
 
-1. PC 트레이스가 셸 함수 + 명령루프 도달 ☐
-2. 출력 토큰 100% BL3 바이너리에 존재 ☐
-3. 머신 C 소스에 출력 문자열 0 개 ☐
-4. UART 출력 경로 1 자리 ☐
-5. 우회 목록 [대상/이유/방법/부작용] N 항 ☐
+**트랙 1**: PC 트레이스 셸 도달 ☐ / 출력 토큰 100% BL3 존재 ☐ / 소스 negative ☐ /
+UART 단일 경로 ☐ / 우회 목록 4 항 ☐
+
+**트랙 2**: `Run /init` ☐ / 커널 메시지 (erofs dm-N · sda1 · Power mode) ☐ /
+소스 negative ☐ / 드라이버 진짜 구동 (UTRD/Query/SCSI) ☐ / 우회 목록 4 항 ☐
 
 5/5 = ★ REAL. 4/5 이하 = FORCED.

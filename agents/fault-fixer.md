@@ -82,6 +82,14 @@ enc, _ = ks.asm("mov w0, #0", addr=patch_target)
 }
 ```
 
+## 실행 기록 (필수, CLAUDE.md 실행 기록)
+
+분류 직후 `journal.sh try-end` 로 회차를 기록. 매핑:
+- **원인** = category + fault_info (예: `smc_undef ELR=0x...`)
+- **분석** = rationale
+- **해결** = patch_description (reached_shell 이면 "셸 도달")
+- **증거** = `07_logs/run_N.log`
+
 ## 정직성 규칙
 
 1. **추측 토글 금지** (정직성 §1) — "12회 read=0, 그 뒤 0xFFFFFFFF" 같은

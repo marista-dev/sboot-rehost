@@ -1,11 +1,15 @@
 # 일반화 표 — sboot-rehost 의 모든 의사결정의 기준
 
-> 이 문서는 새 펌웨어 어떤 것이 와도 그대로 적용 가능한 9 개 표 (A~I).
-> 플러그인의 모든 산출물이 이 표의 어느 행과 매핑되는지 명시.
+> 이 문서는 새 펌웨어 어떤 것이 와도 그대로 적용 가능한 표 A~M (+ G2/H2, 양 트랙).
+> A~I 는 트랙 1 (sboot-shell), J~M 은 트랙 2 (kernel-storage). 플러그인의 모든
+> 산출물이 이 표의 어느 행과 매핑되는지 명시.
 
 ---
 
-## Table A — 전체 단계 흐름 (마스터)
+## Table A — 트랙 1 단계 흐름 (마스터)
+
+> 트랙 1 (sboot-shell) 의 0~10 단계. 트랙 2 (kernel-storage) 의 흐름은 Table J~M +
+> [track2_kernel_storage.md](track2_kernel_storage.md) 참조.
 
 | 단계 | 사용자가 프롬프트에 주는 입력 | LLM 산출물 | 도구 | 검증 | 정직성 위반 신호 |
 |---|---|---|---|---|---|
@@ -150,13 +154,77 @@
 
 | 산출물 | 매핑 |
 |---|---|
-| `CLAUDE.md` | 정직성 7 + Table G + Table H |
-| `skills/rehost/SKILL.md` | Table A (S0~S8 상태 머신) |
-| AskUserQuestion in S1 | Table B (9 슬롯 중 4 개 묻기) |
-| `agents/bl3-analyzer.md` | Table C (정적 7) + carve 판정 |
-| `agents/stub-locator.md` | Table E (보조 4) |
-| `templates/machine.c.tmpl` | Table D (머신 13 요소) |
-| `agents/fault-fixer.md` | Table F (정지점 처치) |
-| `agents/reality-verifier.md` | Table G (검증 5/5) |
-| `agents/critic.md` | Table H (위기 5 신호) |
-| `workflows/iter-loop.js` | Table A 의 회차 루프 (S5) |
+| `CLAUDE.md` | 정직성 7 + Table G/G2 + Table H/H2 + 트랙 개념 |
+| `skills/rehost-init/SKILL.md` | Table A/J 셋업 + 트랙 선택 → INPUT.md |
+| `skills/rehost-sboot/SKILL.md` | 트랙 1 실행 (pipeline.js) |
+| `skills/rehost-kernel/SKILL.md` | 트랙 2 실행 (pipeline_kernel.js) |
+| `agents/bl3-analyzer.md` | Table C (정적 7) + carve 판정 (트랙 1) |
+| `agents/stub-locator.md` | Table E (보조 4) (트랙 1) |
+| `templates/machine.c.tmpl` | Table D (머신 13 요소) (트랙 1) |
+| `agents/fault-fixer.md` | Table F (정지점 처치) (트랙 1) |
+| `agents/reality-verifier.md` | Table G / G2 (검증 5/5) |
+| `agents/critic.md` | Table H / H2 (위기 5 신호) |
+| `workflows/iter-loop.js` / `pipeline.js` | 트랙 1 회차 루프 / 파이프라인 |
+| `agents/kernel-boot-analyzer.md` | Table J (부팅 자산 + DTB 골격 + 게이트) (트랙 2) |
+| `agents/boot-fault-fixer.md` | Table L (커널 정지점 처치) (트랙 2) |
+| `agents/storage-modeler.md` | Table M (스토리지 HCI 함정) (트랙 2) |
+| `templates/machine_kernel.c.tmpl` / `storage_hci.c.tmpl` | Table K (트랙 2 머신 요소) |
+| `workflows/pipeline_kernel.js` | 트랙 2 파이프라인 (Static→K1→K2→K3→Verify) |
+
+---
+
+# 트랙 2 표 (J~M) — kernel-storage
+
+> 트랙 2 는 커널 EL1 진입점부터 진짜 실행. 값은 대상 DTB/커널/드라이버 도출.
+> 상세: [track2_kernel_storage.md](track2_kernel_storage.md).
+
+## Table J — 부팅 자산 + 정적 도출
+
+| # | 도출 대상 | 입력 | 도구 | 검증 |
+|---|---|---|---|---|
+| 1 | 부팅 자산 (Image/DTB/initrd/super) | boot.img/super.img | 표준 언팩 | 매직 (Image 헤더 / 0xd00dfeed / EROFS) |
+| 2 | 머신 골격 (cpu/dram/gic/uart/HCI base) | DTB | fdtdump/libfdt | fdt 노드 근거 |
+| 3 | cmdline (earlycon/pKVM/root) | DTB `/chosen` | fdt | `kvm-arm.mode=protected` → HVC 커널 |
+| 4 | 커널 게이트 사이트 (fips/defex/selinux/avb) | Image | 심볼·문자열 xref | pre-image 워드 확인 |
+| 5 | 스토리지 HCI base + SPI | DTB storage 노드 | fdt | K3 시작점 |
+
+## Table K — 트랙 2 머신 요소
+
+| # | 요소 | 도출 | 함정 |
+|---|---|---|---|
+| 1 | CPU (코어/수, has_el2) | DTB cpus | mp-affinity cluster.core |
+| 2 | DRAM | DTB memory | — |
+| 3 | GICv3 + arch-timer PPI | DTB gic | ★ PPI 풀 INTID (상대번호 금지) |
+| 4 | UART | DTB uart | accept_input 필수 |
+| 5 | catch-all MMIO | overlap 낮은 prio | fail-loud 1 회 보고 |
+| 6 | EL3 SMC 셤 | PSCI/eFuse/SiP | psci_conduit=SMC (DISABLED 금지) |
+| 7 | QEMU 코어 3 패치 | SMC→EXCP_SMC | interrupt_handler 게이트 |
+| 8 | DT 주입 (fstab/pcie) | libfdt | 셀 수 (reg/ranges/interrupt-map) |
+| 9 | 스토리지 HCI (K3) | storage_hci.c.tmpl | §7.3 함정표 |
+
+## Table L — 트랙 2 커널 정지점 처치 (K1/K2)
+
+| 신호 | 처치 |
+|---|---|
+| kernel_oops / security_gate | patch_kernel.py 사이트 (pre-image 검증) |
+| smc_undef / psci_suspend | SMC 셤 + 코어 패치, psci_conduit=SMC |
+| gic_ppi (assert) | arch-timer PPI 풀 INTID 배선 |
+| unmapped_mmio | DTB 로 페리페럴/RAM 추가 |
+| rootfs_mount | 제네릭+DT fstab (§6.1) 또는 dm-linear (§6.2) |
+| hvc_pkvm | 셤에서 HVC 가로채기 제거 (커널 내장) |
+
+## Table M — 트랙 2 스토리지 HCI 함정 (K3, 관찰 루프)
+
+| 벽 | 원인 | 처치 |
+|---|---|---|
+| poll_stall | 벤더 창 0 반환 | 완료비트 오프셋 all-1 (상수, 토글 금지) |
+| desc_addr_corrupt | `ldl_le_p` 부호확장 | `(uint32_t)` 캐스트 |
+| pwrmode_timeout | UIC opcode 오인 (DME_SET=0x02) | opcode 정정 + 완료 IRQ |
+| gear_source | mmio read (로그 안 보임) | `.ko` 역어셈블로 주소 확정 |
+| upiu_field_off | LUN/EDTL 오프셋 | LUN=byte2, EDTL=byte12-15 |
+| block_size | 512 vs 4096 | `EFI PART` 시그니처 위치 |
+| vendor_telemetry_null | 플랫폼 텔레메트리 null | `.ko` 그 함수 조기 리턴 |
+
+## Table G2 / H2 — 트랙 2 검증 5/5 + 위기 5 신호
+
+CLAUDE.md 의 "검증 5/5 — 트랙 2" 및 "위기 5 신호 — 트랙 2" 표 참조.

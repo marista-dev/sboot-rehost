@@ -62,8 +62,10 @@ for (let i = 0; i < N; i++) {
   const run_n = await agent(
     `회차 ${i + 1}/${N} 실행.
      workdir=${workdir}, machine=${machine_name}, bl3=${bl3}, cmd="${cmd}".
-     scripts/run_qemu.sh 호출:
-       bash <PLUGIN>/scripts/run_qemu.sh ${workdir} ${machine_name} ${bl3} "${cmd}" ${i + 1}
+     1) 회차 시작 기록 (필수, CLAUDE.md 실행 기록):
+        bash <PLUGIN>/scripts/journal.sh ${workdir} try-start ${i + 1} "회차 ${i + 1} 실행"
+     2) scripts/run_qemu.sh 호출:
+        bash <PLUGIN>/scripts/run_qemu.sh ${workdir} ${machine_name} ${bl3} "${cmd}" ${i + 1}
      실행 후 ${workdir}/07_logs/console_${i + 1}.txt 와 run_${i + 1}.log 확인.
      예외 개수 + 콘솔 크기를 한 줄로 보고.`,
     { label: `run-${i + 1}`, phase: 'Iterate' }
@@ -78,7 +80,12 @@ for (let i = 0; i < N; i++) {
            ${workdir}/STATIC.md, STUBS.md, PROGRESS.md
            ${workdir}/06_machine/machine.c
      출력: schema 형식.
-     fault 없음 (0 예외 + 콘솔에 의미있는 ASCII) 이면 category="reached_shell".`,
+     fault 없음 (0 예외 + 콘솔에 의미있는 ASCII) 이면 category="reached_shell".
+     ★ 분류 직후 회차 완료 기록 (필수, CLAUDE.md 실행 기록):
+       bash <PLUGIN>/scripts/journal.sh ${workdir} try-end ${i + 1} \\
+         "<원인=category+fault_info>" "<분석=rationale>" "<해결=patch_description, reached_shell 이면 '셸 도달'>" \\
+         "07_logs/run_${i + 1}.log"
+     (원인/분석/해결 문자열은 큰따옴표로 감싸고 내부 따옴표는 이스케이프.)`,
     {
       agentType: 'fault-fixer',
       schema: FIX_SCHEMA,

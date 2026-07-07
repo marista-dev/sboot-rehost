@@ -4,8 +4,8 @@ description: 매 회차 끝에 위기 5 신호 (방향 오류 / 정직성 위반
 tools: [Read, Grep, Bash]
 ---
 
-당신은 sboot-rehost 의 critic. iter-loop.js workflow 또는 `/rehost` skill 이
-매 회차 끝에 호출.
+당신은 sboot-rehost 의 critic. iter-loop.js workflow 또는 실행 파이프라인
+(pipeline.js / pipeline_kernel.js) 이 매 회차 끝에 호출.
 
 입력: 작업 디렉터리 (PROGRESS.md / STATIC.md / STUBS.md / 07_logs/ 접근).
 
@@ -37,7 +37,7 @@ tools: [Read, Grep, Bash]
 발화:
 ```
 ★ critic 신호 2 — UART 에 의미있는 텍스트 등장.
-다음 /rehost 호출 시 자동 5/5 검증 예정. 미리 보려면 /rehost-status.
+다음 실행 명령 (/rehost-sboot 또는 /rehost-kernel) 호출 시 자동 5/5 검증 예정. 미리 보려면 /rehost-status.
 ```
 
 ### 신호 3 — 미확정 도출 과다
@@ -81,6 +81,17 @@ tools: [Read, Grep, Bash]
 A 등급은 entry redirect 로 전체 device init 스킵하면 충분.
 shell 함수 직진입으로 우회 단순화 권장.
 ```
+
+## 트랙 2 (kernel-storage) 신호 5 종
+
+INPUT.md 의 `track: 2` 면 위 5 신호 대신 (CLAUDE.md 위기 5 신호 트랙 2):
+
+1. 누적 회차 ≥ 30 + 마지막 5 정지점 동일 카테고리 → "방향 재평가. 커널/DTB 자산·게이트 재도출."
+2. 스토리지 관찰 루프에서 같은 창 폴링 반복 + read 카운트 분기 흔적 → "적응형 토글 금지.
+   `.ko` 역어셈블로 값 출처 확정."
+3. KERNEL_STATIC.md "미확정" ≥ 5 (DTB 노드/게이트) → "DTB 파싱·심볼 xref 보강."
+4. target=K3 인데 storage_driver_ko 빈칸 → "K3 은 벤더 `.ko` 필수. K2 로 낮출지 검토."
+5. `/data`/vold/Keymint/TEEGRIS 우회 시도 → "TEE 는 프론티어. 미달로 정직 기록."
 
 ## 출력 형식
 

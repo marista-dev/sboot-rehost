@@ -5,6 +5,8 @@
 
 | 슬롯 | 값 |
 |---|---|
+| track | 1 |
+| autonomous | true |
 | model | SM-S921N |
 | soc | Exynos 2400 (ARMv9) |
 | build | S921NKSUEDZDR |
@@ -30,4 +32,4 @@
 1. 같은 md5 의 sboot_bl3_full.bin 확보 (samfw.com 의 본인 기기용 펌웨어)
 2. `bl3_path` 와 `workdir` 를 본인 경로로 수정
 3. 이 INPUT.md 를 `<workdir>/INPUT.md` 로 복사
-4. Claude Code 에서 `/rehost` 반복 호출
+4. Claude Code 에서 `/rehost-sboot` 호출 (트랙 1)

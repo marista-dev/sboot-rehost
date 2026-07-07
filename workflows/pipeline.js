@@ -1,7 +1,7 @@
 /*
  * pipeline.js — sboot-rehost 의 본 실행 파이프라인
  *
- * /rehost 가 호출. INPUT.md 가 이미 있는 상태에서 시작.
+ * /rehost-sboot (트랙 1) 이 호출. INPUT.md 가 이미 있는 상태에서 시작.
  *
  * Phase 1 (병렬 멀티에이전트): 정적 분석 (bl3-analyzer + stub-locator 4 sub-task)
  * Phase 2 (직렬): 머신 .c 생성 + ninja
@@ -133,7 +133,8 @@ const critic1 = await agent(
 )
 if (critic1?.triggered) {
   log(`★ ${critic1.message}`)
-  // 사용자에게 메시지로 전달, pipeline 은 계속 (사용자가 중단 원하면 외부에서)
+  // 자율 기본: pipeline 은 계속 (신호는 log + skill 이 JOURNAL decision 기록).
+  // 하드 블로커 (carve 의심) 는 아래 carve_suspected 조기 return 으로 이미 중단됨.
 }
 
 // =====================================================================
@@ -184,7 +185,7 @@ if (!iter_result.reached_shell) {
   return {
     error: 'max_iterations_exceeded',
     iter_result,
-    next: '/rehost 재호출 시 회차 추가 진행 옵션 제공',
+    next: '/rehost-sboot 재호출 시 회차 추가 진행 옵션 제공',
   }
 }
 
@@ -220,7 +221,7 @@ if (!verify || verify.passes < 5) {
   return {
     phase_completed: 'Verify',
     verify,
-    note: 'FORCED 또는 미완. 사용자에게 추가 회차 / 마무리 선택 요청.',
+    note: 'FORCED 또는 미완. 자율 기본: FORCED 로 마무리 (REAL 금지). interactive 면 skill 이 선택 요청.',
   }
 }
 
