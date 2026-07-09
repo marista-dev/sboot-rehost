@@ -7,6 +7,10 @@
 sboot*
 bl3*
 
+# ★ 예외: 플러그인 소스(agents/*.md)는 firmware 패턴(sboot*/bl3*)에서 제외.
+#   bl3* 가 agents/bl3-analyzer.md 를 오탐 → GitHub 설치 시 이 에이전트만 누락되던 버그 수정.
+!agents/*.md
+
 # QEMU build artifacts
 build/
 *.o
@@ -33,6 +37,10 @@ run_*.txt
 *.swp
 *.swo
 .DS_Store
+
+# 로컬 플러그인 활성화 레이어 (프로젝트 스코프 스킬/에이전트 자동발견용 junction)
+# /plugin 명령이 없는 환경에서 skills/·agents/ 를 .claude/ 로 연결. 커밋 안 함.
+.claude/
 
 # Working directory artifacts (사용자가 새 펌웨어 작업하는 디렉터리는 git 추적 안 함)
 INPUT.md
