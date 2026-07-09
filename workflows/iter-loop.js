@@ -75,16 +75,15 @@ for (let i = 0; i < N; i++) {
 
   const fix = await agent(
     `회차 ${i + 1} 의 fault 를 분류하고 한 변경 패치 제안.
-     입력: ${workdir}/07_logs/run_${i + 1}.log
-           ${workdir}/07_logs/console_${i + 1}.txt
-           ${workdir}/STATIC.md, STUBS.md, PROGRESS.md
-           ${workdir}/06_machine/machine.c
+     입력(로컬): ${workdir}/07_logs/console_${i + 1}.txt, run_${i + 1}.summary.txt (핵심 fault)
+           ${workdir}/STATIC.md, STUBS.md, PROGRESS.md, 06_machine/machine.c
+           (전체 트레이스가 필요하면 run_qemu.sh 가 출력한 trace= 경로(WSL) 를 읽기)
      출력: schema 형식.
      fault 없음 (0 예외 + 콘솔에 의미있는 ASCII) 이면 category="reached_shell".
      ★ 분류 직후 회차 완료 기록 (필수, CLAUDE.md 실행 기록):
        bash <PLUGIN>/scripts/journal.sh ${workdir} try-end ${i + 1} \\
          "<원인=category+fault_info>" "<분석=rationale>" "<해결=patch_description, reached_shell 이면 '셸 도달'>" \\
-         "07_logs/run_${i + 1}.log"
+         "07_logs/run_${i + 1}.summary.txt (로컬); 전체 트레이스 WSL"
      (원인/분석/해결 문자열은 큰따옴표로 감싸고 내부 따옴표는 이스케이프.)`,
     {
       agentType: 'fault-fixer',

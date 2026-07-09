@@ -41,34 +41,42 @@ claude
 > /plugin install sboot-rehost@sboot-rehost-marketplace
 ```
 
-설치 확인: `/plugin` 목록에 **sboot-rehost** 가 있고 `/rehost-init`·`/rehost-sboot`·
-`/rehost-kernel`·`/rehost-status` 가 보이면 완료.
+설치 확인: `/plugin` 목록에 **sboot-rehost** 가 있고 `/rehost-init`·`/rehost-setup`·
+`/rehost-sboot`·`/rehost-kernel`·`/rehost-status` 가 보이면 완료.
 
 > 무거운 실행(빌드·QEMU·트레이스)은 **WSL2(Ubuntu)** 에서 돈다. Windows 라면 WSL2 안에
 > clone/압축해제하고, Claude Code 도 그 경로에서 여는 것을 권장. (Claude Code 없이 스크립트만
 > 쓰려면 `scripts/setup_env.sh` 등을 WSL 에서 직접 실행해도 된다.)
 
-### 2) 셋업 → 트랙 실행
+### 2) 셋업 → 펌웨어 드롭 → 반입 → 트랙 실행
 
-자율 실행이 기본이라 `/rehost-init` 에 입력을 **인자로** 주면 이후 멈춤 없이 끝까지 진행:
+폴더는 **Claude Code 를 실행한 Windows 현재 폴더(cwd)** 에 생기고(플러그인 폴더 안 아님),
+펌웨어 실행 사본은 setup 이 **WSL ext4** 로 옮깁니다. 자율 실행이 기본이라 실행 명령은 안 멈춥니다.
 
 ```bash
-# 트랙 1 (S-Boot 셸)
-> /rehost-init track=1 model=SM-S921N target=A bl3=/mnt/c/.../sboot.bin
-> /rehost-sboot
+# ① 환경 준비 (폴더 생성 + 의존성 백그라운드 설치, 펌웨어 불요)
+> /rehost-init
 
-# 트랙 2 (커널 + 스토리지)
-> /rehost-init track=2 model=SM-S921N target=K3 bootimg=/path/boot.img super=/path/super.img.lz4 ko=/path/ufs-exynos-core.ko
-> /rehost-kernel
+# ② 펌웨어를 <cwd>/01_firmware/ 에 넣는다 (탐색기로 드롭)
+
+# ③ 반입 (언팩 + WSL 이동 + 의존성 확인 + INPUT.md)
+> /rehost-setup track=1 model=SM-XXXX target=A
+#   트랙 2: /rehost-setup track=2 model=SM-XXXX target=K3
+
+# ④ 실행 (하드 블로커 전까지 안 멈추는 자율 회차 루프)
+> /rehost-sboot       # 트랙 1
+#   또는
+> /rehost-kernel      # 트랙 2
 ```
 
-대화형으로 단계마다 확인받으려면 `/rehost-init interactive` (INPUT.md `autonomous: false`).
+대화형으로 단계마다 확인받으려면 `interactive` 인자 (INPUT.md `autonomous: false`).
 
 흐름:
 
 | 명령 | 역할 |
 |---|---|
-| **`/rehost-init`** | **셋업** — 의존성 설치 + 폴더 구조 + 펌웨어 추출 안내 + 사용자 질문 (**트랙 (1/2)** / 자산 경로 / 모델 / 등급 / 참조) → INPUT.md 생성 |
+| **`/rehost-init`** | **1단계(데이터 불요)** — 표준 폴더를 **Windows cwd** 에 생성 + 의존성 백그라운드 설치 + 펌웨어 확보 안내. INPUT.md 안 만듦 |
+| **`/rehost-setup`** | **2단계(펌웨어 반입)** — `01_firmware/` 펌웨어 언팩 + **실행 사본 WSL ext4 로 이동** + 의존성 확인 → INPUT.md 생성 |
 | **`/rehost-sboot`** | **트랙 1 실행** — `pipeline.js`. 정적 분석 → 머신 .c + ninja → 회차 루프 → 5/5 검증 → 재현 키트 |
 | **`/rehost-kernel`** | **트랙 2 실행** — `pipeline_kernel.js`. 자산+DTB 골격 → 머신+코어/커널 패치 → K1 → K2 → K3 → 5/5 검증 → 재현 키트 |
 | `/rehost-status` (옵션) | 진행 상황 한 화면 요약 (트랙 인식) |
@@ -111,14 +119,18 @@ S-BOOT #
 
 ---
 
-## 작동 방식 — 셋업 1 + 트랙 실행 1
+## 작동 방식 — 준비 2 + 트랙 실행 1
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  /rehost-init         (1 회 — 셋업, 트랙 선택)
+│  /rehost-init    (1단계 — 데이터 불요)
 └─────────────────────────────────────────────────────┘
-  의존성 검사/설치 → 폴더 생성 → 펌웨어 추출 안내 →
-  Intake: 트랙(1/2) + 자산 경로 + 모델 + 등급 (+ 참조) → INPUT.md(track 슬롯)
+  폴더 생성(★ Windows cwd) + 의존성 백그라운드 설치 + 펌웨어 확보 안내
+      ↓  (사용자가 펌웨어를 <cwd>/01_firmware/ 에 드롭)
+┌─────────────────────────────────────────────────────┐
+│  /rehost-setup   (2단계 — 펌웨어 반입)
+└─────────────────────────────────────────────────────┘
+  언팩(tar/lz4) + 실행 사본 WSL ext4 이동 + 의존성 확인 + INPUT.md(track 슬롯)
 
 트랙에 맞는 실행 명령 하나 (한 명령 = 한 트랙):
 
@@ -150,6 +162,10 @@ S-BOOT #
 모든 `/rehost*` 명령은 `<workdir>/JOURNAL.md` 에 기록한다 (`scripts/journal.sh`, 시각은 실제
 `date`). 세션은 **시작·완료 시각 + 소요 + 결과**, 매 시행착오(회차/정지점/벽)는 **시작·완료
 시각 + 원인·분석·해결 + 증거 로그**. append-only.
+
+**기록 위치**: 사용자가 보는 기록·해결과정(JOURNAL·PROGRESS·VERIFICATION·INPUT·STATIC·
+`07_logs` 콘솔/요약)은 **로컬 Windows cwd**. 대용량 `-d` 전체 트레이스와 펌웨어 실행 사본은
+**WSL ext4**(`~/rehost/…`)에 두어 쓰기를 빠르게 한다.
 
 ```
 ## [SESSION] /rehost-kernel — track 2, target K2
@@ -214,7 +230,8 @@ sboot-rehost/
 │   ├── general_tables.md          Table A~M 일반화 (양 트랙)
 │   └── worked_example.md          S921N 트랙 1 풀이 회고
 ├── skills/
-│   ├── rehost-init/SKILL.md       /rehost-init — 셋업 + 트랙 선택 + 인테이크
+│   ├── rehost-init/SKILL.md       /rehost-init — 1단계: 폴더(Windows cwd) + 의존성
+│   ├── rehost-setup/SKILL.md      /rehost-setup — 2단계: 펌웨어 언팩 + WSL 이동 + INPUT.md
 │   ├── rehost-sboot/SKILL.md      /rehost-sboot — 트랙 1 실행 (pipeline.js)
 │   ├── rehost-kernel/SKILL.md     /rehost-kernel — 트랙 2 실행 (pipeline_kernel.js)
 │   └── rehost-status/SKILL.md     /rehost-status — 진행 요약 (트랙 인식)

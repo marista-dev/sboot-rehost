@@ -8,18 +8,25 @@ description: 트랙 2 (kernel-storage) 본격 실행. INPUT.md(track 2) 가 있�
 검증→재현 키트를 자동 진행. (트랙 1 은 `/rehost-sboot`.)
 방법론: methodology/track2_kernel_storage.md.
 
+**★ 자율 모드(기본, INPUT.md `autonomous: true`)에서는 실행 시작 후 절대 멈추지 않는다.**
+`AskUserQuestion` 금지, "확인/동의" 묻지 말 것. 모든 분기(critic, TEE 프론티어, FORCED,
+의존성)는 CLAUDE.md 자율 정책으로 **자동 결정 + JOURNAL 기록** 후 계속. 오직 **하드 블로커**
+(자산 없음 / K3인데 `.ko` 부재 / 필수 입력 결손 / 빌드 에러)만 중단·보고.
+
 ---
 
 ## Step 0 — 선행 조건 검사
 
-1. **INPUT.md 존재 + `track: 2`**:
-   - 없으면: "/rehost-init 을 먼저 호출하세요" 안내 후 종료
-   - `track: 1` 이면: "이 펌웨어는 트랙 1 입니다. `/rehost-sboot` 을 호출하세요" 안내 후 종료
+1. **INPUT.md 존재 + `track: 2`** (INPUT.md 는 `/rehost-setup` 이 생성):
+   - 없는데 `01_firmware/`(또는 `fw/`) 에 펌웨어 있으면: "`/rehost-setup` 을 먼저" (또는 자율 시 setup 자동 호출).
+   - 폴더 자체가 없으면: "`/rehost-init` 을 먼저" 안내 후 종료.
+   - `track: 1` 이면: "이 펌웨어는 트랙 1 입니다. `/rehost-sboot` 을 호출하세요" 안내 후 종료.
 2. **부팅 자산**: `fw/Image`(+dtb, initrd) 존재. 없으면 `scripts/extract_boot_assets.sh` 안내.
    - target=K2/K3 이면 `super_path` (rootfs) 도 확인.
    - target=K3 이면 `storage_driver_ko` (벤더 .ko) 필수 — 빈칸이면 "K3 은 벤더 드라이버
      필수. K2 로 낮추거나 .ko 확보 후 재호출" 안내 (critic 신호 4).
-3. **의존성 OK**: `which qemu-system-aarch64`, `python3`, `dtc`/`fdtdump`. 미설치면 안내.
+3. **의존성 OK**: `which qemu-system-aarch64`, `python3`, `dtc`/`fdtdump`. 자율 모드는 미설치 시
+   `setup_env.sh` 자동 실행, 백그라운드 진행 중이면 완료까지 자동 대기(폴링) — 안 물음.
 
 ---
 
@@ -76,15 +83,6 @@ pipeline_kernel.js phase (등급까지만 진행):
 
 ---
 
-## Step 1.5 — JOURNAL 세션 종료 (필수)
-
-파이프라인이 끝나면 (등급 도달 / FORCED / 에러 무관):
-```
-bash <PLUGIN>/scripts/journal.sh <workdir> session-end "/rehost-kernel" "<결과: 예 K3 partitions_up + system/vendor mounted, 회차 N>"
-```
-
----
-
 ## Step 2 — 진행 보고
 
 pipeline_kernel.js 가 phase/회차 전환마다 log. 그대로 사용자에게 (`[Phase K1] kboot 3: smc undef → PSCI 셤` 등).
@@ -104,6 +102,13 @@ reality-verifier FORCED 판정 시:
 - **자율 모드**: K1~K3 회차가 max 까지 돌았으면 **FORCED 로 마무리** (10_reproduce 생성,
   **REAL 표기 금지**). 실패 항목 보고 + `journal.sh decision "verification" "FORCED 마무리" "max 회차 소진"`.
 - **interactive 모드**: AskUserQuestion ("추가 회차 / 항목 수정 / 마무리").
+
+## Step 5 — JOURNAL 세션 종료 (필수, 마지막)
+
+파이프라인·자동결정이 모두 끝난 뒤 (등급 도달 / FORCED / 에러 무관):
+```
+bash <PLUGIN>/scripts/journal.sh <workdir> session-end "/rehost-kernel" "<결과: 예 K3 partitions_up + system/vendor mounted, 회차 N>"
+```
 
 ---
 

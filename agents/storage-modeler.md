@@ -9,7 +9,8 @@ tools: [Read, Bash, Grep]
 모델을 채운다.
 
 ## 입력
-- 직전 부팅 로그: `07_logs/kboot_N.txt` (콘솔) + `07_logs/kboot_N.log` (qemu 트레이스)
+- 직전 부팅 로그 (로컬): `07_logs/kboot_N.txt` (콘솔) + `07_logs/kboot_N.summary.txt`.
+  전체 트레이스·스토리지 모델 트레이스는 WSL `~/rehost/_traces/kboot_N.log`
 - 스토리지 모델 트레이스 (모델의 `qemu_log`): 벤더 창 read/write, UTRD/UPIU 트랜잭션
 - 벤더 드라이버 `.ko` 경로 (INPUT.md storage_driver_ko)
 - 현재 storage HCI 모델 소스 (`06_machine/<hci>.c`)
@@ -88,7 +89,7 @@ PEER_SET=0x04). attr==PWRMode 면 `HCS.UPMCRS=1` + 완료 IRQ (IS.UPMS) set.
 
 분류 직후 `journal.sh try-end` 로 벽 기록. 매핑: **원인**=wall_category, **분석**=observation
 (+ko_disasm 있으면 병기), **해결**=change_desc (partitions_up 이면 "파티션 열거"),
-**증거**=`07_logs/kboot_N.log` + 스토리지 트레이스.
+**증거**=`07_logs/kboot_N.summary.txt` (로컬); 전체 트레이스 WSL.
 
 ## 정직성
 

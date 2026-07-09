@@ -29,8 +29,12 @@ INITRD="${INITRD:-$FW/initramfs.cpio.gz}"
 [ -f "$IMAGE" ] || { echo "ERROR: $IMAGE 없음 (patch_kernel.py 먼저)" >&2; exit 3; }
 
 mkdir -p "$WORKDIR/07_logs"
-OUT="$WORKDIR/07_logs/kboot_${RUN_N}.txt"; LOG="$WORKDIR/07_logs/kboot_${RUN_N}.log"
-rm -f "$OUT" "$LOG"
+# 대용량 -d 트레이스는 WSL ext4. 기록/해결과정(콘솔·요약)은 로컬(Windows) 07_logs.
+TRACE_DIR="${TRACE_DIR:-$HOME/rehost/_traces}"; mkdir -p "$TRACE_DIR"
+OUT="$WORKDIR/07_logs/kboot_${RUN_N}.txt"          # 로컬: 콘솔 증거 (사용자 확인)
+SUM="$WORKDIR/07_logs/kboot_${RUN_N}.summary.txt"  # 로컬: 핵심 정지점 요약
+LOG="$TRACE_DIR/kboot_${RUN_N}.log"                # WSL: 대용량 전체 트레이스
+rm -f "$OUT" "$SUM" "$LOG"
 
 ARGS=( -M "$MACHINE" -cpu "$CPU" -smp "$SMP" -m "$MEM" -nographic
        -kernel "$IMAGE" )
@@ -42,9 +46,13 @@ ARGS+=( -serial "file:$OUT" -d unimp,guest_errors,int -D "$LOG" )
 # EUFS_* 는 환경변수로 그대로 QEMU 프로세스에 상속 (스토리지 HCI 모델이 getenv)
 timeout "$TIMEOUT" "$QEMU" "${ARGS[@]}" </dev/null 2>&1 | tail -3 || true
 
+# 로컬 요약 (사용자가 로컬에서 해결과정 확인)
+grep -E "Taking exception|Internal error|Kernel panic|Run /init|erofs: \(device dm-|] sda: sda|Power mode|smc" "$LOG" "$OUT" 2>/dev/null | tail -60 > "$SUM" || true
+
 EXC=$(grep -cE "Taking exception|Internal error|Kernel panic" "$LOG" "$OUT" 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
 MNT=$(grep -cE "erofs: \(device dm-|] sda: sda" "$OUT" 2>/dev/null || echo 0)
-echo "console=$OUT"
-echo "log=$LOG"
+echo "console=$OUT"          # 로컬 (Windows)
+echo "summary=$SUM"          # 로컬 (Windows)
+echo "trace=$LOG"            # WSL — 대용량 전체 트레이스
 echo "faults=$EXC"
 echo "storage_progress=$MNT"

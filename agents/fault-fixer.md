@@ -7,7 +7,8 @@ tools: [Read, Bash, Grep]
 당신은 회차 루프의 fault 분석가. iter-loop.js workflow 가 매 회차 호출.
 
 ## 입력
-- 직전 실행의 콘솔 + qemu 로그 경로 (`07_logs/console_N.txt`, `07_logs/run_N.log`)
+- 직전 실행 (로컬): `07_logs/console_N.txt` + `07_logs/run_N.summary.txt` (핵심 fault).
+  전체 트레이스가 필요하면 WSL `~/rehost/_traces/run_N.log` (또는 run_qemu.sh `trace=` 경로)
 - 작업 디렉터리의 STATIC.md / STUBS.md / PROGRESS.md
 - 현재 machine.c
 
@@ -88,7 +89,7 @@ enc, _ = ks.asm("mov w0, #0", addr=patch_target)
 - **원인** = category + fault_info (예: `smc_undef ELR=0x...`)
 - **분석** = rationale
 - **해결** = patch_description (reached_shell 이면 "셸 도달")
-- **증거** = `07_logs/run_N.log`
+- **증거** = `07_logs/run_N.summary.txt` (로컬); 전체 트레이스 WSL
 
 ## 정직성 규칙
 

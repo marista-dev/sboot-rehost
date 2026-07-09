@@ -71,17 +71,18 @@ for (let i = 1; i <= MAXIT; i++) {
   const run = await agent(
     `회차 K1-${i}:
      1) 시작 기록 (필수): bash <PLUGIN>/scripts/journal.sh ${workdir} try-start k1-${i} "K1 회차 ${i} 부팅"
-     2) bash <PLUGIN>/scripts/run_kernel.sh ${workdir} ${machine} ${i} 실행 후
-        07_logs/kboot_${i}.txt / .log 확인. faults + 'Run /init' 등장 여부 한 줄 보고.`,
+     2) bash <PLUGIN>/scripts/run_kernel.sh ${workdir} ${machine} ${i} 실행 후 (console=·summary= 로컬,
+        trace= WSL 출력) 07_logs/kboot_${i}.txt + summary 확인. faults + 'Run /init' 등장 여부 한 줄 보고.`,
     { label:`k1-run-${i}`, phase:'K1' })
   log(`K1-${i}: ${run}`)
   const fix = await agent(
-    `회차 K1-${i} 정지점 분류 + 한 변경. 입력: 07_logs/kboot_${i}.{txt,log}, KERNEL_STATIC.md,
-     06_machine/machine_kernel.c. 유저스페이스 도달 시 category="reached_userspace".
+    `회차 K1-${i} 정지점 분류 + 한 변경. 입력(로컬): 07_logs/kboot_${i}.txt + kboot_${i}.summary.txt,
+     KERNEL_STATIC.md, 06_machine/machine_kernel.c (전체 트레이스는 run_kernel.sh 의 trace= 경로(WSL)).
+     유저스페이스 도달 시 category="reached_userspace".
      ★ 분류 직후 완료 기록 (필수):
        bash <PLUGIN>/scripts/journal.sh ${workdir} try-end k1-${i} \\
          "<원인=category+fault>" "<분석=rationale>" "<해결=patch_desc, reached_userspace 이면 '유저스페이스 도달'>" \\
-         "07_logs/kboot_${i}.log"`,
+         "07_logs/kboot_${i}.summary.txt (로컬); 전체 트레이스 WSL"`,
     { agentType:'boot-fault-fixer', label:`k1-fix-${i}`, phase:'K1',
       schema:{ type:'object', properties:{ category:{type:'string'},
         one_line_progress:{type:'string'}, patch_type:{type:'string'} }, required:['category'] } })
@@ -105,7 +106,7 @@ const k2 = await agent(
    boot-fault-fixer 로 category=rootfs_mount 회차. 결과 보고.
    완료 기록: bash <PLUGIN>/scripts/journal.sh ${workdir} try-end k2 \\
      "<원인: rootfs 미마운트 사유 또는 '해당없음'>" "<분석: 방식/정지점>" \\
-     "<해결: 마운트 성공 방식 또는 미해결>" "07_logs/kboot_최근.log"`,
+     "<해결: 마운트 성공 방식 또는 미해결>" "07_logs/kboot_최근.summary.txt (로컬)"`,
   { agentType:'boot-fault-fixer', label:'k2', phase:'K2',
     schema:{ type:'object', properties:{ mounted:{type:'boolean'}, evidence:{type:'string'} } } })
 log(`K2: rootfs mounted=${k2?.mounted}`)
@@ -129,12 +130,13 @@ if (want >= 3) {
       { label:`k3-run-${i}`, phase:'K3' })
     log(`K3-${i}: ${run}`)
     const w = await agent(
-      `회차 K3-${i} 스토리지 벽 분류 (§7.3 함정표) + 한 변경 관찰. 로그로 안 보이면 .ko
-       역어셈블. 파티션 열거 (sda1..) 도달 시 wall_category="partitions_up".
+      `회차 K3-${i} 스토리지 벽 분류 (§7.3 함정표) + 한 변경 관찰. 입력(로컬): 07_logs/kboot_${i}.txt +
+       kboot_${i}.summary.txt (전체 트레이스·스토리지 모델 트레이스는 WSL trace= 경로). 로그로 안
+       보이면 .ko 역어셈블. 파티션 열거 (sda1..) 도달 시 wall_category="partitions_up".
        ★ 분류 직후 완료 기록 (필수):
          bash <PLUGIN>/scripts/journal.sh ${workdir} try-end k3-${i} \\
            "<원인=wall_category>" "<분석=observation>" "<해결=change_desc, partitions_up 이면 '파티션 열거'>" \\
-           "07_logs/kboot_${i}.log"`,
+           "07_logs/kboot_${i}.summary.txt (로컬); 전체 트레이스 WSL"`,
       { agentType:'storage-modeler', label:`k3-obs-${i}`, phase:'K3',
         schema:{ type:'object', properties:{ wall_category:{type:'string'},
           one_line_progress:{type:'string'} }, required:['wall_category'] } })

@@ -155,7 +155,8 @@
 | 산출물 | 매핑 |
 |---|---|
 | `CLAUDE.md` | 정직성 7 + Table G/G2 + Table H/H2 + 트랙 개념 |
-| `skills/rehost-init/SKILL.md` | Table A/J 셋업 + 트랙 선택 → INPUT.md |
+| `skills/rehost-init/SKILL.md` | 1단계: 폴더(Windows cwd) + 의존성 |
+| `skills/rehost-setup/SKILL.md` | 2단계: 펌웨어 언팩 + WSL 이동 + INPUT.md |
 | `skills/rehost-sboot/SKILL.md` | 트랙 1 실행 (pipeline.js) |
 | `skills/rehost-kernel/SKILL.md` | 트랙 2 실행 (pipeline_kernel.js) |
 | `agents/bl3-analyzer.md` | Table C (정적 7) + carve 판정 (트랙 1) |

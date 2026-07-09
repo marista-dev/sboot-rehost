@@ -32,26 +32,29 @@ if [[ ! -x "$QEMU" ]]; then
 fi
 
 mkdir -p "$WORKDIR/07_logs"
-OUT="$WORKDIR/07_logs/console_${RUN_N}.txt"
-LOG="$WORKDIR/07_logs/run_${RUN_N}.log"
+# 대용량 -d 트레이스는 WSL ext4 (쓰기 빠름). 기록/해결과정(콘솔·요약)은 로컬(Windows) 07_logs.
+TRACE_DIR="${TRACE_DIR:-$HOME/rehost/_traces}"; mkdir -p "$TRACE_DIR"
+OUT="$WORKDIR/07_logs/console_${RUN_N}.txt"        # 로컬: 콘솔 증거 (사용자 확인)
+SUM="$WORKDIR/07_logs/run_${RUN_N}.summary.txt"    # 로컬: 핵심 fault 요약 (사용자 확인)
+LOG="$TRACE_DIR/run_${RUN_N}.log"                  # WSL: 대용량 전체 트레이스
 
-rm -f "$OUT" "$LOG"
+rm -f "$OUT" "$SUM" "$LOG"
 
 timeout "$TIMEOUT" "$QEMU" \
-    -M "$MACHINE" \
-    -m 512M \
-    -nographic \
-    -kernel "$BL3" \
-    -append "$CMD" \
+    -M "$MACHINE" -m 512M -nographic \
+    -kernel "$BL3" -append "$CMD" \
     -serial "file:$OUT" \
-    -d int,in_asm,nochain \
-    -D "$LOG" \
+    -d int,in_asm,nochain -D "$LOG" \
     2>&1 | tail -3 || true
+
+# 로컬 요약: 핵심 정지점 라인만 (사용자가 로컬에서 해결과정 확인)
+grep -E "Taking exception|FAR|ELR|ESR|UPLOAD|E_SYNC|panic|abort|smc" "$LOG" 2>/dev/null | tail -60 > "$SUM" || true
 
 EXC=$(grep -c "Taking exception" "$LOG" 2>/dev/null || echo 0)
 CSZ=$(wc -c < "$OUT" 2>/dev/null || echo 0)
 
-echo "console=$OUT"
-echo "log=$LOG"
+echo "console=$OUT"          # 로컬 (Windows)
+echo "summary=$SUM"          # 로컬 (Windows) — 핵심 fault
+echo "trace=$LOG"            # WSL — 대용량 전체 트레이스
 echo "exceptions=$EXC"
 echo "console_size=$CSZ"

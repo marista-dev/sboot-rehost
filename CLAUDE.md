@@ -52,6 +52,11 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 (`journal.sh <wd> decision "<지점>" "<선택>" "<근거>"`). `AskUserQuestion` 은 하니스가
 자동응답을 지원하지 않으므로 자율 모드에선 호출 금지.
 
+**★ 실행 명령(`/rehost-sboot`·`/rehost-kernel`)은 시작하면 하드 블로커(아래) 전까지 한 번도
+멈추지 않는다.** 파이프라인이 FORCED/critic/미달을 반환해도 사용자에게 되묻지 말고 자율 정책으로
+처리 후 계속·마무리한다. "계속할까요/확인해주세요" 류 질문 자체가 규칙 위반. (`/rehost-init` 만은
+펌웨어 경로 등 데이터가 없으면 종료-보고 — 이건 데이터 결손이지 선택 질문이 아니다.)
+
 INPUT.md 의 `autonomous` 슬롯으로 제어: `true`(기본) = 자동 결정, `false` = 기존처럼
 분기마다 `AskUserQuestion` (사람이 지켜볼 때만).
 
@@ -153,36 +158,49 @@ INPUT.md 의 `autonomous` 슬롯으로 제어: `true`(기본) = 자동 결정, `
 
 ## 사용 가능한 슬래시 명령
 
-- **`/rehost-init`** — 셋업 + 트랙(1/2) 선택 + 인테이크 → INPUT.md
+- **`/rehost-init`** — 1단계(데이터 불요): 표준 폴더를 **Windows cwd** 에 생성 + 의존성 백그라운드 설치 + 펌웨어 확보 안내. INPUT.md 안 만듦.
+- **`/rehost-setup`** — 2단계(펌웨어 반입): `01_firmware/` 의 펌웨어 언팩 + **실행 사본을 WSL ext4 로 이동** + 의존성 확인 + INPUT.md 생성.
 - **`/rehost-sboot`** — 트랙 1 (sboot-shell) 실행 → pipeline.js
 - **`/rehost-kernel`** — 트랙 2 (kernel-storage) 실행 → pipeline_kernel.js
 - **`/rehost-status`** — 진행 상태 요약 (트랙 인식)
 
-트랙은 INPUT.md 의 `track` 슬롯에 기록됨. 실행 명령은 트랙별로 분리 (한 명령 = 한 트랙).
+흐름: **init(폴더·의존성) → 펌웨어 드롭 → setup(반입·INPUT.md) → sboot/kernel(자율 실행)**.
+트랙은 INPUT.md 의 `track` 슬롯. 실행 명령은 트랙별로 분리 (한 명령 = 한 트랙).
+**폴더는 Windows cwd(플러그인 시작 위치, 설치 폴더 안 아님), 펌웨어 실행 사본은 WSL ext4.**
 
 ---
 
 ## 작업 디렉터리 표준 구조
 
-실행 명령 (`/rehost-sboot` / `/rehost-kernel`) 이 작업 디렉터리에 만드는 표준 폴더 (공통 + 트랙별):
+`/rehost-init` 이 **Windows cwd** 에 만드는 표준 폴더 (공통 + 트랙별). 펌웨어 실행 사본은
+`/rehost-setup` 이 WSL ext4(`~/rehost/<model>/`)로 이동; 문서·로그는 이 Windows cwd 에 유지:
 
 ```
-<workdir>/
+<workdir>/  ← 로컬 Windows cwd (사용자가 보는 기록·해결과정)
 ├── INPUT.md                       0차 입력 (track 슬롯 포함)
 ├── PROGRESS.md                    회차별 한 줄 이력
-├── JOURNAL.md                     ★ 실행 기록 (세션·시행착오 시작/완료 시각 + 원인/분석/해결)
+├── JOURNAL.md                     ★ 실행 기록 (세션·시행착오 시각 + 원인/분석/해결 + 자동결정)
 ├── VERIFICATION.md                reality-verifier 출력 (5/5)
 ├── 06_machine/                    machine.c(.kernel) 및 우회 목록
-├── 07_logs/                       회차별 console/run 로그
+├── 07_logs/                       회차별 콘솔(console_N/kboot_N) + 요약(*.summary.txt) — 로컬
 ├── 08_docs/                       추가 분석 메모
 ├── 10_reproduce/                  마지막 단계 재현 키트
 │
 ├── (트랙 1)  STATIC.md STUBS.md   bl3-analyzer / stub-locator 출력
-│            01_firmware/ 02_unpacked/ 03_bl3/ 04_static-analysis/ 05_qemu/
+│            01_firmware/ 02_unpacked/ 03_bl3/ 04_static-analysis/
 │
 └── (트랙 2)  KERNEL_STATIC.md     kernel-boot-analyzer 출력 (DTB 골격 + 커널 게이트)
              fw/                   Image(.patched) / *.dtb / initramfs.cpio.gz / super.img
+
+WSL ext4 (대용량 쓰기 — 사용자가 직접 볼 필요 없는 중간물):
+  ~/rehost/<model>/          펌웨어 실행 사본 (QEMU 입력)
+  ~/rehost/_traces/          회차별 대용량 -d 전체 트레이스 (run_N.log / kboot_N.log)
 ```
+
+**기록 위치 원칙**: 사용자가 보는 **기록·해결과정(JOURNAL/PROGRESS/VERIFICATION/INPUT/STATIC/
+콘솔·요약)은 로컬 Windows cwd**, 대용량 **쓰기(펌웨어 실행 사본·`-d` 전체 트레이스)는 WSL ext4**.
+run 스크립트가 `console=`(로컬)·`summary=`(로컬)·`trace=`(WSL) 를 출력하고, 분석은 로컬 요약을
+1차로 읽되 필요 시 WSL 전체 트레이스를 본다.
 
 ---
 

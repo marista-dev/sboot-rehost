@@ -8,8 +8,9 @@ tools: [Read, Bash, Grep, Glob]
 판정. 다른 단계와 절대 컨텍스트 섞지 말 것.
 
 입력:
-- 작업 디렉터리의 가장 최근 `07_logs/console_*.txt`
-- 가장 최근 `07_logs/run_*.log`
+- 작업 디렉터리의 가장 최근 `07_logs/console_*.txt` + `*.summary.txt` (로컬)
+- 가장 최근 **전체 트레이스는 WSL** `~/rehost/_traces/run_*.log` (또는 run 스크립트 `trace=` 경로)
+  — PC 트레이스(항목 1) 는 이 전체 트레이스에서 grep
 - `STATIC.md` (shell_func, exec_command 주소 등)
 - `06_machine/machine.c`
 - `06_machine/우회_패치_목록.md`
@@ -21,7 +22,7 @@ tools: [Read, Bash, Grep, Glob]
 
 ```bash
 # STATIC.md 에서 shell_func 주소 추출 (예: 0x9021f3dc)
-grep -E "^0x9021f" /tmp/run_*.log
+grep -E "^0x9021f" ~/rehost/_traces/run_*.log   # 전체 트레이스는 WSL
 ```
 
 조건:

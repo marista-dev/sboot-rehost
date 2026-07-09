@@ -9,7 +9,8 @@ tools: [Read, Bash, Grep]
 §4,5,6 을 따른다. 매 회차 한 변경.
 
 ## 입력
-- `07_logs/kboot_N.txt` (콘솔) + `07_logs/kboot_N.log` (qemu `-d unimp,guest_errors,int`)
+- 로컬: `07_logs/kboot_N.txt` (콘솔) + `07_logs/kboot_N.summary.txt`. 전체 트레이스는 WSL
+  `~/rehost/_traces/kboot_N.log` (또는 run_kernel.sh `trace=` 경로)
 - KERNEL_STATIC.md, PROGRESS.md, 현재 `06_machine/machine_kernel.c`
 
 ## Step 1 — 정지점 분류
@@ -60,7 +61,7 @@ category="reached_userspace" 또는 "rootfs_mounted".
 
 분류 직후 `journal.sh try-end` 로 회차 기록. 매핑: **원인**=category+fault_info,
 **분석**=rationale, **해결**=patch_desc (reached_userspace/rootfs_mounted 이면 그 도달),
-**증거**=`07_logs/kboot_N.log`.
+**증거**=`07_logs/kboot_N.summary.txt` (로컬); 전체 트레이스 WSL.
 
 ## 정직성
 
