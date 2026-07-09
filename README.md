@@ -148,8 +148,4 @@ claude
 - **트랙 2**: K1/K2 안정, K3 은 벤더 `.ko` 필요. 공통 프론티어 = `/data` 암호화 → vold → Keymint → **TEE(TEEGRIS)**(범위 밖, 미달로 정직 기록).
 - **Samsung Exynos** 가정. 다른 SoC 는 DTB 도출로 대응하되 UART·HCI 레지스터는 대상 표준으로 확인.
 
----
 
-## 라이선스
-
-MIT. 펌웨어는 본 리포에 미포함 — 사용자 본인이 정식 채널(예: samfw.com 의 본인 기기용)로 확보.
