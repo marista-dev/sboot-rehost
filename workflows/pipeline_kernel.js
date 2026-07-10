@@ -20,11 +20,16 @@ export const meta = {
     { title: 'Machine', detail: 'machine_kernel.c + 코어/커널 패치 + ninja' },
     { title: 'K1',      detail: 'boot-fault-fixer -> 유저스페이스' },
     { title: 'K2',      detail: 'rootfs 마운트' },
-    { title: 'K3',      detail: 'storage-modeler 관찰 루프 (진짜 HCI)' },
+    { title: 'K3',      detail: 'storage-modeler 관찰 루프 (링크업→전원모드→SCSI→파티션)' },
+    { title: 'K3-capstone', detail: 'super system/vendor 마운트 (dm-linear)' },
     { title: 'Verify',  detail: '트랙 2 5/5' },
     { title: 'Package', detail: '재현 키트' },
   ],
 }
+
+// K3 완전 UFS 컨트롤러 마일스톤 사다리 (2400 검증 도달점). 목표=partitions_up + (캡스톤)super_mounted.
+// 부분 도달은 절대 "완료" 아님 — 최고 마일스톤을 정직히 보고.
+const K3_LADDER = ['link_up', 'power_mode', 'scsi_attach', 'partitions_up']
 
 const workdir  = args?.workdir
 const model    = args?.model
@@ -116,51 +121,88 @@ if (want === 2) {
   log('K2 미마운트 — K3 진행 전 rootfs 필요할 수 있음 (경로 A 는 무관)')
 }
 
-// ---- Phase 5: K3 (진짜 벤더 스토리지 HCI) ----
+// ---- Phase 5: K3 (진짜 벤더 스토리지 HCI — 완전 컨트롤러) ----
+// 목표: 관찰 루프가 링크업→전원모드→SCSI→진짜 GPT 파티션(sda1..)까지 구동 (K3a),
+//       그리고 캡스톤(super system/vendor 마운트)까지 (K3b). 부분 도달은 "완료" 아님.
+let k3best = null, partitions = false, superMounted = false
 if (want >= 3) {
   phase('K3')
-  let sd = false
+  // K3a: 컨트롤러 구동 관찰 루프 (마일스톤 사다리 — partitions_up 까지 계속)
   for (let i = 1; i <= MAXIT; i++) {
     const run = await agent(
       `회차 K3-${i}:
-       1) 시작 기록 (필수): bash <PLUGIN>/scripts/journal.sh ${workdir} try-start k3-${i} "K3 회차 ${i} 벤더 .ko 부팅"
-       2) EUFS_LU_IMAGE/EUFS_LBS 세팅 후 storage 실행 스크립트 (또는 run_kernel.sh) 로 진짜
-          벤더 .ko 부팅. 07_logs/kboot_${i}.txt + 스토리지 모델 트레이스 확인.
-          'sda: sda1' / 'Power mode change' 등장 여부 한 줄 보고.`,
+       1) 시작 기록: bash <PLUGIN>/scripts/journal.sh ${workdir} try-start k3-${i} "K3 회차 ${i} 벤더 .ko 부팅"
+       2) EUFS_LU_IMAGE/EUFS_LBS 세팅 후 진짜 벤더 .ko 부팅 (storage/run_exynos_ufs_clk.sh 상당).
+          07_logs/kboot_${i}.txt + summary 확인. 도달 최고 마일스톤 보고 (사다리):
+          link_up(=scsi host0: ufshcd) < power_mode(=Power mode change) <
+          scsi_attach(=[sda] Attached) < partitions_up(=sda: sda1..).`,
       { label:`k3-run-${i}`, phase:'K3' })
     log(`K3-${i}: ${run}`)
     const w = await agent(
       `회차 K3-${i} 스토리지 벽 분류 (§7.3 함정표) + 한 변경 관찰. 입력(로컬): 07_logs/kboot_${i}.txt +
-       kboot_${i}.summary.txt (전체 트레이스·스토리지 모델 트레이스는 WSL trace= 경로). 로그로 안
-       보이면 .ko 역어셈블. 파티션 열거 (sda1..) 도달 시 wall_category="partitions_up".
-       ★ 분류 직후 완료 기록 (필수):
+       kboot_${i}.summary.txt (전체 트레이스는 WSL trace= 경로). 로그로 안 보이면 .ko 역어셈블.
+       milestone_reached = 이번 부팅의 최고 마일스톤 (link_up|power_mode|scsi_attach|partitions_up|none).
+       ★ try-end 기록:
          bash <PLUGIN>/scripts/journal.sh ${workdir} try-end k3-${i} \\
-           "<원인=wall_category>" "<분석=observation>" "<해결=change_desc, partitions_up 이면 '파티션 열거'>" \\
+           "<원인=wall_category>" "<분석=observation>" "<해결=change_desc; milestone_reached>" \\
            "07_logs/kboot_${i}.summary.txt (로컬); 전체 트레이스 WSL"`,
       { agentType:'storage-modeler', label:`k3-obs-${i}`, phase:'K3',
         schema:{ type:'object', properties:{ wall_category:{type:'string'},
-          one_line_progress:{type:'string'} }, required:['wall_category'] } })
+          milestone_reached:{type:['string','null']}, one_line_progress:{type:'string'} },
+          required:['wall_category'] } })
     if (!w) break
-    if (w.wall_category === 'partitions_up') { sd = true; log(`★ K3-${i}: 파티션 열거`); break }
+    if (w.milestone_reached && K3_LADDER.indexOf(w.milestone_reached) > K3_LADDER.indexOf(k3best ?? 'none'))
+      k3best = w.milestone_reached
+    if (w.milestone_reached === 'partitions_up') { partitions = true; log(`★ K3-${i}: 진짜 GPT 파티션 sda1..`); break }
     await agent(
       `회차 K3-${i} 스토리지 모델 한 변경 적용: ${w.one_line_progress}. <hci>.c 또는 .ko 우회
        수정 -> 재빌드. PROGRESS.md 한 줄 + 우회목록. 추측/토글 금지.`,
       { label:`k3-apply-${i}`, phase:'K3' })
   }
-  log(`K3: partitions=${sd}`)
+  log(`K3a: 최고 마일스톤=${k3best ?? 'none'}, partitions=${partitions}`)
+
+  // ★ 파티션 미도달 = UFS 컨트롤러 미완성 → 정직 부분 보고 (여기서 종료, "완료"·success 금지)
+  if (!partitions) {
+    await agent(`bash <PLUGIN>/scripts/journal.sh ${workdir} decision "K3 완료여부" "미완(부분)" "최고 마일스톤 ${k3best ?? '링크 이전'}, 진짜 파티션 미도달"`,
+      { label:'k3-partial', phase:'K3' })
+    return { success:false, partial:true, phase_completed:'K3', highest_milestone:k3best, partitions:false,
+      note:`★ UFS 컨트롤러 미완성 — 최고 도달 '${k3best ?? '링크 이전'}', 진짜 파티션(sda1..) 미도달. "완료" 아님. §7.3 다음 벽 처치 또는 max_iterations 올려 재실행 필요.` }
+  }
+
+  // K3b 캡스톤: super system/vendor 마운트 (dm-linear, storage/run_path2_supermount.sh 상당)
+  phase('K3-capstone')
+  const cap = await agent(
+    `K3 캡스톤 (진짜 컨트롤러가 실제 파일시스템까지 구동): supermount(dm-linear) init 으로 super 의
+     system/vendor 를 EROFS 마운트. 커널 메시지 'erofs: (device dm-0): mounted' + '(dm-4): mounted' +
+     'supermount: SUCCESS' 확인. 안 되면 storage-modeler 로 비동기 프로브 타이밍(§7.3 8번) 회차 (max ${MAXIT}).
+     시작·완료 기록 (journal try-start/try-end k3cap).`,
+    { agentType:'storage-modeler', label:'k3-capstone', phase:'K3-capstone',
+      schema:{ type:'object', properties:{ mounted:{type:'boolean'}, evidence:{type:'string'} } } })
+  superMounted = !!cap?.mounted
+  log(`K3 캡스톤 super mount=${superMounted}`)
+  await agent(`bash <PLUGIN>/scripts/journal.sh ${workdir} decision "K3 캡스톤" "${superMounted?'super 마운트 성공':'super 마운트 미완'}" "erofs dm-0/dm-4 + supermount SUCCESS"`,
+    { label:'k3-cap-journal', phase:'K3-capstone' })
 }
 
 // ---- Phase 6: Verify ----
 phase('Verify')
+const k3req = want >= 3
+  ? `★ K3 목표이므로 5/5 는 진짜 파티션(sda: sda1..) + 드라이버 진짜 구동(UTRD/Query/SCSI) 이
+     필수. 캡스톤 super 마운트(erofs dm-0/dm-4)까지 있으면 완전. 이 증거가 없으면 K1/K2 만으로
+     통과 처리 금지 (그건 UFS 컨트롤러 미완).`
+  : ``
 const v = await agent(
   `${workdir} 최근 07_logs 콘솔 + 06_machine 소스를 트랙 2 5/5 로 검증 (CLAUDE.md 트랙 2 표).
-   커널 메시지 증거 (erofs dm-N / sda1 / Run/init) + 소스 negative + 드라이버 진짜 구동 +
-   우회 목록. VERIFICATION.md 작성. 등급 도달=${target}.`,
+   커널 메시지 증거 (Run/init / erofs dm-N / sda1 / Power mode) + 소스 negative + 드라이버 진짜 구동 +
+   우회 목록. VERIFICATION.md 작성. 등급 도달=${target}. ${k3req}`,
   { agentType:'reality-verifier', label:'verify', phase:'Verify',
     schema:{ type:'object', properties:{ passes:{type:'integer'}, verdict:{type:'string'},
       failed_items:{type:'array'} }, required:['passes','verdict'] } })
 log(`검증: ${v?.passes ?? '?'}/5 (${v?.verdict ?? '?'})`)
-if (!v || v.passes < 5) return { phase_completed:'Verify', verify:v, note:'FORCED/미완. 자율 기본: FORCED 로 마무리 (REAL 금지). interactive 면 skill 이 선택 요청.' }
+if (!v || v.passes < 5) return {
+  success:false, phase_completed:'Verify', verify:v, target,
+  highest_milestone: want>=3 ? k3best : target, partitions, super_mounted:superMounted,
+  note:'FORCED/미완 — 5/5 미통과. "완료" 아님. REAL 금지.' }
 
 // ---- Phase 7: Package ----
 phase('Package')
@@ -169,4 +211,12 @@ await agent(
    scripts (patch_qemu_core/patch_kernel/run_kernel) 복사 + evidence (콘솔 + VERIFICATION.md).`,
   { label:'package', phase:'Package' })
 
-return { success:true, track:2, target, verify:v, reproduce_dir:`${workdir}/10_reproduce/` }
+// 완료 보고 — K3 는 파티션까지 필수, 캡스톤(super 마운트)은 있으면 "완전"
+const k3done = want < 3 || partitions
+return {
+  success: k3done, track:2, target, verify:v,
+  partitions, super_mounted:superMounted,
+  ufs_controller: want>=3 ? (superMounted ? 'complete (partitions + super mount)'
+                              : partitions ? 'partitions only (캡스톤 super 마운트 미완)'
+                              : 'incomplete') : 'n/a',
+  reproduce_dir:`${workdir}/10_reproduce/` }

@@ -63,3 +63,5 @@ VERIFICATION.md
 !examples/*/EXPECTED_OUTPUT.txt
 !examples/*/machine.c
 !examples/*/README.md
+
+examples/a166b-exynos1330*

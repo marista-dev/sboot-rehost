@@ -130,6 +130,12 @@ INPUT.md 의 `autonomous` 슬롯으로 제어: `true`(기본) = 자동 결정, `
 
 5/5 = REAL. 4/5 이하 = FORCED (성공 표시 금지).
 
+**K3(완전 UFS 컨트롤러) 완료 기준 — 중간에 멈추면 "완료" 아님**: 마일스톤 사다리
+`link_up(scsi host0: ufshcd)` → `power_mode(Power mode change)` → `scsi_attach([sda] Attached)`
+→ **`partitions_up(sda: sda1..)`** → (캡스톤) **`super_mounted(erofs dm-0/dm-4 + supermount SUCCESS)`**.
+`partitions_up` = 최소 완료, `super_mounted` = 완전. **partitions_up 미도달이면 최고 마일스톤을
+"미완"으로 정직 보고하고 success·REAL 금지** (max 회차 소진도 동일). 부분 도달을 "완료"로 위장 금지.
+
 ---
 
 ## 위기 5 신호 (critic agent 가 자동 발화)

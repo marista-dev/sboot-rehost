@@ -229,7 +229,24 @@ IRQ 는 `qemu_irq` (DTB 스토리지 `interrupts` SPI 번호).
 - 게스트 init (`modload`) 이 `finit_module` 로 스텁+패치 `.ko` 로드. 비동기 프로브면
   `/dev/sdaN` 을 폴링 대기 + devtmpfs 없으면 `mknod`.
 
-K3 통과 = 커널 메시지 `sda: sda1 …` + `Power mode change(…)` + (캡스톤) `erofs: (dm-N): mounted`.
+### 7.5 ★ 완료 기준 — 마일스톤 사다리 (중간에 멈추면 "완료" 아님)
+
+"완벽한 UFS 컨트롤러" 는 관찰 루프가 아래를 **끝까지** 구동해야 한다. 한 마일스톤에서
+멈추면 그건 **미완** — 정직히 최고 마일스톤을 기록하고 다음 벽을 처치한다 (§1.5).
+
+| # | 마일스톤 | 커널 증거 (2400 검증) |
+|---|---|---|
+| 1 | link_up | `scsi host0: ufshcd` |
+| 2 | power_mode | `Power mode change(0): M(1)G(3)L(2)HS-series(2)` |
+| 3 | scsi_attach | `[sda] Attached SCSI disk` |
+| 4 | **partitions_up** (K3 최소 완료) | `sda: sda1 sda2 sda3 sda4` |
+| 5 | **super_mounted** (캡스톤 = 완전) | `erofs: (device dm-0/dm-4): mounted` + `supermount: SUCCESS` |
+
+- **partitions_up 미도달** = UFS 컨트롤러 미완성. `partitions_up` 을 목표로 루프를 계속
+  (max 소진 시 최고 마일스톤을 "미완" 으로 보고, "완료"·REAL 금지).
+- **캡스톤(super_mounted)** = 진짜 컨트롤러가 실제 파일시스템까지 구동 (dm-linear super 마운트,
+  `storage/run_path2_supermount.sh`·`supermount.c` 상당). 여기까지가 "완전한 UFS 컨트롤러".
+- 파이프라인은 K3a(파티션) → K3b(캡스톤 마운트) 두 단계로 진행. K3a 미도달이면 K3b·완료로 넘어가지 말 것.
 
 ---
 

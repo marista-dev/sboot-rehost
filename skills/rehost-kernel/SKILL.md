@@ -73,10 +73,13 @@ pipeline_kernel.js phase (등급까지만 진행):
 - 제네릭+DT fstab (§6.1) 또는 dm-linear supermount (§6.2). 커널 메시지
   `erofs: (device dm-N): mounted` (system+vendor) 확인.
 
-### Phase K3 — 진짜 벤더 스토리지 HCI (storage-modeler)
-- EUFS_LU_IMAGE/EUFS_LBS 세팅 후 진짜 벤더 .ko 부팅. 관찰 루프 (§7.3 함정표):
-  회차마다 벽 분류 + 한 변경 (로그로 안 보이면 .ko 역어셈블). `sda: sda1…` +
-  `Power mode change` 도달 시 완료.
+### Phase K3 — 진짜 벤더 스토리지 HCI (storage-modeler) — **완전 컨트롤러**
+- 관찰 루프(§7.3 함정표)가 **마일스톤 사다리**를 끝까지 구동해야 "완료":
+  `link_up(scsi host0: ufshcd)` → `power_mode(Power mode change)` → `scsi_attach([sda] Attached)`
+  → **`partitions_up(sda: sda1..)`** → (캡스톤) **`super_mounted(erofs dm-0/dm-4 + supermount SUCCESS)`**.
+- **K3a**(파티션)까지 루프 계속. **K3b**(캡스톤 super 마운트)로 완전 완성.
+- ★ **partitions_up 미도달이면 "완료" 아님** — 최고 마일스톤을 "미완"으로 정직 보고하고 중단(REAL·success 금지).
+  max 회차 소진 시에도 마찬가지 (완료로 위장 금지). 더 진행하려면 max_iterations 올려 재실행.
 
 ### Phase Verify / Package
 - reality-verifier 트랙 2 5/5 (커널 메시지 증거). 5/5 = REAL → 10_reproduce/ 생성.
@@ -119,6 +122,8 @@ bash <PLUGIN>/scripts/journal.sh <workdir> session-end "/rehost-kernel" "<결과
   머신 `qemu_log` 문자열 불인정.
 - 커널·`.ko` 패치는 pre-image 검증 + `[대상/이유/방법/부작용]`. 적응형 토글 금지.
 - `kvm-arm.mode=protected` 시 HVC 는 커널 내장 pKVM — 셤이 가로채면 안 됨.
+- **K3 목표인데 진짜 파티션(`sda: sda1..`) 미도달이면 "완료"·REAL 금지.** 최고 마일스톤
+  (link_up/power_mode/scsi_attach 중 어디까지)을 "미완"으로 정직 보고. 중간 정지 = 미완성.
 - pipeline_kernel.js 에러 시 traceback 그대로.
 
 ## 에이전트 (pipeline_kernel.js)

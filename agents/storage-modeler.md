@@ -69,11 +69,27 @@ PEER_SET=0x04). attr==PWRMode 면 `HCS.UPMCRS=1` + 완료 IRQ (IS.UPMS) set.
  → "readl(<win> + <imm>)" 확정 → 그 창·오프셋을 모델에 심음
 ```
 
-## Step 4 — 출력 (schema)
+## Step 4 — 완전 UFS 컨트롤러 마일스톤 사다리 (★ 완료 기준)
+
+"완벽한 UFS 컨트롤러" = 진짜 벤더 `.ko` 가 아래를 **끝까지** 구동. 도달 최고 마일스톤을
+`milestone_reached` 로 보고하고, **목표 미도달이면 절대 "완료/done" 신호 금지** — 다음 벽을 처치.
+
+| 마일스톤 | 커널 증거 (2400 검증) | 통과 벽 (§7.3) |
+|---|---|---|
+| `link_up` | `scsi host0: ufshcd` | PHY 캘리브레이션 |
+| `power_mode` | `Power mode change(0): M(1)G(3)L(2)HS-series(2)` | NOP 부호확장, DME opcode, max_gear |
+| `scsi_attach` | `[sda] Attached SCSI disk` | Query 디바이스, 텔레메트리 null |
+| `partitions_up` | `sda: sda1 sda2 sda3 sda4` | UPIU 필드 오프셋, 블록 크기 |
+| `super_mounted` (캡스톤) | `erofs: (device dm-0/dm-4): mounted` + `supermount: SUCCESS` | 비동기 프로브 타이밍 |
+
+`partitions_up` = K3 최소 완료, `super_mounted` = 완전. `milestone_reached=none` 은 링크 이전.
+
+## Step 5 — 출력 (schema)
 
 ```json
 {
   "wall_category": "pwrmode_timeout",
+  "milestone_reached": "link_up",
   "observation": "UICCMD cmd=0x02 arg1=0x15710000 이 잡히지 않아 IS.UPMS 미발행",
   "change_target": "eufs_uiccmd DME opcode 표",
   "change_desc": "DME_SET=0x02 정정, attr==PWRMode 면 UPMS IRQ set",
