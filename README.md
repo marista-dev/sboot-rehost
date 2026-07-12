@@ -31,9 +31,12 @@ claude
 /plugin install sboot-rehost@sboot-rehost-marketplace
 ```
 ```text
-# ⑤ 설치 확인 — 아래 5개 명령이 보이면 완료
+# ⑤ 설치 확인 — /rehost-setup · /rehost-sboot · /rehost-kernel · /rehost-status 가 보이면 완료
 /plugin
 ```
+
+설치 후 세션이 시작되면 작업 폴더에 **`rehost_workspaces/_inbox/`** 가 자동 생성됩니다(SessionStart 훅).
+여기에 펌웨어를 넣고 `/rehost-setup` 을 실행하면 됩니다.
 
 > **대안 설치**
 > - git clone: `git clone https://github.com/marista-dev/sboot-rehost.git` 후 ③④ 그대로
@@ -43,53 +46,46 @@ claude
 
 ## 2. 명령어 (역할 항목화)
 
-| 명령 | 단계 | 역할 | 산출물 |
-|---|---|---|---|
-| **`/rehost-init`** | 준비 1 | 표준 폴더를 **Windows 현재 폴더(cwd)** 에 생성 + 의존성 백그라운드 설치 + 펌웨어 확보 안내 | 폴더 트리, 의존성 |
-| **`/rehost-setup`** | 준비 2 | `01_firmware/` 의 펌웨어 언팩 + **실행 사본을 WSL 로 이동** + 의존성 확인 → `INPUT.md` 작성 | INPUT.md, 자산 |
-| **`/rehost-sboot`** | 실행 (트랙 1) | S-Boot BL3 를 QEMU 로 실행해 진짜 셸 + `help` 도달 | machine.c, 셸 증거 |
-| **`/rehost-kernel`** | 실행 (트랙 2) | 커널 직부팅 + 진짜 벤더 UFS 컨트롤러로 rootfs·Android 도달 | machine_kernel.c, 커널 증거 |
-| `/rehost-status` | 조회 (옵션) | 진행 상태(회차·검증·트랙) 한 화면 요약 | — |
+| 명령 | 역할 | 산출물 |
+|---|---|---|
+| **`/rehost-setup fw=<zip> track= model= target=`** | **새 펌웨어 세팅** — 의존성(1회) + **펌웨어당 독립 워크스페이스** `rehost_workspaces/<id>/` 생성(덮어쓰기 금지) + 언팩 + 실행 사본 WSL 이동 + `INPUT.md` + `.active` | 워크스페이스, INPUT.md |
+| **`/rehost-sboot`** | **트랙 1 실행** — S-Boot BL3 → 진짜 셸 + `help` | machine.c, 셸 증거 |
+| **`/rehost-kernel`** | **트랙 2 실행** — 커널 + 진짜 벤더 UFS 컨트롤러 → rootfs·Android | machine_kernel.c, 커널 증거 |
+| `/rehost-status` | **워크스페이스 목록** + 각 진행/검증 요약 | — |
 
-- **한 명령 = 한 트랙.** INPUT.md 의 `track` 슬롯에 맞는 실행 명령 하나만 쓴다(어긋나면 올바른 명령 안내).
-- **자율 실행이 기본**(`autonomous: true`): 실행 명령은 하드 블로커 전까지 **멈추지 않는다**. 단계마다 확인받으려면 `interactive` 인자.
-- **등급**: 트랙 1 = A(help)/B(명령핸들러)/C(autoboot). 트랙 2 = K1(유저스페이스)/K2(rootfs)/K3(진짜 UFS 컨트롤러).
+- **펌웨어당 워크스페이스 1개(격리).** 여러 펌웨어를 넣어도 서로 안 덮어씀. 실행 대상 = `.active`(가장 최근 setup) 또는 `workdir=<id>`.
+- **펌웨어 드롭 폴더 `rehost_workspaces/_inbox/` 는 설치 후 세션 시작 시 자동 생성**(SessionStart 훅). 거기 zip 을 넣고 `/rehost-setup`.
+- **한 명령 = 한 트랙.** 자율 실행이 기본 — 하드 블로커 전까지 안 멈춤(`interactive` 로 대화형).
+- **등급**: 트랙 1 = A/B/C. 트랙 2 = K1/K2/K3(진짜 UFS 컨트롤러, 파티션+super 마운트까지).
 
 ---
 
 ## 3. 실행 순서
 
 ```text
-① /rehost-init                          # 폴더 생성(Windows cwd) + 의존성 설치
-② (펌웨어를 <cwd>/01_firmware/ 에 드롭)   # 탐색기로 넣기
-③ /rehost-setup track=1 model=SM-XXXX target=A     # 언팩 + WSL 이동 + INPUT.md
-④ /rehost-sboot                         # 트랙 1 실행  (트랙 2 는 /rehost-kernel)
-⑤ /rehost-status                        # (옵션) 진행 확인
+① (펌웨어를 rehost_workspaces/_inbox/ 에 드롭)   # 인박스는 설치 후 자동 생성
+② /rehost-setup track=1 model=SM-XXXX target=A   # 의존성(1회) + 격리 워크스페이스 + INPUT.md
+③ /rehost-sboot                                  # 트랙 1 실행 (active 워크스페이스)
+④ /rehost-status                                 # (옵션) 워크스페이스 목록/진행
 ```
-트랙 2 예: `③ /rehost-setup track=2 model=SM-XXXX target=K3` → `④ /rehost-kernel`.
+- 트랙 2: `② /rehost-setup track=2 model=SM-XXXX target=K3` → `③ /rehost-kernel`.
+- 다른 펌웨어: 다시 `_inbox/` 에 드롭 후 `/rehost-setup` → **새 워크스페이스**(기존 안 덮어씀).
+- 특정 워크스페이스 실행: `/rehost-sboot workdir=<id>`.
 
 ---
 
 ## 4. 각 명령이 거치는 과정
 
-### `/rehost-init` — 준비 1 (펌웨어 불요)
-1. 작업 디렉터리 = **Windows cwd** 확정 (플러그인 설치 폴더 안 아님, WSL 아님).
-2. JOURNAL 세션 시작 기록.
-3. 의존성 검사(`qemu-system-aarch64`/`capstone`/`dtc`). 없으면 `setup_env.sh` **백그라운드** 실행(apt+pip+QEMU 10.2.2 빌드, ~18분).
-4. 표준 폴더 생성: `01_firmware 02_unpacked 03_bl3 04_static-analysis 06_machine 07_logs 08_docs` (+ 트랙 2 `fw/`).
-5. 펌웨어 확보 안내 출력(어디서 받아 `01_firmware/` 에 넣을지).
-6. 완료 보고 → 다음: 펌웨어 드롭 후 `/rehost-setup`. **INPUT.md 는 만들지 않는다.**
-
-### `/rehost-setup track= model= target=` — 준비 2 (펌웨어 반입)
-1. 선행 검사: init 폴더 존재 + `01_firmware/` 에 펌웨어 존재. 세션 시작 기록.
-2. 펌웨어 언팩(WSL): 트랙 1 = `tar → lz4 → sboot.bin`(→ `02_unpacked/`), 트랙 2 = `extract_boot_assets.sh` → `fw/`(Image/dtb/initrd/super).
-3. **실행 사본을 WSL ext4(`~/rehost/<model>/`)로 이동** — `/mnt/c` QEMU I/O 느림 회피.
-4. 의존성 완료 확인(init 백그라운드 빌드가 끝났는지, 진행 중이면 자동 대기).
-5. 자산 검증(실제 md5·크기): 트랙 1 4MB 미만 = carve 의심 **하드 블로커**, 트랙 2 DTB 매직·super EROFS, K3 는 벤더 `.ko` 필수.
-6. `INPUT.md`(자산=WSL 경로, workdir=Windows) + `PROGRESS.md` 작성. 세션 종료 기록.
+### `/rehost-setup fw=<zip> track= model= target=` — 새 펌웨어 세팅 (펌웨어당 1회)
+1. **작업 루트** `<cwd>/rehost_workspaces/` 확인(+`_inbox/`). **의존성 1회성**: 없으면 `setup_env.sh` 백그라운드(apt+pip+QEMU 10.2.2, ~18분), 있으면 스킵.
+2. 펌웨어 입력: `fw=<경로>` 또는 `_inbox/` 자동 감지. model/build 는 파일명·메타에서 도출(인자로 덮어쓰기).
+3. **워크스페이스 id = `<model>_<build>`** → `rehost_workspaces/<id>/` 생성. **이미 있으면 덮어쓰지 않고 중단**(기존 펌웨어 보호).
+4. 언팩(WSL): 트랙 1 = `tar → lz4 → sboot.bin`, 트랙 2 = `extract_boot_assets.sh` → `fw/`(Image/dtb/initrd/super).
+5. **실행 사본을 WSL ext4(`~/rehost/<id>/`)로 이동**. 자산 검증(md5·크기; 4MB미만·`.ko`부재 등 하드 블로커).
+6. `INPUT.md`(자산=WSL, workdir=워크스페이스) + `PROGRESS.md` 작성 + `.active` 갱신.
 
 ### `/rehost-sboot` — 트랙 1 실행 (`pipeline.js`)
-1. 선행 검사: `INPUT.md(track:1)`. 세션 시작 기록.
+1. 대상 워크스페이스 = `.active`(또는 `workdir=<id>`)의 `INPUT.md(track:1)`. 세션 시작 기록.
 2. 워크플로우 자동 진행(자율, 안 멈춤):
    - **Static** — `bl3-analyzer` 가 8값 도출(carve/entry/linker/load/Δ/cmd테이블/list head/shell 함수) + `stub-locator` 4개 병렬 도출 → `STATIC.md`·`STUBS.md`.
    - **Machine** — `machine.c.tmpl` 슬롯 채워 `06_machine/machine.c` 작성 → QEMU 트리 통합 + `ninja`.
@@ -99,7 +95,7 @@ claude
 3. 세션 종료 기록. 도달: 진짜 `S-BOOT #` 셸 + `help`.
 
 ### `/rehost-kernel` — 트랙 2 실행 (`pipeline_kernel.js`)
-1. 선행 검사: `INPUT.md(track:2)`. 세션 시작 기록.
+1. 대상 워크스페이스 = `.active`(또는 `workdir=<id>`)의 `INPUT.md(track:2)`. 세션 시작 기록.
 2. 워크플로우 자동 진행:
    - **Static** — `kernel-boot-analyzer` 가 DTB 로 머신 골격 + 커널 보안게이트 사이트 도출 → `KERNEL_STATIC.md`.
    - **Machine** — `machine_kernel.c` + `patch_qemu_core.py`(SMC 코어 3패치) + `patch_kernel.py`(게이트) + `ninja`.
@@ -110,7 +106,7 @@ claude
 3. 도달: 목표 등급(K1/K2/K3)까지.
 
 ### `/rehost-status` — 조회
-`INPUT/STATIC/KERNEL_STATIC/PROGRESS/VERIFICATION/JOURNAL` 을 읽어 트랙·회차·미확정·5/5 통과 항목을 한 화면 표로 요약.
+`rehost_workspaces/` 의 **모든 워크스페이스**를 나열(★=active) + 각 트랙/등급/진행(트랙 2 는 K3 최고 마일스톤)/5/5 요약. `workdir=<id>` 주면 그 워크스페이스만 상세.
 
 ---
 
@@ -138,7 +134,7 @@ claude
 ## 7. 필요 환경
 
 - **OS**: WSL2(Ubuntu 22.04+) 또는 Ubuntu 22.04+ / **디스크** ~3 GB / **인터넷**(QEMU 최초 1회)
-- 자동 설치(`/rehost-init` → `setup_env.sh`): apt 빌드 툴 + `flex bison device-tree-compiler`, pip `meson capstone lz4 keystone-engine`, **QEMU 10.2.2(aarch64)**. 트랙 2 K3 는 aarch64 크로스툴체인 추가.
+- 자동 설치(`/rehost-setup` 첫 실행 → `setup_env.sh`): apt 빌드 툴 + `flex bison device-tree-compiler`, pip `meson capstone lz4 keystone-engine`, **QEMU 10.2.2(aarch64)**. 트랙 2 K3 는 aarch64 크로스툴체인 추가.
 
 ---
 

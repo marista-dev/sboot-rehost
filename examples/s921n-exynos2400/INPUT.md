@@ -1,7 +1,7 @@
 # INPUT — sboot-rehost 0차 입력 (예시: SM-S921N)
 
-> 이 INPUT.md 는 worked example 의 입력값. `/rehost-init` 가 새 펌웨어로
-> 동일 구조 파일을 자동 생성한다.
+> 이 INPUT.md 는 worked example 의 입력값. `/rehost-setup` 이 새 펌웨어로
+> 워크스페이스에 동일 구조 파일을 자동 생성한다.
 
 | 슬롯 | 값 |
 |---|---|

@@ -36,7 +36,7 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 | 단계 경계 | `journal.sh <wd> phase "<phase>"` | 단계 전환 시각 |
 
 규칙:
-- **세션**: `/rehost-init` / `/rehost-sboot` / `/rehost-kernel` / `/rehost-status` 는 시작 즉시
+- **세션**: `/rehost-setup` / `/rehost-sboot` / `/rehost-kernel` / `/rehost-status` 는 시작 즉시
   `session-start`, 끝에 `session-end`.
 - **시행착오**: 매 회차(트랙 1)·매 정지점/벽(트랙 2 K1~K3)은 `try-start`(시작 시각) + `try-end`
   (완료 시각 + **원인·분석·해결** + 증거 로그 경로). 회차 번호 = try id.
@@ -54,8 +54,8 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 
 **★ 실행 명령(`/rehost-sboot`·`/rehost-kernel`)은 시작하면 하드 블로커(아래) 전까지 한 번도
 멈추지 않는다.** 파이프라인이 FORCED/critic/미달을 반환해도 사용자에게 되묻지 말고 자율 정책으로
-처리 후 계속·마무리한다. "계속할까요/확인해주세요" 류 질문 자체가 규칙 위반. (`/rehost-init` 만은
-펌웨어 경로 등 데이터가 없으면 종료-보고 — 이건 데이터 결손이지 선택 질문이 아니다.)
+처리 후 계속·마무리한다. "계속할까요/확인해주세요" 류 질문 자체가 규칙 위반. (`/rehost-setup` 만은
+펌웨어·필수 슬롯이 없으면 종료-보고 — 이건 데이터 결손이지 선택 질문이 아니다.)
 
 INPUT.md 의 `autonomous` 슬롯으로 제어: `true`(기본) = 자동 결정, `false` = 기존처럼
 분기마다 `AskUserQuestion` (사람이 지켜볼 때만).
@@ -164,25 +164,32 @@ INPUT.md 의 `autonomous` 슬롯으로 제어: `true`(기본) = 자동 결정, `
 
 ## 사용 가능한 슬래시 명령
 
-- **`/rehost-init`** — 1단계(데이터 불요): 표준 폴더를 **Windows cwd** 에 생성 + 의존성 백그라운드 설치 + 펌웨어 확보 안내. INPUT.md 안 만듦.
-- **`/rehost-setup`** — 2단계(펌웨어 반입): `01_firmware/` 의 펌웨어 언팩 + **실행 사본을 WSL ext4 로 이동** + 의존성 확인 + INPUT.md 생성.
-- **`/rehost-sboot`** — 트랙 1 (sboot-shell) 실행 → pipeline.js
-- **`/rehost-kernel`** — 트랙 2 (kernel-storage) 실행 → pipeline_kernel.js
-- **`/rehost-status`** — 진행 상태 요약 (트랙 인식)
+- **`/rehost-setup fw=<zip> track= model= target=`** — 새 펌웨어 세팅 (init+setup 병합, 펌웨어당 1회):
+  의존성(1회성) + **펌웨어당 독립 워크스페이스** `rehost_workspaces/<id>/` 생성(★ 덮어쓰기 금지) +
+  언팩 + 실행 사본 WSL 이동 + INPUT.md + `.active` 갱신.
+- **`/rehost-sboot`** — 트랙 1 실행 (active 또는 `workdir=<id>` 워크스페이스) → pipeline.js
+- **`/rehost-kernel`** — 트랙 2 실행 (active 또는 `workdir=<id>`) → pipeline_kernel.js
+- **`/rehost-status`** — 모든 워크스페이스 목록 + 각 상태
 
-흐름: **init(폴더·의존성) → 펌웨어 드롭 → setup(반입·INPUT.md) → sboot/kernel(자율 실행)**.
-트랙은 INPUT.md 의 `track` 슬롯. 실행 명령은 트랙별로 분리 (한 명령 = 한 트랙).
-**폴더는 Windows cwd(플러그인 시작 위치, 설치 폴더 안 아님), 펌웨어 실행 사본은 WSL ext4.**
+흐름: **펌웨어를 `rehost_workspaces/_inbox/` 에 드롭(설치 시 훅이 자동 생성) → `/rehost-setup`(격리
+워크스페이스 생성) → `/rehost-sboot`|`/rehost-kernel`(자율 실행)**.
+- 여러 펌웨어 = 워크스페이스 여러 개(격리, 서로 안 덮어씀). 실행 대상 = `.active` 또는 `workdir=<id>`.
+- **작업 루트 `rehost_workspaces/` 는 Windows cwd 밑**(플러그인 폴더 안 아님). 문서·기록=워크스페이스,
+  펌웨어 실행 사본·대용량 트레이스=WSL ext4.
 
 ---
 
 ## 작업 디렉터리 표준 구조
 
-`/rehost-init` 이 **Windows cwd** 에 만드는 표준 폴더 (공통 + 트랙별). 펌웨어 실행 사본은
-`/rehost-setup` 이 WSL ext4(`~/rehost/<model>/`)로 이동; 문서·로그는 이 Windows cwd 에 유지:
+`/rehost-setup` 이 **펌웨어마다 독립 워크스페이스** `<cwd>/rehost_workspaces/<id>/` 를 만든다
+(id=`<model>_<build>`, 덮어쓰기 금지). 펌웨어 실행 사본은 WSL ext4(`~/rehost/<id>/`)로 이동;
+문서·기록은 워크스페이스(Windows)에 유지. 여러 펌웨어 = 형제 워크스페이스(격리):
 
 ```
-<workdir>/  ← 로컬 Windows cwd (사용자가 보는 기록·해결과정)
+<cwd>/rehost_workspaces/          ← 작업 루트 (Windows cwd 밑, 플러그인 폴더 아님)
+├── _inbox/                       ← 펌웨어 드롭 (설치 시 SessionStart 훅이 자동 생성)
+├── .active                       ← 실행 명령의 기본 대상 워크스페이스 id
+└── <id>/  (= <workdir>)          ← 한 펌웨어 워크스페이스 (로컬, 사용자가 보는 기록·해결과정)
 ├── INPUT.md                       0차 입력 (track 슬롯 포함)
 ├── PROGRESS.md                    회차별 한 줄 이력
 ├── JOURNAL.md                     ★ 실행 기록 (세션·시행착오 시각 + 원인/분석/해결 + 자동결정)

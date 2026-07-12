@@ -65,3 +65,6 @@ VERIFICATION.md
 !examples/*/README.md
 
 examples/a166b-exynos1330*
+examples/a136u-mt6833-kernel
+# 격리 워크스페이스(펌웨어당) — 추적 안 함
+rehost_workspaces/

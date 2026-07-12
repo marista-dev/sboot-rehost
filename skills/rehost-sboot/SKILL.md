@@ -1,6 +1,6 @@
 ---
 name: rehost-sboot
-description: 트랙 1 (sboot-shell) 본격 실행. INPUT.md(track 1) 가 있는 상태에서 workflows/pipeline.js 호출 → 정적 분석(병렬 멀티에이전트) → 머신 .c + ninja → 회차 루프(직렬, 한 회차 한 변경) → 5/5 검증 → 재현 키트. /rehost-init(트랙 1) 선행. S-Boot BL3 를 QEMU 에서 실행해 진짜 셸 + help 도달.
+description: 트랙 1 (sboot-shell) 본격 실행. active(또는 workdir=<id>) 워크스페이스의 INPUT.md(track 1) 로 workflows/pipeline.js 호출 → 정적 분석(병렬 멀티에이전트) → 머신 .c + ninja → 회차 루프(직렬, 한 회차 한 변경) → 5/5 검증 → 재현 키트. /rehost-setup 선행. S-Boot BL3 를 QEMU 에서 실행해 진짜 셸 + help 도달.
 ---
 
 당신은 트랙 1 (S-Boot BL3 셸) 실행 오케스트레이터. `/rehost-sboot` 호출 시
@@ -15,16 +15,16 @@ FORCED, 의존성 등)는 CLAUDE.md 자율 정책으로 **자동 결정 + JOURNA
 
 ---
 
-## Step 0 — 선행 조건 검사
+## Step 0 — 워크스페이스 확정 + 선행 조건
 
-1. **INPUT.md 존재 + `track: 1`** (INPUT.md 는 `/rehost-setup` 이 생성):
-   - 없는데 `01_firmware/` 에 펌웨어 있으면: "`/rehost-setup` 을 먼저 호출하세요" (또는 자율 시 setup 자동 호출).
-   - 폴더 자체가 없으면: "`/rehost-init` 을 먼저 호출하세요" 안내 후 종료.
-   - `track: 2` 면: "이 펌웨어는 트랙 2 입니다. `/rehost-kernel` 을 호출하세요" 안내 후 종료.
-   - `bl3_path` 슬롯이 있어야 함 (없으면 setup 재확인).
-2. **의존성 OK**: `which qemu-system-aarch64` + `python3 -c "import capstone"`.
-   백그라운드 설치 중이면 **자율 모드는 완료까지 자동 대기(폴링)** — 안 물음. 아예 미설치+미진행이면
-   `setup_env.sh` 자동 실행(자율) 또는 "/rehost-init 먼저" 안내(하드 블로커).
+1. **대상 워크스페이스**: `WORKROOT = <cwd>/rehost_workspaces`.
+   - `workdir=<id>` 인자 있으면 그 워크스페이스, 없으면 `WORKROOT/.active` 의 id.
+   - 워크스페이스(또는 INPUT.md)가 없으면: "먼저 `/rehost-setup fw=<zip>` 으로 펌웨어 세팅" 안내 후 종료.
+   - 이하 `<workdir>` = `WORKROOT/<id>` (그 안의 INPUT.md 사용).
+2. **INPUT.md `track: 1`** 확인. `track: 2` 면 "이 펌웨어는 트랙 2 — `/rehost-kernel`" 안내 후 종료.
+   `bl3_path` 슬롯 필요.
+3. **의존성 OK** (setup 에서 설치): `which qemu-system-aarch64` + `import capstone`. 진행 중이면
+   **자율은 완료까지 자동 대기** — 안 물음.
 
 ---
 

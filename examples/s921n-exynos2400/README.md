@@ -12,8 +12,7 @@
 
 ## 사용
 
-`/rehost-init` 의 인테이크에서 본 INPUT.md 의 슬롯들이 그대로 사용자에게 묻는
-질문의 답변으로 대응 (트랙 1 선택 후).
+`/rehost-setup` 의 인자/인테이크에서 본 INPUT.md 의 슬롯들이 대응 (트랙 1).
 
 Phase 3 (회차 루프) 가 끝나면 `06_machine/machine.c` 가 본 폴더의 machine.c 와
 일치해야 함 (구조적으로). 정확히 동일한 patch 시퀀스로 완료될 필요는 없음 —

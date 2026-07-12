@@ -1,6 +1,6 @@
 ---
 name: rehost-kernel
-description: 트랙 2 (kernel-storage) 본격 실행. INPUT.md(track 2) 가 있는 상태에서 workflows/pipeline_kernel.js 호출 → 부팅 자산 + DTB 골격 정적분석 → machine_kernel.c + 코어/커널 패치 + ninja → K1(유저스페이스) → K2(rootfs 마운트) → K3(진짜 벤더 스토리지 HCI 관찰 루프) → 5/5 검증 → 재현 키트. /rehost-init(트랙 2) 선행. 진짜 커널·벤더 드라이버를 QEMU 에서 실행.
+description: 트랙 2 (kernel-storage) 본격 실행. active(또는 workdir=<id>) 워크스페이스의 INPUT.md(track 2) 로 workflows/pipeline_kernel.js 호출 → 부팅 자산 + DTB 골격 정적분석 → machine_kernel.c + 코어/커널 패치 + ninja → K1(유저스페이스) → K2(rootfs 마운트) → K3(진짜 벤더 스토리지 HCI 관찰 루프, 파티션+super 마운트) → 5/5 검증 → 재현 키트. /rehost-setup 선행. 진짜 커널·벤더 드라이버를 QEMU 에서 실행.
 ---
 
 당신은 트랙 2 (커널 직부팅 + 진짜 벤더 스토리지 HCI) 실행 오케스트레이터.
@@ -15,18 +15,16 @@ description: 트랙 2 (kernel-storage) 본격 실행. INPUT.md(track 2) 가 있�
 
 ---
 
-## Step 0 — 선행 조건 검사
+## Step 0 — 워크스페이스 확정 + 선행 조건
 
-1. **INPUT.md 존재 + `track: 2`** (INPUT.md 는 `/rehost-setup` 이 생성):
-   - 없는데 `01_firmware/`(또는 `fw/`) 에 펌웨어 있으면: "`/rehost-setup` 을 먼저" (또는 자율 시 setup 자동 호출).
-   - 폴더 자체가 없으면: "`/rehost-init` 을 먼저" 안내 후 종료.
-   - `track: 1` 이면: "이 펌웨어는 트랙 1 입니다. `/rehost-sboot` 을 호출하세요" 안내 후 종료.
-2. **부팅 자산**: `fw/Image`(+dtb, initrd) 존재. 없으면 `scripts/extract_boot_assets.sh` 안내.
-   - target=K2/K3 이면 `super_path` (rootfs) 도 확인.
-   - target=K3 이면 `storage_driver_ko` (벤더 .ko) 필수 — 빈칸이면 "K3 은 벤더 드라이버
-     필수. K2 로 낮추거나 .ko 확보 후 재호출" 안내 (critic 신호 4).
-3. **의존성 OK**: `which qemu-system-aarch64`, `python3`, `dtc`/`fdtdump`. 자율 모드는 미설치 시
-   `setup_env.sh` 자동 실행, 백그라운드 진행 중이면 완료까지 자동 대기(폴링) — 안 물음.
+1. **대상 워크스페이스**: `WORKROOT = <cwd>/rehost_workspaces`.
+   - `workdir=<id>` 인자 있으면 그것, 없으면 `WORKROOT/.active` 의 id.
+   - 워크스페이스(또는 INPUT.md)가 없으면: "먼저 `/rehost-setup fw=<zip>` 으로 펌웨어 세팅" 안내 후 종료.
+   - 이하 `<workdir>` = `WORKROOT/<id>`.
+2. **INPUT.md `track: 2`** 확인. `track: 1` 이면 "이 펌웨어는 트랙 1 — `/rehost-sboot`" 안내 후 종료.
+3. **부팅 자산**: `<workdir>/fw/Image`(+dtb, initrd). target=K2/K3 이면 `super_path`,
+   target=K3 이면 `storage_driver_ko` (벤더 .ko) 필수 — 없으면 하드 블로커(중단+보고, K2 로 낮추거나 확보 후 재세팅).
+4. **의존성 OK** (setup 에서 설치). 진행 중이면 자율 자동 대기 — 안 물음.
 
 ---
 

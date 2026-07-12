@@ -9,7 +9,7 @@
       "name": "sboot-rehost",
       "source": "./",
       "description": "Samsung firmware rehosting — two tracks (S-Boot shell / kernel + real UFS controller), autonomous by default",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "category": "reverse-engineering",
       "tags": ["qemu", "samsung", "s-boot", "exynos", "firmware", "kernel", "ufs"],
       "homepage": "https://github.com/marista-dev/sboot-rehost",
