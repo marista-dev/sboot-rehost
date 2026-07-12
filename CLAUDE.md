@@ -174,9 +174,12 @@ INPUT.md 의 `autonomous` 슬롯으로 제어: `true`(기본) = 자동 결정, `
 - **`/rehost-sboot`** — 트랙 1 실행 (active 또는 `workdir=<id>` 워크스페이스) → pipeline.js
 - **`/rehost-kernel`** — 트랙 2 실행 (active 또는 `workdir=<id>`) → pipeline_kernel.js
 - **`/rehost-status`** — 모든 워크스페이스 목록 + 각 상태
+- **`/rehost-export`** — 목표 완료 확인 후 **"빌드 없이 실행" 키트** 조립 →
+  `rehost_exports/<model>_<build>/track<N>/` (프리빌트 QEMU+펌웨어+machine+docs+evidence+run.sh).
+  ★ 항상 gitignore, 생성 위치 안내. 미완이면 export 금지.
 
 흐름: **펌웨어를 `rehost_workspaces/_inbox/` 에 드롭(설치 시 훅이 자동 생성) → `/rehost-setup`(격리
-워크스페이스 생성) → `/rehost-sboot`|`/rehost-kernel`(자율 실행)**.
+워크스페이스 생성) → `/rehost-sboot`|`/rehost-kernel`(자율 실행) → (완료) `/rehost-export`(공유 키트)**.
 - 여러 펌웨어 = 워크스페이스 여러 개(격리, 서로 안 덮어씀). 실행 대상 = `.active` 또는 `workdir=<id>`.
 - **작업 루트 `rehost_workspaces/` 는 Windows cwd 밑**(플러그인 폴더 안 아님). 문서·기록=워크스페이스,
   펌웨어 실행 사본·대용량 트레이스=WSL ext4.

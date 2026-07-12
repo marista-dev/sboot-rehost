@@ -68,3 +68,9 @@ examples/a166b-exynos1330*
 examples/a136u-mt6833-kernel
 # 격리 워크스페이스(펌웨어당) — 추적 안 함
 rehost_workspaces/
+rehost_exports/
+
+examples/a346b-mt6877-kernel/
+examples/a346b-mt6877-kernel.zip
+examples/a356b-exynos1380*
+*.img   # 펌웨어 디스크 이미지 — 커밋 금지

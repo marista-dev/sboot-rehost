@@ -41,7 +41,7 @@ ARGS=( -M "$MACHINE" -cpu "$CPU" -smp "$SMP" -m "$MEM" -nographic
 [ -n "$DTB" ]    && ARGS+=( -dtb "$DTB" )
 [ -f "$INITRD" ] && ARGS+=( -initrd "$INITRD" )
 [ -n "$CMDLINE" ] && ARGS+=( -append "$CMDLINE" )
-ARGS+=( -serial "file:$OUT" -d unimp,guest_errors,int -D "$LOG" )
+ARGS+=( -serial "file:$OUT" -d "${DFLAGS:-unimp,guest_errors,int}" -D "$LOG" )
 
 # EUFS_* 는 환경변수로 그대로 QEMU 프로세스에 상속 (스토리지 HCI 모델이 getenv)
 timeout "$TIMEOUT" "$QEMU" "${ARGS[@]}" </dev/null 2>&1 | tail -3 || true

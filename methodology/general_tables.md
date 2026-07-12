@@ -159,6 +159,8 @@
 | `hooks/hooks.json` + `scripts/ensure_inbox.ps1` | SessionStart: 펌웨어 드롭 `_inbox/` 자동 생성 |
 | `skills/rehost-sboot/SKILL.md` | 트랙 1 실행 (pipeline.js) |
 | `skills/rehost-kernel/SKILL.md` | 트랙 2 실행 (pipeline_kernel.js) |
+| `skills/rehost-status/SKILL.md` | 워크스페이스 목록/상태 |
+| `skills/rehost-export/SKILL.md` + `scripts/make_export.sh` | 완료 후 "빌드 없이 실행" 키트 (rehost_exports/<fw>/track<N>/, gitignore) |
 | `agents/bl3-analyzer.md` | Table C (정적 7) + carve 판정 (트랙 1) |
 | `agents/stub-locator.md` | Table E (보조 4) (트랙 1) |
 | `templates/machine.c.tmpl` | Table D (머신 13 요소) (트랙 1) |

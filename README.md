@@ -31,7 +31,7 @@ claude
 /plugin install sboot-rehost@sboot-rehost-marketplace
 ```
 ```text
-# ⑤ 설치 확인 — /rehost-setup · /rehost-sboot · /rehost-kernel · /rehost-status 가 보이면 완료
+# ⑤ 설치 확인 — /rehost-setup · /rehost-sboot · /rehost-kernel · /rehost-status · /rehost-export 가 보이면 완료
 /plugin
 ```
 
@@ -52,6 +52,7 @@ claude
 | **`/rehost-sboot`** | **트랙 1 실행** — S-Boot BL3 → 진짜 셸 + `help` | machine.c, 셸 증거 |
 | **`/rehost-kernel`** | **트랙 2 실행** — 커널 + 진짜 벤더 UFS 컨트롤러 → rootfs·Android | machine_kernel.c, 커널 증거 |
 | `/rehost-status` | **워크스페이스 목록** + 각 진행/검증 요약 | — |
+| **`/rehost-export`** | **완료 후 "빌드 없이 실행" 키트** 조립(프리빌트 QEMU+펌웨어+machine+docs+evidence+run.sh) → `rehost_exports/<firmware>/track<N>/` (항상 gitignore) | 공유 키트 |
 
 - **사용자는 `/rehost-setup <이름>` 만.** 펌웨어는 `_inbox/` 에서 자동 인식, **트랙(sboot/kernel)·등급은 세팅 끝에 프롬프트로 선택**(`track=`/`target=` 인자로 미리 주면 프롬프트 생략).
 - **펌웨어당 워크스페이스 1개(격리).** 여러 펌웨어를 넣어도 서로 안 덮어씀. 실행 대상 = `.active`(가장 최근 setup) 또는 `workdir=<이름>`.
@@ -68,9 +69,11 @@ claude
                                                  #   → 끝에 "트랙?(1 sboot / 2 kernel)·등급" 프롬프트
 ③ 프롬프트에서 선택한 트랙 실행:  /rehost-sboot  또는  /rehost-kernel
 ④ /rehost-status                                 # (옵션) 워크스페이스 목록/진행
+⑤ /rehost-export                                 # (완료 후) 빌드 없이 실행 가능한 공유 키트 생성
 ```
 - 다른 펌웨어: `_inbox/` 에 드롭 후 `/rehost-setup <다른이름>` → **새 워크스페이스**(기존 안 덮어씀).
 - 특정 워크스페이스 실행: `/rehost-sboot workdir=<이름>`.
+- **한 펌웨어의 track1·track2 를 각각 완료 후 export 하면** `rehost_exports/<firmware>/track1/`·`track2/` 가 생긴다(항상 gitignore).
 
 ---
 
@@ -107,6 +110,13 @@ claude
 
 ### `/rehost-status` — 조회
 `rehost_workspaces/` 의 **모든 워크스페이스**를 나열(★=active) + 각 트랙/등급/진행(트랙 2 는 K3 최고 마일스톤)/5/5 요약. `workdir=<id>` 주면 그 워크스페이스만 상세.
+
+### `/rehost-export` — 완료 후 공유 키트
+1. **완료 확인**(미완이면 거부): 트랙 1 = `VERIFICATION.md` 5/5 REAL, 트랙 2 = 목표 등급 도달(K3=진짜 파티션 `sda1..`).
+2. `make_export.sh` 로 **`rehost_exports/<model>_<build>/track<N>/`** 조립: `bin/qemu-system-aarch64`(프리빌트, 빌드 불필요) + `firmware/`(sboot.bin 또는 Image/dtb/initrd/디스크) + `machine/` + `scripts/`(patch·build) + turnkey `run.sh`·`setup.sh`.
+3. `docs/`(무엇을 만들었나·부팅체인·시행착오·타임라인·우회·검증) + `evidence/`(console·VERIFICATION·JOURNAL) 를 실제 기록으로 생성.
+4. **exports 전체 gitignore**(펌웨어 저작권·대용량) + 생성 위치를 사용자에게 안내.
+   받는 사람: `cd <경로> && bash run.sh` (빌드 없이 실행).
 
 ---
 
