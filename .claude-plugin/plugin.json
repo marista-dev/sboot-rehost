@@ -1,20 +1,22 @@
 {
   "name": "sboot-rehost",
-  "description": "Samsung firmware rehosting helper for QEMU — two tracks: (1) S-Boot BL3 shell, (2) kernel direct-boot + real vendor storage (UFS) controller model to real Android userspace. Runs autonomously by default (no mid-run prompts; decisions journaled). Drives static analysis, machine.c generation, iterative fault loop, and 5/5 honesty verification.",
+  "description": "Firmware rehosting helper for QEMU — two tracks: (1) bootloader (S-Boot/LK) BL3 shell, (2) kernel direct-boot + real vendor storage (UFS) controller model to real Android userspace. Runs autonomously by default (no mid-run prompts; decisions journaled). Drives static analysis, machine.c generation, iterative fault loop, and 5/5 honesty verification. Works across mobile SoCs (Samsung Exynos, MediaTek, ...).",
   "version": "0.8.0",
   "author": {
     "name": "sboot-rehost contributors"
   },
   "homepage": "https://github.com/hyu-sslab/sboot-rehost",
   "repository": "https://github.com/hyu-sslab/sboot-rehost",
-  "license": "MIT",
   "keywords": [
     "qemu",
     "rehosting",
-    "samsung",
-    "s-boot",
-    "exynos",
     "firmware-analysis",
-    "reverse-engineering"
+    "reverse-engineering",
+    "bootloader",
+    "kernel",
+    "android",
+    "arm64",
+    "exynos",
+    "mediatek"
   ]
 }
