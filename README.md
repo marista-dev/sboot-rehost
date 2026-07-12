@@ -48,15 +48,15 @@ claude
 
 | 명령 | 역할 | 산출물 |
 |---|---|---|
-| **`/rehost-setup fw=<zip> track= model= target=`** | **새 펌웨어 세팅** — 의존성(1회) + **펌웨어당 독립 워크스페이스** `rehost_workspaces/<id>/` 생성(덮어쓰기 금지) + 언팩 + 실행 사본 WSL 이동 + `INPUT.md` + `.active` | 워크스페이스, INPUT.md |
+| **`/rehost-setup <이름>`** | **새 펌웨어 세팅** — `_inbox/` 펌웨어 **자동 인식** + 격리 워크스페이스 `rehost_workspaces/<이름>/` 생성(덮어쓰기 금지) + 언팩·WSL 이동 → **끝에 "트랙?(1 sboot / 2 kernel)·등급" 프롬프트** → `INPUT.md` + `.active` | 워크스페이스, INPUT.md |
 | **`/rehost-sboot`** | **트랙 1 실행** — S-Boot BL3 → 진짜 셸 + `help` | machine.c, 셸 증거 |
 | **`/rehost-kernel`** | **트랙 2 실행** — 커널 + 진짜 벤더 UFS 컨트롤러 → rootfs·Android | machine_kernel.c, 커널 증거 |
 | `/rehost-status` | **워크스페이스 목록** + 각 진행/검증 요약 | — |
 
-- **펌웨어당 워크스페이스 1개(격리).** 여러 펌웨어를 넣어도 서로 안 덮어씀. 실행 대상 = `.active`(가장 최근 setup) 또는 `workdir=<id>`.
-- **펌웨어 드롭 폴더 `rehost_workspaces/_inbox/` 는 설치 후 세션 시작 시 자동 생성**(SessionStart 훅). 거기 zip 을 넣고 `/rehost-setup`.
-- **한 명령 = 한 트랙.** 자율 실행이 기본 — 하드 블로커 전까지 안 멈춤(`interactive` 로 대화형).
-- **등급**: 트랙 1 = A/B/C. 트랙 2 = K1/K2/K3(진짜 UFS 컨트롤러, 파티션+super 마운트까지).
+- **사용자는 `/rehost-setup <이름>` 만.** 펌웨어는 `_inbox/` 에서 자동 인식, **트랙(sboot/kernel)·등급은 세팅 끝에 프롬프트로 선택**(`track=`/`target=` 인자로 미리 주면 프롬프트 생략).
+- **펌웨어당 워크스페이스 1개(격리).** 여러 펌웨어를 넣어도 서로 안 덮어씀. 실행 대상 = `.active`(가장 최근 setup) 또는 `workdir=<이름>`.
+- **드롭 폴더 `rehost_workspaces/_inbox/` 는 설치 후 세션 시작 시 자동 생성**(SessionStart 훅).
+- 실행 명령은 자율 — 하드 블로커 전까지 안 멈춤. 등급: 트랙 1 = A/B/C, 트랙 2 = K1/K2/K3(파티션+super 마운트까지).
 
 ---
 
@@ -64,25 +64,25 @@ claude
 
 ```text
 ① (펌웨어를 rehost_workspaces/_inbox/ 에 드롭)   # 인박스는 설치 후 자동 생성
-② /rehost-setup track=1 model=SM-XXXX target=A   # 의존성(1회) + 격리 워크스페이스 + INPUT.md
-③ /rehost-sboot                                  # 트랙 1 실행 (active 워크스페이스)
+② /rehost-setup a166b                            # 이름만! 펌웨어 자동 인식 → 격리 워크스페이스
+                                                 #   → 끝에 "트랙?(1 sboot / 2 kernel)·등급" 프롬프트
+③ 프롬프트에서 선택한 트랙 실행:  /rehost-sboot  또는  /rehost-kernel
 ④ /rehost-status                                 # (옵션) 워크스페이스 목록/진행
 ```
-- 트랙 2: `② /rehost-setup track=2 model=SM-XXXX target=K3` → `③ /rehost-kernel`.
-- 다른 펌웨어: 다시 `_inbox/` 에 드롭 후 `/rehost-setup` → **새 워크스페이스**(기존 안 덮어씀).
-- 특정 워크스페이스 실행: `/rehost-sboot workdir=<id>`.
+- 다른 펌웨어: `_inbox/` 에 드롭 후 `/rehost-setup <다른이름>` → **새 워크스페이스**(기존 안 덮어씀).
+- 특정 워크스페이스 실행: `/rehost-sboot workdir=<이름>`.
 
 ---
 
 ## 4. 각 명령이 거치는 과정
 
-### `/rehost-setup fw=<zip> track= model= target=` — 새 펌웨어 세팅 (펌웨어당 1회)
-1. **작업 루트** `<cwd>/rehost_workspaces/` 확인(+`_inbox/`). **의존성 1회성**: 없으면 `setup_env.sh` 백그라운드(apt+pip+QEMU 10.2.2, ~18분), 있으면 스킵.
-2. 펌웨어 입력: `fw=<경로>` 또는 `_inbox/` 자동 감지. model/build 는 파일명·메타에서 도출(인자로 덮어쓰기).
-3. **워크스페이스 id = `<model>_<build>`** → `rehost_workspaces/<id>/` 생성. **이미 있으면 덮어쓰지 않고 중단**(기존 펌웨어 보호).
-4. 언팩(WSL): 트랙 1 = `tar → lz4 → sboot.bin`, 트랙 2 = `extract_boot_assets.sh` → `fw/`(Image/dtb/initrd/super).
-5. **실행 사본을 WSL ext4(`~/rehost/<id>/`)로 이동**. 자산 검증(md5·크기; 4MB미만·`.ko`부재 등 하드 블로커).
-6. `INPUT.md`(자산=WSL, workdir=워크스페이스) + `PROGRESS.md` 작성 + `.active` 갱신.
+### `/rehost-setup <이름>` — 새 펌웨어 세팅 (펌웨어당 1회)
+1. **작업 루트** `<cwd>/rehost_workspaces/`(+`_inbox/`) 확인. **의존성 1회성**: 없으면 `setup_env.sh` 백그라운드(~18분), 있으면 스킵.
+2. **펌웨어 자동 인식**: `_inbox/` 스캔(또는 `fw=<경로>`). 파일명·메타에서 model/build 도출.
+3. **워크스페이스** `rehost_workspaces/<이름>/` 생성(이름 생략 시 `<model>_<build>`). **이미 있으면 덮어쓰지 않고 중단**(기존 펌웨어 보호).
+4. **트랙·등급 프롬프트**: `AskUserQuestion` 으로 "트랙 1(sboot) / 트랙 2(kernel)" + 등급(A/B/C 또는 K1/K2/K3)을 물음(펌웨어에서 추정한 트랙이 기본값). `track=`/`target=` 인자 주면 생략.
+5. 언팩(선택 트랙 기준) → **실행 사본 WSL ext4(`~/rehost/<이름>/`)로 이동** → 자산 검증(4MB미만·`.ko`부재 등 하드 블로커).
+6. `INPUT.md`(자산=WSL, workdir=워크스페이스) + `PROGRESS.md` + `.active` 갱신 → 완료 안내에서 **선택한 트랙의 실행 명령 하나**만 굵게 안내.
 
 ### `/rehost-sboot` — 트랙 1 실행 (`pipeline.js`)
 1. 대상 워크스페이스 = `.active`(또는 `workdir=<id>`)의 `INPUT.md(track:1)`. 세션 시작 기록.

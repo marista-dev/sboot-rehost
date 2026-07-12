@@ -47,10 +47,13 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 
 ## 자율 실행 (autonomous) — 기본 켜짐
 
-**모든 `/rehost*` 명령은 기본 자율 실행이다.** 실행 중 `AskUserQuestion` 으로 사용자에게
-선택을 묻지 않고, 아래 정책으로 **자동 결정**하고 그 결정을 JOURNAL.md 에 기록한다
+**실행 명령(`/rehost-sboot`·`/rehost-kernel`)은 기본 자율 실행이다.** 실행 중 `AskUserQuestion`
+으로 사용자에게 선택을 묻지 않고, 아래 정책으로 **자동 결정**하고 그 결정을 JOURNAL.md 에 기록한다
 (`journal.sh <wd> decision "<지점>" "<선택>" "<근거>"`). `AskUserQuestion` 은 하니스가
-자동응답을 지원하지 않으므로 자율 모드에선 호출 금지.
+자동응답을 지원하지 않으므로 실행 명령에선 호출 금지.
+
+**예외 — `/rehost-setup` 의 트랙·등급 선택 프롬프트는 허용.** 이건 실행 루프 중 멈춤이 아니라
+세팅 시점의 사용자 결정(트랙 1/2, 등급)이다. 인자로 미리 주면 프롬프트 생략(자율).
 
 **★ 실행 명령(`/rehost-sboot`·`/rehost-kernel`)은 시작하면 하드 블로커(아래) 전까지 한 번도
 멈추지 않는다.** 파이프라인이 FORCED/critic/미달을 반환해도 사용자에게 되묻지 말고 자율 정책으로
@@ -164,9 +167,10 @@ INPUT.md 의 `autonomous` 슬롯으로 제어: `true`(기본) = 자동 결정, `
 
 ## 사용 가능한 슬래시 명령
 
-- **`/rehost-setup fw=<zip> track= model= target=`** — 새 펌웨어 세팅 (init+setup 병합, 펌웨어당 1회):
-  의존성(1회성) + **펌웨어당 독립 워크스페이스** `rehost_workspaces/<id>/` 생성(★ 덮어쓰기 금지) +
-  언팩 + 실행 사본 WSL 이동 + INPUT.md + `.active` 갱신.
+- **`/rehost-setup <이름>`** — 새 펌웨어 세팅. `_inbox/` 펌웨어 **자동 인식** + 격리 워크스페이스
+  `rehost_workspaces/<이름>/` 생성(★ 덮어쓰기 금지) + 언팩·실행 사본 WSL 이동 + **끝에 트랙
+  (1 sboot / 2 kernel)·등급을 프롬프트로 물어** INPUT.md 작성 + `.active`. 의존성은 1회성.
+  (트랙/등급을 `track=`/`target=` 인자로 주면 프롬프트 생략.)
 - **`/rehost-sboot`** — 트랙 1 실행 (active 또는 `workdir=<id>` 워크스페이스) → pipeline.js
 - **`/rehost-kernel`** — 트랙 2 실행 (active 또는 `workdir=<id>`) → pipeline_kernel.js
 - **`/rehost-status`** — 모든 워크스페이스 목록 + 각 상태
