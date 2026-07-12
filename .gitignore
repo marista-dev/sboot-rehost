@@ -1,53 +1,28 @@
-# Firmware binaries — NEVER commit. Users provide their own.
+# ────────────────────────────────────────────────────────────────
+# 펌웨어 바이너리 — 절대 커밋 금지 (저작권, 대용량). 사용자 본인 확보.
+# ────────────────────────────────────────────────────────────────
 *.bin
 *.lz4
 *.tar
 *.tar.md5
 *.zip
+*.img
 sboot*
 bl3*
-
-# ★ 예외: 플러그인 소스(agents/*.md)는 firmware 패턴(sboot*/bl3*)에서 제외.
-#   bl3* 가 agents/bl3-analyzer.md 를 오탐 → GitHub 설치 시 이 에이전트만 누락되던 버그 수정.
+# ★ 예외: 플러그인 소스(agents/*.md)는 sboot*/bl3* 패턴에서 제외
+#   (bl3* 가 agents/bl3-analyzer.md 오탐 → 설치 시 누락 버그 방지)
 !agents/*.md
 
-# QEMU build artifacts
-build/
-*.o
-*.obj
-*.so
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-.venv/
-venv/
-
-# Logs / runtime
-/tmp/
-*.log
-console_*.txt
-run_*.txt
-
-# Editor
-.vscode/
-.idea/
-*.swp
-*.swo
-.DS_Store
-
-# 로컬 플러그인 활성화 레이어 (프로젝트 스코프 스킬/에이전트 자동발견용 junction)
-# /plugin 명령이 없는 환경에서 skills/·agents/ 를 .claude/ 로 연결. 커밋 안 함.
-.claude/
-
-# Working directory artifacts (사용자가 새 펌웨어 작업하는 디렉터리는 git 추적 안 함)
-INPUT.md
-STATIC.md
-STUBS.md
-PROGRESS.md
-VERIFICATION.md
+# ────────────────────────────────────────────────────────────────
+# 펌웨어·작업 폴더 — 어디에 생기든 전부 무시 (인라인 주석 금지: gitignore 미지원).
+# 플러그인 저장소 폴더 안에서 /rehost-* 를 돌려도 아래는 절대 커밋되지 않는다.
+#   rehost_workspaces/ = 펌웨어별 격리 워크스페이스, rehost_exports/ = 공유 키트,
+#   _inbox/ = 드롭 폴더, fw/ = 트랙 2 부팅 자산.
+# ────────────────────────────────────────────────────────────────
+rehost_workspaces/
+rehost_exports/
+_inbox/
+fw/
 01_firmware/
 02_unpacked/
 03_bl3/
@@ -57,20 +32,44 @@ VERIFICATION.md
 07_logs/
 08_docs/
 10_reproduce/
+INPUT.md
+STATIC.md
+STUBS.md
+KERNEL_STATIC.md
+PROGRESS.md
+VERIFICATION.md
+JOURNAL.md
 
-# ★ 예외: examples 폴더의 INPUT.md 는 추적
-!examples/*/INPUT.md
-!examples/*/EXPECTED_OUTPUT.txt
-!examples/*/machine.c
-!examples/*/README.md
+# ────────────────────────────────────────────────────────────────
+# examples/ — 전부 무시 (로컬 펌웨어 작업 예제가 git 에 안 섞이게).
+# 단, 플러그인이 배포하는 정본 worked example 만 예외로 추적.
+# ────────────────────────────────────────────────────────────────
+examples/*
+!examples/s921n-exynos2400
+!examples/s921n-exynos2400-kernel
 
-examples/a166b-exynos1330*
-examples/a136u-mt6833-kernel
-# 격리 워크스페이스(펌웨어당) — 추적 안 함
-rehost_workspaces/
-rehost_exports/
+# ────────────────────────────────────────────────────────────────
+# 빌드·런타임·에디터
+# ────────────────────────────────────────────────────────────────
+build/
+*.o
+*.obj
+*.so
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+/tmp/
+*.log
+console_*.txt
+run_*.txt
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
 
-examples/a346b-mt6877-kernel/
-examples/a346b-mt6877-kernel.zip
-examples/a356b-exynos1380*
-*.img   # 펌웨어 디스크 이미지 — 커밋 금지
+# 로컬 플러그인 활성화 레이어 (/plugin 없는 환경에서 skills/·agents/ 를 .claude/ 로 연결)
+.claude/

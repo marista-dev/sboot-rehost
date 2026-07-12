@@ -155,8 +155,9 @@
 | 산출물 | 매핑 |
 |---|---|
 | `CLAUDE.md` | 정직성 7 + Table G/G2 + Table H/H2 + 트랙 개념 |
-| `skills/rehost-setup/SKILL.md` | 새 펌웨어 세팅 (init+setup 병합): 의존성(1회) + 격리 워크스페이스 + INPUT.md |
-| `hooks/hooks.json` + `scripts/ensure_inbox.ps1` | SessionStart: 펌웨어 드롭 `_inbox/` 자동 생성 |
+| `skills/rehost-init/SKILL.md` | 설치 후 1회: 작업 루트 + `_inbox/` 생성 + 의존성 |
+| `skills/rehost-setup/SKILL.md` | 펌웨어 드롭 후: 격리 워크스페이스 + 트랙 프롬프트 + INPUT.md |
+| `hooks/hooks.json` + `scripts/ensure_inbox.ps1` | SessionStart 훅: `_inbox/` 자동 생성 (CLI/web; 확장에선 `/rehost-init`) |
 | `skills/rehost-sboot/SKILL.md` | 트랙 1 실행 (pipeline.js) |
 | `skills/rehost-kernel/SKILL.md` | 트랙 2 실행 (pipeline_kernel.js) |
 | `skills/rehost-status/SKILL.md` | 워크스페이스 목록/상태 |

@@ -22,11 +22,11 @@ description: 새 펌웨어 리호스팅 세팅. 사용자는 rehost-setup 뒤에
 └── <이름>/                  ← 이 세팅이 만드는 격리 워크스페이스
 ```
 
-## Step 0 — 작업 루트 + 의존성(1회) + 펌웨어 인식
+## Step 0 — 작업 루트 확인 + 펌웨어 인식
 
-1. `WORKROOT = <cwd>/rehost_workspaces` (없으면 생성; `_inbox/` 포함). WSL 접근용 `/mnt/c/...` 확보.
-2. **의존성(공유·1회)**: `qemu-system-aarch64`/`capstone`/`dtc` 검사. 없으면 `setup_env.sh`
-   백그라운드(첫 펌웨어 1번, ~18분). 있으면 스킵.
+1. `WORKROOT = <cwd>/rehost_workspaces` (보통 `/rehost-init` 이 미리 생성). 없으면 "`/rehost-init` 을
+   먼저 실행하세요" 안내(또는 자율 시 `WORKROOT/_inbox/` 자동 생성 후 진행). WSL 접근용 `/mnt/c/...` 확보.
+2. **의존성**: `/rehost-init` 에서 설치됨. 검사만 하고, 백그라운드 진행 중이면 자율 자동 대기.
 3. **펌웨어 자동 인식**: `fw=` 인자 우선, 없으면 `WORKROOT/_inbox/` 스캔.
    - zip/tar.md5/이미지가 없으면: "`_inbox/` 에 펌웨어를 넣고 다시 호출" 안내 후 종료(하드 블로커).
    - 여러 개면 가장 최근(mtime) 것 사용 + 어느 것을 썼는지 보고.

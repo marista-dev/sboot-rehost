@@ -35,8 +35,9 @@ claude
 /plugin
 ```
 
-설치 후 세션이 시작되면 작업 폴더에 **`rehost_workspaces/_inbox/`** 가 자동 생성됩니다(SessionStart 훅).
-여기에 펌웨어를 넣고 `/rehost-setup` 을 실행하면 됩니다.
+설치 후 **`/rehost-init`** 을 한 번 실행하면 작업 폴더에 **`rehost_workspaces/_inbox/`** 가 생깁니다.
+(터미널 CLI 는 SessionStart 훅이 자동 생성하기도 하지만, **VS Code 확장에선 훅이 안 돌 수 있어 `/rehost-init`
+이 확실**합니다.) 그 `_inbox/` 에 펌웨어를 넣고 `/rehost-setup <이름>` 을 실행하면 됩니다.
 
 > **대안 설치**
 > - git clone: `git clone https://github.com/hyu-sslab/sboot-rehost.git` 후 ③④ 그대로
@@ -70,7 +71,8 @@ claude
 
 | 명령 | 역할 | 산출물 |
 |---|---|---|
-| **`/rehost-setup <이름>`** | **새 펌웨어 세팅** — `_inbox/` 펌웨어 **자동 인식** + 격리 워크스페이스 `rehost_workspaces/<이름>/` 생성(덮어쓰기 금지) + 언팩·WSL 이동 → **끝에 "트랙?(1 sboot / 2 kernel)·등급" 프롬프트** → `INPUT.md` + `.active` | 워크스페이스, INPUT.md |
+| **`/rehost-init`** | **설치 후 1회** — 작업 루트 `rehost_workspaces/` + 드롭 폴더 `_inbox/` 생성 + 의존성 확인·설치 | 폴더, 의존성 |
+| **`/rehost-setup <이름>`** | **펌웨어 드롭 후** — `_inbox/` 펌웨어 **자동 인식** + 격리 워크스페이스 `rehost_workspaces/<이름>/` 생성(덮어쓰기 금지) + 언팩·WSL 이동 → **끝에 "트랙?(1 sboot / 2 kernel)·등급" 프롬프트** → `INPUT.md` + `.active` | 워크스페이스, INPUT.md |
 | **`/rehost-sboot`** | **트랙 1 실행** — S-Boot BL3 → 진짜 셸 + `help` | machine.c, 셸 증거 |
 | **`/rehost-kernel`** | **트랙 2 실행** — 커널 + 진짜 벤더 UFS 컨트롤러 → rootfs·Android | machine_kernel.c, 커널 증거 |
 | `/rehost-status` | **워크스페이스 목록** + 각 진행/검증 요약 | — |
@@ -86,12 +88,13 @@ claude
 ## 3. 실행 순서
 
 ```text
-① (펌웨어를 rehost_workspaces/_inbox/ 에 드롭)   # 인박스는 설치 후 자동 생성
-② /rehost-setup a166b                            # 이름만! 펌웨어 자동 인식 → 격리 워크스페이스
+① /rehost-init                                   # (설치 후 1회) 작업 폴더 + _inbox/ 생성 + 의존성
+② (펌웨어를 rehost_workspaces/_inbox/ 에 드롭)
+③ /rehost-setup a166b                            # 이름만! 펌웨어 자동 인식 → 격리 워크스페이스
                                                  #   → 끝에 "트랙?(1 sboot / 2 kernel)·등급" 프롬프트
-③ 프롬프트에서 선택한 트랙 실행:  /rehost-sboot  또는  /rehost-kernel
-④ /rehost-status                                 # (옵션) 워크스페이스 목록/진행
-⑤ /rehost-export                                 # (완료 후) 빌드 없이 실행 가능한 공유 키트 생성
+④ 프롬프트에서 선택한 트랙 실행:  /rehost-sboot  또는  /rehost-kernel
+⑤ /rehost-status                                 # (옵션) 워크스페이스 목록/진행
+⑥ /rehost-export                                 # (완료 후) 빌드 없이 실행 가능한 공유 키트 생성
 ```
 - 다른 펌웨어: `_inbox/` 에 드롭 후 `/rehost-setup <다른이름>` → **새 워크스페이스**(기존 안 덮어씀).
 - 특정 워크스페이스 실행: `/rehost-sboot workdir=<이름>`.
@@ -101,7 +104,12 @@ claude
 
 ## 4. 각 명령이 거치는 과정
 
-### `/rehost-setup <이름>` — 새 펌웨어 세팅 (펌웨어당 1회)
+### `/rehost-init` — 설치 후 1회 (폴더 스캐폴딩)
+1. 작업 루트 `<cwd>/rehost_workspaces/` + 드롭 폴더 `_inbox/` 생성(+ 드롭 안내 파일). 이미 있으면 그대로.
+2. 의존성(`qemu-system-aarch64`/`capstone`/`dtc`) 검사 → 없으면 `setup_env.sh` 백그라운드(~18분), 있으면 스킵.
+3. 안내: "`_inbox/` 에 펌웨어 드롭 후 `/rehost-setup <이름>`". (INPUT.md·워크스페이스는 안 만듦.)
+
+### `/rehost-setup <이름>` — 펌웨어 드롭 후 (펌웨어당 1회)
 1. **작업 루트** `<cwd>/rehost_workspaces/`(+`_inbox/`) 확인. **의존성 1회성**: 없으면 `setup_env.sh` 백그라운드(~18분), 있으면 스킵.
 2. **펌웨어 자동 인식**: `_inbox/` 스캔(또는 `fw=<경로>`). 파일명·메타에서 model/build 도출.
 3. **워크스페이스** `rehost_workspaces/<이름>/` 생성(이름 생략 시 `<model>_<build>`). **이미 있으면 덮어쓰지 않고 중단**(기존 펌웨어 보호).

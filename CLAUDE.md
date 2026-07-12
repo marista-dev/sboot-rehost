@@ -167,9 +167,11 @@ INPUT.md 의 `autonomous` 슬롯으로 제어: `true`(기본) = 자동 결정, `
 
 ## 사용 가능한 슬래시 명령
 
-- **`/rehost-setup <이름>`** — 새 펌웨어 세팅. `_inbox/` 펌웨어 **자동 인식** + 격리 워크스페이스
+- **`/rehost-init`** — 설치 후 1회. 작업 루트 `rehost_workspaces/` + 드롭 폴더 `_inbox/` 를
+  Windows cwd 에 생성 + 의존성 확인·설치. (SessionStart 훅이 안 도는 VS Code 확장 대비 수동 스캐폴딩.)
+- **`/rehost-setup <이름>`** — 펌웨어 드롭 후. `_inbox/` 펌웨어 **자동 인식** + 격리 워크스페이스
   `rehost_workspaces/<이름>/` 생성(★ 덮어쓰기 금지) + 언팩·실행 사본 WSL 이동 + **끝에 트랙
-  (1 sboot / 2 kernel)·등급을 프롬프트로 물어** INPUT.md 작성 + `.active`. 의존성은 1회성.
+  (1 sboot / 2 kernel)·등급을 프롬프트로 물어** INPUT.md 작성 + `.active`.
   (트랙/등급을 `track=`/`target=` 인자로 주면 프롬프트 생략.)
 - **`/rehost-sboot`** — 트랙 1 실행 (active 또는 `workdir=<id>` 워크스페이스) → pipeline.js
 - **`/rehost-kernel`** — 트랙 2 실행 (active 또는 `workdir=<id>`) → pipeline_kernel.js
@@ -178,11 +180,13 @@ INPUT.md 의 `autonomous` 슬롯으로 제어: `true`(기본) = 자동 결정, `
   `rehost_exports/<model>_<build>/track<N>/` (프리빌트 QEMU+펌웨어+machine+docs+evidence+run.sh).
   ★ 항상 gitignore, 생성 위치 안내. 미완이면 export 금지.
 
-흐름: **펌웨어를 `rehost_workspaces/_inbox/` 에 드롭(설치 시 훅이 자동 생성) → `/rehost-setup`(격리
-워크스페이스 생성) → `/rehost-sboot`|`/rehost-kernel`(자율 실행) → (완료) `/rehost-export`(공유 키트)**.
+흐름: **install → `/rehost-init`(폴더 생성) → `_inbox/` 에 펌웨어 드롭 → `/rehost-setup <이름>`(펌웨어별
+격리 워크스페이스) → `/rehost-sboot`|`/rehost-kernel`(자율 실행) → (완료) `/rehost-export`(공유 키트)**.
 - 여러 펌웨어 = 워크스페이스 여러 개(격리, 서로 안 덮어씀). 실행 대상 = `.active` 또는 `workdir=<id>`.
-- **작업 루트 `rehost_workspaces/` 는 Windows cwd 밑**(플러그인 폴더 안 아님). 문서·기록=워크스페이스,
-  펌웨어 실행 사본·대용량 트레이스=WSL ext4.
+- 작업 루트 `rehost_workspaces/` 는 **Windows cwd 밑**. 문서·기록=워크스페이스, 펌웨어 실행 사본·대용량
+  트레이스=WSL ext4.
+- **펌웨어·작업 폴더는 전부 `.gitignore` 처리**(rehost_workspaces/·rehost_exports/·_inbox/·fw/·*.img
+  등) — **플러그인 저장소 폴더 안에서 실행해도 git 에 안 섞인다.** 폴더를 굳이 분리할 필요 없음.
 
 ---
 
