@@ -5,8 +5,8 @@
   "author": {
     "name": "sboot-rehost contributors"
   },
-  "homepage": "https://github.com/marista-dev/sboot-rehost",
-  "repository": "https://github.com/marista-dev/sboot-rehost",
+  "homepage": "https://github.com/hyu-sslab/sboot-rehost",
+  "repository": "https://github.com/hyu-sslab/sboot-rehost",
   "license": "MIT",
   "keywords": [
     "qemu",

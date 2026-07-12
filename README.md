@@ -39,8 +39,8 @@ claude
 여기에 펌웨어를 넣고 `/rehost-setup` 을 실행하면 됩니다.
 
 > **대안 설치**
-> - git clone: `git clone https://github.com/marista-dev/sboot-rehost.git` 후 ③④ 그대로
-> - 마켓플레이스(원격): `/plugin marketplace add marista-dev/sboot-rehost` 후 ④
+> - git clone: `git clone https://github.com/hyu-sslab/sboot-rehost.git` 후 ③④ 그대로
+> - 마켓플레이스(원격): `/plugin marketplace add hyu-sslab/sboot-rehost` 후 ④
 
 ### 팀 내부 설치 (private 마켓플레이스)
 
@@ -49,8 +49,8 @@ claude
 
 ```text
 # ① 마켓플레이스 등록 (private → SSH 권장; 토큰 프롬프트 없이 안정적)
-/plugin marketplace add git@github.com:marista-dev/sboot-rehost.git
-#   (HTTPS 인증이 이미 설정돼 있으면)  /plugin marketplace add marista-dev/sboot-rehost
+/plugin marketplace add git@github.com:hyu-sslab/sboot-rehost.git
+#   (HTTPS 인증이 이미 설정돼 있으면)  /plugin marketplace add hyu-sslab/sboot-rehost
 ```
 ```text
 # ② 설치  (플러그인 이름 @ 마켓플레이스 이름)

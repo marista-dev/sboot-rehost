@@ -12,7 +12,7 @@
       "version": "0.7.0",
       "category": "reverse-engineering",
       "tags": ["qemu", "samsung", "s-boot", "exynos", "firmware", "kernel", "ufs"],
-      "homepage": "https://github.com/marista-dev/sboot-rehost",
+      "homepage": "https://github.com/hyu-sslab/sboot-rehost",
       "license": "MIT"
     }
   ]
