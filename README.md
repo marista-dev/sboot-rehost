@@ -42,6 +42,28 @@ claude
 > - git clone: `git clone https://github.com/marista-dev/sboot-rehost.git` 후 ③④ 그대로
 > - 마켓플레이스(원격): `/plugin marketplace add marista-dev/sboot-rehost` 후 ④
 
+### 팀 내부 설치 (private 마켓플레이스)
+
+저장소가 private 이므로 팀원은 **저장소 접근 권한 + 로컬 git 인증**이 있어야 한다(그게 곧 사용
+권한 제한). Claude Code 세션에서:
+
+```text
+# ① 마켓플레이스 등록 (private → SSH 권장; 토큰 프롬프트 없이 안정적)
+/plugin marketplace add git@github.com:marista-dev/sboot-rehost.git
+#   (HTTPS 인증이 이미 설정돼 있으면)  /plugin marketplace add marista-dev/sboot-rehost
+```
+```text
+# ② 설치  (플러그인 이름 @ 마켓플레이스 이름)
+/plugin install sboot-rehost@sboot-rehost-marketplace
+```
+```text
+# ③ 새 버전 나오면 갱신
+/plugin marketplace update sboot-rehost-marketplace
+```
+
+권한 없는 사람은 clone 실패 → 등록 실패(자동으로 팀 내부 제한). 릴리스마다
+`.claude-plugin/plugin.json`·`marketplace.json` 의 `version` 을 올리면 팀원이 `update` 로 받는다.
+
 ---
 
 ## 2. 명령어 (역할 항목화)
