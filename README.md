@@ -1,6 +1,6 @@
 # sboot-rehost
 
-Samsung 펌웨어를 QEMU 에서 **진짜로** 실행시키는 Claude Code 플러그인.
+Claude Code 플러그인.
 
 - **트랙 1 (sboot-shell)** — 부트로더 BL3 → 진짜 `S-BOOT #` 셸 + `help`
 - **트랙 2 (kernel-storage)** — 커널 직부팅 → rootfs 마운트 → 진짜 벤더 UFS 컨트롤러 → Android
@@ -11,7 +11,6 @@ Samsung 펌웨어를 QEMU 에서 **진짜로** 실행시키는 Claude Code 플�
 
 **전제**: `hyu-sslab` org 접근 권한 + 로컬 git 인증(HTTPS 토큰 또는 SSH).
 
-**CLI · 데스크톱 · 웹** — 아래 두 줄:
 
 ```
 /plugin marketplace add hyu-sslab/sboot-rehost
@@ -86,7 +85,7 @@ Samsung 펌웨어를 QEMU 에서 **진짜로** 실행시키는 Claude Code 플�
 
 ---
 
-## 4. 각 명령이 거치는 과정
+## 4. 과정
 
 - **`/rehost-init`** — 작업 루트 + `_inbox/` 생성, 의존성(QEMU 10.2.2 / capstone / dtc) 확인·설치.
 - **`/rehost-setup`** — 펌웨어 언팩 → 실행 사본 WSL 이동 → 자산 검증 → 트랙/등급 프롬프트 → `INPUT.md` + `.active`.
@@ -96,7 +95,7 @@ Samsung 펌웨어를 QEMU 에서 **진짜로** 실행시키는 Claude Code 플�
 
 ---
 
-## 5. 정직성
+## 5. 검증
 
 성공은 **실제 트레이스·콘솔·커널 메시지**로만 판정(regex 매칭 단독 불인정). `reality-verifier` 5/5 통과 = REAL, 미달 = FORCED(성공 표기 금지). 우회는 전부 `[대상/이유/방법/부작용]` 기록.
 
