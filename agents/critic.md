@@ -37,7 +37,7 @@ tools: [Read, Grep, Bash]
 발화:
 ```
 ★ critic 신호 2 — UART 에 의미있는 텍스트 등장.
-다음 실행 명령 (/rehost-sboot 또는 /rehost-kernel) 호출 시 자동 5/5 검증 예정. 미리 보려면 /rehost-status.
+다음 실행 명령 (/sboot-rehost:rehost-sboot 또는 /sboot-rehost:rehost-kernel) 호출 시 자동 5/5 검증 예정. 미리 보려면 /sboot-rehost:rehost-status.
 ```
 
 ### 신호 3 — 미확정 도출 과다

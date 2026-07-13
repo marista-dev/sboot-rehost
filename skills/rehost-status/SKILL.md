@@ -1,6 +1,7 @@
 ---
 name: rehost-status
 description: rehost_workspaces/ 의 모든 펌웨어 워크스페이스 목록 + 각 워크스페이스의 진행 상태(트랙/등급/회차/5/5/워크스페이스 마일스톤)를 한 화면으로 요약. active 워크스페이스 표시. workdir=<id> 주면 그 워크스페이스만 상세.
+disable-model-invocation: true
 ---
 
 당신은 sboot-rehost 의 상태 리포터. **여러 펌웨어 워크스페이스를 한 눈에** 보여준다.
@@ -24,7 +25,7 @@ sboot-rehost — 워크스페이스 (WORKROOT: <cwd>/rehost_workspaces)
 |   SM-S921N_..._2400 | 1 / A | 셸 도달 | 5/5 REAL | 07-09 15:02 |
 
 active: <id>
-다음: /rehost-kernel (active 실행) · /rehost-setup fw=<zip> (새 펌웨어) · /rehost-status workdir=<id> (상세)
+다음: /sboot-rehost:rehost-kernel (active 실행) · /sboot-rehost:rehost-setup fw=<zip> (새 펌웨어) · /sboot-rehost:rehost-status workdir=<id> (상세)
 ```
 
 - 진행 열: 트랙 1 = 회차 수/셸 도달, 트랙 2 = 최고 마일스톤 (K1 유저스페이스 / K2 rootfs /

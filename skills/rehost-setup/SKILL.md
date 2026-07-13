@@ -1,9 +1,10 @@
 ---
 name: rehost-setup
-description: 새 펌웨어 리호스팅 세팅. 사용자는 rehost-setup 뒤에 워크스페이스 이름만 적으면 된다(예 /rehost-setup a166b). 플러그인이 rehost_workspaces/_inbox/ 의 펌웨어를 자동 인식·언팩하고 독립 워크스페이스를 만든 뒤, 마지막에 어떤 트랙(1 sboot / 2 kernel)·등급을 실행할지 사용자에게 프롬프트로 물어 INPUT.md 를 작성한다. 의존성은 1회성.
+description: 새 펌웨어 리호스팅 세팅. 사용자는 rehost-setup 뒤에 워크스페이스 이름만 적으면 된다(예 /sboot-rehost:rehost-setup a166b). 플러그인이 rehost_workspaces/_inbox/ 의 펌웨어를 자동 인식·언팩하고 독립 워크스페이스를 만든 뒤, 마지막에 어떤 트랙(1 sboot / 2 kernel)·등급을 실행할지 사용자에게 프롬프트로 물어 INPUT.md 를 작성한다. 의존성은 1회성.
+disable-model-invocation: true
 ---
 
-당신은 **새 펌웨어 세팅** 오케스트레이터. 사용자는 **`/rehost-setup <이름>`** 만 치면 된다.
+당신은 **새 펌웨어 세팅** 오케스트레이터. 사용자는 **`/sboot-rehost:rehost-setup <이름>`** 만 치면 된다.
 플러그인이 알아서: `_inbox/` 펌웨어 인식 → 격리 워크스페이스 생성 → **마지막에 트랙을 프롬프트로
 물어봄** → INPUT.md. (예전처럼 인자를 다 요구하지 않는다.)
 
@@ -24,9 +25,9 @@ description: 새 펌웨어 리호스팅 세팅. 사용자는 rehost-setup 뒤에
 
 ## Step 0 — 작업 루트 확인 + 펌웨어 인식
 
-1. `WORKROOT = <cwd>/rehost_workspaces` (보통 `/rehost-init` 이 미리 생성). 없으면 "`/rehost-init` 을
+1. `WORKROOT = <cwd>/rehost_workspaces` (보통 `/sboot-rehost:rehost-init` 이 미리 생성). 없으면 "`/sboot-rehost:rehost-init` 을
    먼저 실행하세요" 안내(또는 자율 시 `WORKROOT/_inbox/` 자동 생성 후 진행). WSL 접근용 `/mnt/c/...` 확보.
-2. **의존성**: `/rehost-init` 에서 설치됨. 검사만 하고, 백그라운드 진행 중이면 자율 자동 대기.
+2. **의존성**: `/sboot-rehost:rehost-init` 에서 설치됨. 검사만 하고, 백그라운드 진행 중이면 자율 자동 대기.
 3. **펌웨어 자동 인식**: `fw=` 인자 우선, 없으면 `WORKROOT/_inbox/` 스캔.
    - zip/tar.md5/이미지가 없으면: "`_inbox/` 에 펌웨어를 넣고 다시 호출" 안내 후 종료(하드 블로커).
    - 여러 개면 가장 최근(mtime) 것 사용 + 어느 것을 썼는지 보고.
@@ -37,7 +38,7 @@ description: 새 펌웨어 리호스팅 세팅. 사용자는 rehost-setup 뒤에
 - `WS = WORKROOT/<id>`. **이미 있으면 덮어쓰지 말 것** — "이미 존재. 다른 이름을 주거나 폴더 삭제
   후 재시도" 안내 후 종료(하드 블로커). 새 id 면 표준 폴더 생성:
   `01_firmware 02_unpacked 03_bl3 04_static-analysis 06_machine 07_logs 08_docs fw`.
-- 기록: `bash <PLUGIN>/scripts/journal.sh <WS> session-start "/rehost-setup" "새 워크스페이스 <id>"`.
+- 기록: `bash <PLUGIN>/scripts/journal.sh <WS> session-start "/sboot-rehost:rehost-setup" "새 워크스페이스 <id>"`.
 
 ## Step 2 — 트랙·등급 선택 (★ 프롬프트)
 
@@ -45,8 +46,8 @@ description: 새 펌웨어 리호스팅 세팅. 사용자는 rehost-setup 뒤에
 
 - **Q1 트랙**: 펌웨어에서 추정한 것을 첫 옵션으로(BL_*.tar → 트랙 1 추정, AP_*.tar/boot.img →
   트랙 2 추정):
-  - "트랙 1 — S-Boot 셸 (`/rehost-sboot`)"
-  - "트랙 2 — 커널 + 진짜 UFS 컨트롤러 (`/rehost-kernel`)"
+  - "트랙 1 — S-Boot 셸 (`/sboot-rehost:rehost-sboot`)"
+  - "트랙 2 — 커널 + 진짜 UFS 컨트롤러 (`/sboot-rehost:rehost-kernel`)"
 - **Q2 등급**: 트랙 1 → A(help,권장)/B/C, 트랙 2 → K1/K2/K3(진짜 UFS 컨트롤러).
 - **model** 이 펌웨어에서 안 나오면 여기서 함께 묻기(예 SM-A166B).
 
@@ -90,7 +91,7 @@ description: 새 펌웨어 리호스팅 세팅. 사용자는 rehost-setup 뒤에
 ```
 
 `WS/PROGRESS.md`(0회차) + `WORKROOT/.active` 에 `<id>` 기록.
-`journal.sh <WS> session-end "/rehost-setup" "INPUT.md 생성, track <1|2>, active=<id>"`.
+`journal.sh <WS> session-end "/sboot-rehost:rehost-setup" "INPUT.md 생성, track <1|2>, active=<id>"`.
 
 ## Step 6 — 완료 안내 (★ 선택한 트랙의 실행 명령 하나만)
 
@@ -102,11 +103,11 @@ description: 새 펌웨어 리호스팅 세팅. 사용자는 rehost-setup 뒤에
 | 의존성      | OK / 백그라운드 설치 중 |
 
 ▶ 다음 — 아래 하나를 실행하세요:
-   <트랙 1 이면>  /rehost-sboot          (S-Boot 셸까지 자율 진행)
-   <트랙 2 이면>  /rehost-kernel         (커널 → UFS 컨트롤러까지 자율 진행)
+   <트랙 1 이면>  /sboot-rehost:rehost-sboot          (S-Boot 셸까지 자율 진행)
+   <트랙 2 이면>  /sboot-rehost:rehost-kernel         (커널 → UFS 컨트롤러까지 자율 진행)
 
-  · 다른 펌웨어: _inbox/ 에 넣고 /rehost-setup <다른이름>  (새 워크스페이스, 기존 안 덮어씀)
-  · 워크스페이스 목록/상태: /rehost-status
+  · 다른 펌웨어: _inbox/ 에 넣고 /sboot-rehost:rehost-setup <다른이름>  (새 워크스페이스, 기존 안 덮어씀)
+  · 워크스페이스 목록/상태: /sboot-rehost:rehost-status
 ```
 
 ★ 선택한 트랙에 **해당하는 명령 하나만** 굵게 안내(다른 트랙 명령은 흐리게/생략).

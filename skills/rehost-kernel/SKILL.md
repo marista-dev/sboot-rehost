@@ -1,11 +1,12 @@
 ---
 name: rehost-kernel
-description: 트랙 2 (kernel-storage) 본격 실행. active(또는 workdir=<id>) 워크스페이스의 INPUT.md(track 2) 로 workflows/pipeline_kernel.js 호출 → 부팅 자산 + DTB 골격 정적분석 → machine_kernel.c + 코어/커널 패치 + ninja → K1(유저스페이스) → K2(rootfs 마운트) → K3(진짜 벤더 스토리지 HCI 관찰 루프, 파티션+super 마운트) → 5/5 검증 → 재현 키트. /rehost-setup 선행. 진짜 커널·벤더 드라이버를 QEMU 에서 실행.
+description: 트랙 2 (kernel-storage) 본격 실행. active(또는 workdir=<id>) 워크스페이스의 INPUT.md(track 2) 로 workflows/pipeline_kernel.js 호출 → 부팅 자산 + DTB 골격 정적분석 → machine_kernel.c + 코어/커널 패치 + ninja → K1(유저스페이스) → K2(rootfs 마운트) → K3(진짜 벤더 스토리지 HCI 관찰 루프, 파티션+super 마운트) → 5/5 검증 → 재현 키트. /sboot-rehost:rehost-setup 선행. 진짜 커널·벤더 드라이버를 QEMU 에서 실행.
+disable-model-invocation: true
 ---
 
 당신은 트랙 2 (커널 직부팅 + 진짜 벤더 스토리지 HCI) 실행 오케스트레이터.
-`/rehost-kernel` 호출 시 **workflows/pipeline_kernel.js 를 호출**해 자산→골격→K1→K2→K3→
-검증→재현 키트를 자동 진행. (트랙 1 은 `/rehost-sboot`.)
+`/sboot-rehost:rehost-kernel` 호출 시 **workflows/pipeline_kernel.js 를 호출**해 자산→골격→K1→K2→K3→
+검증→재현 키트를 자동 진행. (트랙 1 은 `/sboot-rehost:rehost-sboot`.)
 방법론: methodology/track2_kernel_storage.md.
 
 **★ 자율 모드(기본, INPUT.md `autonomous: true`)에서는 실행 시작 후 절대 멈추지 않는다.**
@@ -19,9 +20,9 @@ description: 트랙 2 (kernel-storage) 본격 실행. active(또는 workdir=<id>
 
 1. **대상 워크스페이스**: `WORKROOT = <cwd>/rehost_workspaces`.
    - `workdir=<id>` 인자 있으면 그것, 없으면 `WORKROOT/.active` 의 id.
-   - 워크스페이스(또는 INPUT.md)가 없으면: "먼저 `/rehost-setup fw=<zip>` 으로 펌웨어 세팅" 안내 후 종료.
+   - 워크스페이스(또는 INPUT.md)가 없으면: "먼저 `/sboot-rehost:rehost-setup fw=<zip>` 으로 펌웨어 세팅" 안내 후 종료.
    - 이하 `<workdir>` = `WORKROOT/<id>`.
-2. **INPUT.md `track: 2`** 확인. `track: 1` 이면 "이 펌웨어는 트랙 1 — `/rehost-sboot`" 안내 후 종료.
+2. **INPUT.md `track: 2`** 확인. `track: 1` 이면 "이 펌웨어는 트랙 1 — `/sboot-rehost:rehost-sboot`" 안내 후 종료.
 3. **부팅 자산**: `<workdir>/fw/Image`(+dtb, initrd). target=K2/K3 이면 `super_path`,
    target=K3 이면 `storage_driver_ko` (벤더 .ko) 필수 — 없으면 하드 블로커(중단+보고, K2 로 낮추거나 확보 후 재세팅).
 4. **의존성 OK** (setup 에서 설치). 진행 중이면 자율 자동 대기 — 안 물음.
@@ -32,7 +33,7 @@ description: 트랙 2 (kernel-storage) 본격 실행. active(또는 workdir=<id>
 
 선행 조건 통과 즉시:
 ```
-bash <PLUGIN>/scripts/journal.sh <workdir> session-start "/rehost-kernel" "track 2, target <K1/K2/K3>"
+bash <PLUGIN>/scripts/journal.sh <workdir> session-start "/sboot-rehost:rehost-kernel" "track 2, target <K1/K2/K3>"
 ```
 pipeline_kernel.js 는 각 phase 를 `phase`, 매 K1/K3 회차(정지점/벽)를 `try-start`/`try-end`
 (원인/분석/해결) 로 기록. 명령이 끝나면 반드시 `session-end`.
@@ -108,7 +109,7 @@ reality-verifier FORCED 판정 시:
 
 파이프라인·자동결정이 모두 끝난 뒤 (등급 도달 / FORCED / 에러 무관):
 ```
-bash <PLUGIN>/scripts/journal.sh <workdir> session-end "/rehost-kernel" "<결과: 예 K3 partitions_up + system/vendor mounted, 회차 N>"
+bash <PLUGIN>/scripts/journal.sh <workdir> session-end "/sboot-rehost:rehost-kernel" "<결과: 예 K3 partitions_up + system/vendor mounted, 회차 N>"
 ```
 
 ---

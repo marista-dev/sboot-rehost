@@ -1,6 +1,6 @@
 /*
  * pipeline_kernel.js — 트랙 2 (커널 직부팅 + 진짜 벤더 스토리지 HCI) 파이프라인.
- * /rehost-kernel (트랙 2) 이 호출. methodology/track2_kernel_storage.md 를 따른다.
+ * /sboot-rehost:rehost-kernel (트랙 2) 이 호출. methodology/track2_kernel_storage.md 를 따른다.
  *
  * Phase 1 Static  : 부팅 자산 확인 + kernel-boot-analyzer (DTB 골격 + 커널 게이트)
  * Phase 2 Machine : machine_kernel.c 생성 + QEMU 코어 3패치 + 커널 패치 + ninja

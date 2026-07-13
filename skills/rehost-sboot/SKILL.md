@@ -1,11 +1,12 @@
 ---
 name: rehost-sboot
-description: 트랙 1 (sboot-shell) 본격 실행. active(또는 workdir=<id>) 워크스페이스의 INPUT.md(track 1) 로 workflows/pipeline.js 호출 → 정적 분석(병렬 멀티에이전트) → 머신 .c + ninja → 회차 루프(직렬, 한 회차 한 변경) → 5/5 검증 → 재현 키트. /rehost-setup 선행. S-Boot BL3 를 QEMU 에서 실행해 진짜 셸 + help 도달.
+description: 트랙 1 (sboot-shell) 본격 실행. active(또는 workdir=<id>) 워크스페이스의 INPUT.md(track 1) 로 workflows/pipeline.js 호출 → 정적 분석(병렬 멀티에이전트) → 머신 .c + ninja → 회차 루프(직렬, 한 회차 한 변경) → 5/5 검증 → 재현 키트. /sboot-rehost:rehost-setup 선행. S-Boot BL3 를 QEMU 에서 실행해 진짜 셸 + help 도달.
+disable-model-invocation: true
 ---
 
-당신은 트랙 1 (S-Boot BL3 셸) 실행 오케스트레이터. `/rehost-sboot` 호출 시
+당신은 트랙 1 (S-Boot BL3 셸) 실행 오케스트레이터. `/sboot-rehost:rehost-sboot` 호출 시
 **workflows/pipeline.js 를 호출**해 정적 분석 → 머신 → 회차 → 검증 → 재현 키트를
-한 번에 자동 진행. (트랙 2 는 `/rehost-kernel`.)
+한 번에 자동 진행. (트랙 2 는 `/sboot-rehost:rehost-kernel`.)
 
 **★ 자율 모드(기본, INPUT.md `autonomous: true`)에서는 실행 시작 후 절대 멈추지 않는다.**
 `AskUserQuestion` 호출 금지, "확인/동의"를 사용자에게 묻지 말 것. 모든 분기(critic 신호,
@@ -19,9 +20,9 @@ FORCED, 의존성 등)는 CLAUDE.md 자율 정책으로 **자동 결정 + JOURNA
 
 1. **대상 워크스페이스**: `WORKROOT = <cwd>/rehost_workspaces`.
    - `workdir=<id>` 인자 있으면 그 워크스페이스, 없으면 `WORKROOT/.active` 의 id.
-   - 워크스페이스(또는 INPUT.md)가 없으면: "먼저 `/rehost-setup fw=<zip>` 으로 펌웨어 세팅" 안내 후 종료.
+   - 워크스페이스(또는 INPUT.md)가 없으면: "먼저 `/sboot-rehost:rehost-setup fw=<zip>` 으로 펌웨어 세팅" 안내 후 종료.
    - 이하 `<workdir>` = `WORKROOT/<id>` (그 안의 INPUT.md 사용).
-2. **INPUT.md `track: 1`** 확인. `track: 2` 면 "이 펌웨어는 트랙 2 — `/rehost-kernel`" 안내 후 종료.
+2. **INPUT.md `track: 1`** 확인. `track: 2` 면 "이 펌웨어는 트랙 2 — `/sboot-rehost:rehost-kernel`" 안내 후 종료.
    `bl3_path` 슬롯 필요.
 3. **의존성 OK** (setup 에서 설치): `which qemu-system-aarch64` + `import capstone`. 진행 중이면
    **자율은 완료까지 자동 대기** — 안 물음.
@@ -32,7 +33,7 @@ FORCED, 의존성 등)는 CLAUDE.md 자율 정책으로 **자동 결정 + JOURNA
 
 선행 조건 통과 즉시:
 ```
-bash <PLUGIN>/scripts/journal.sh <workdir> session-start "/rehost-sboot" "track 1, target <A/B/C>"
+bash <PLUGIN>/scripts/journal.sh <workdir> session-start "/sboot-rehost:rehost-sboot" "track 1, target <A/B/C>"
 ```
 pipeline.js 의 회차 루프는 매 회차를 `try-start`/`try-end` 로 기록 (Step 1). 명령이 끝나면
 (성공/FORCED/에러 무관) 반드시 `session-end` (Step 5).
@@ -99,7 +100,7 @@ reality-verifier FORCED 판정 시:
 
 파이프라인·자동결정이 모두 끝난 뒤 (5/5 REAL / FORCED / 에러 / 셸 미도달 무관):
 ```
-bash <PLUGIN>/scripts/journal.sh <workdir> session-end "/rehost-sboot" "<결과 요약: 예 5/5 REAL, 회차 N>"
+bash <PLUGIN>/scripts/journal.sh <workdir> session-end "/sboot-rehost:rehost-sboot" "<결과 요약: 예 5/5 REAL, 회차 N>"
 ```
 
 ---

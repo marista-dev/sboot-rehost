@@ -1,7 +1,7 @@
 /*
  * pipeline.js — sboot-rehost 의 본 실행 파이프라인
  *
- * /rehost-sboot (트랙 1) 이 호출. INPUT.md 가 이미 있는 상태에서 시작.
+ * /sboot-rehost:rehost-sboot (트랙 1) 이 호출. INPUT.md 가 이미 있는 상태에서 시작.
  *
  * Phase 1 (병렬 멀티에이전트): 정적 분석 (bl3-analyzer + stub-locator 4 sub-task)
  * Phase 2 (직렬): 머신 .c 생성 + ninja
@@ -185,7 +185,7 @@ if (!iter_result.reached_shell) {
   return {
     error: 'max_iterations_exceeded',
     iter_result,
-    next: '/rehost-sboot 재호출 시 회차 추가 진행 옵션 제공',
+    next: '/sboot-rehost:rehost-sboot 재호출 시 회차 추가 진행 옵션 제공',
   }
 }
 

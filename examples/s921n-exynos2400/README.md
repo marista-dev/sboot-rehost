@@ -1,6 +1,6 @@
 # SM-S921N (Exynos 2400) — 트랙 1 Worked Example
 
-`/rehost-sboot` (트랙 1) 가 처음부터 끝까지 동작했을 때 도달하는 최종 상태.
+`/sboot-rehost:rehost-sboot` (트랙 1) 가 처음부터 끝까지 동작했을 때 도달하는 최종 상태.
 
 ## 파일
 
@@ -12,7 +12,7 @@
 
 ## 사용
 
-`/rehost-setup` 의 인자/인테이크에서 본 INPUT.md 의 슬롯들이 대응 (트랙 1).
+`/sboot-rehost:rehost-setup` 의 인자/인테이크에서 본 INPUT.md 의 슬롯들이 대응 (트랙 1).
 
 Phase 3 (회차 루프) 가 끝나면 `06_machine/machine.c` 가 본 폴더의 machine.c 와
 일치해야 함 (구조적으로). 정확히 동일한 patch 시퀀스로 완료될 필요는 없음 —

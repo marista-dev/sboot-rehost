@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # setup_env.sh — sboot-rehost 의 의존성 자동 설치
-# /rehost-init 또는 실행 명령의 S0 단계가 호출. 사용자 동의 후만 실행.
+# /sboot-rehost:rehost-init 또는 실행 명령의 S0 단계가 호출. 사용자 동의 후만 실행.
 # 소요: 약 18 분 (대부분 QEMU 빌드)
 
 set -e
@@ -73,4 +73,4 @@ which meson && meson --version || true
 
 echo
 echo "OK: 환경 셋업 완료."
-echo "다음 단계: Claude Code 에서 /rehost-sboot (트랙 1) 또는 /rehost-kernel (트랙 2) 호출"
+echo "다음 단계: Claude Code 에서 /sboot-rehost:rehost-sboot (트랙 1) 또는 /sboot-rehost:rehost-kernel (트랙 2) 호출"

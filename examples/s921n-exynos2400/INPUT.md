@@ -1,6 +1,6 @@
 # INPUT — sboot-rehost 0차 입력 (예시: SM-S921N)
 
-> 이 INPUT.md 는 worked example 의 입력값. `/rehost-setup` 이 새 펌웨어로
+> 이 INPUT.md 는 worked example 의 입력값. `/sboot-rehost:rehost-setup` 이 새 펌웨어로
 > 워크스페이스에 동일 구조 파일을 자동 생성한다.
 
 | 슬롯 | 값 |
@@ -32,4 +32,4 @@
 1. 같은 md5 의 sboot_bl3_full.bin 확보 (samfw.com 의 본인 기기용 펌웨어)
 2. `bl3_path` 와 `workdir` 를 본인 경로로 수정
 3. 이 INPUT.md 를 `<workdir>/INPUT.md` 로 복사
-4. Claude Code 에서 `/rehost-sboot` 호출 (트랙 1)
+4. Claude Code 에서 `/sboot-rehost:rehost-sboot` 호출 (트랙 1)

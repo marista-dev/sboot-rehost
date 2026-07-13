@@ -36,7 +36,7 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 | 단계 경계 | `journal.sh <wd> phase "<phase>"` | 단계 전환 시각 |
 
 규칙:
-- **세션**: `/rehost-setup` / `/rehost-sboot` / `/rehost-kernel` / `/rehost-status` 는 시작 즉시
+- **세션**: `/sboot-rehost:rehost-setup` / `/sboot-rehost:rehost-sboot` / `/sboot-rehost:rehost-kernel` / `/sboot-rehost:rehost-status` 는 시작 즉시
   `session-start`, 끝에 `session-end`.
 - **시행착오**: 매 회차(트랙 1)·매 정지점/벽(트랙 2 K1~K3)은 `try-start`(시작 시각) + `try-end`
   (완료 시각 + **원인·분석·해결** + 증거 로그 경로). 회차 번호 = try id.
@@ -47,17 +47,17 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 
 ## 자율 실행 (autonomous) — 기본 켜짐
 
-**실행 명령(`/rehost-sboot`·`/rehost-kernel`)은 기본 자율 실행이다.** 실행 중 `AskUserQuestion`
+**실행 명령(`/sboot-rehost:rehost-sboot`·`/sboot-rehost:rehost-kernel`)은 기본 자율 실행이다.** 실행 중 `AskUserQuestion`
 으로 사용자에게 선택을 묻지 않고, 아래 정책으로 **자동 결정**하고 그 결정을 JOURNAL.md 에 기록한다
 (`journal.sh <wd> decision "<지점>" "<선택>" "<근거>"`). `AskUserQuestion` 은 하니스가
 자동응답을 지원하지 않으므로 실행 명령에선 호출 금지.
 
-**예외 — `/rehost-setup` 의 트랙·등급 선택 프롬프트는 허용.** 이건 실행 루프 중 멈춤이 아니라
+**예외 — `/sboot-rehost:rehost-setup` 의 트랙·등급 선택 프롬프트는 허용.** 이건 실행 루프 중 멈춤이 아니라
 세팅 시점의 사용자 결정(트랙 1/2, 등급)이다. 인자로 미리 주면 프롬프트 생략(자율).
 
-**★ 실행 명령(`/rehost-sboot`·`/rehost-kernel`)은 시작하면 하드 블로커(아래) 전까지 한 번도
+**★ 실행 명령(`/sboot-rehost:rehost-sboot`·`/sboot-rehost:rehost-kernel`)은 시작하면 하드 블로커(아래) 전까지 한 번도
 멈추지 않는다.** 파이프라인이 FORCED/critic/미달을 반환해도 사용자에게 되묻지 말고 자율 정책으로
-처리 후 계속·마무리한다. "계속할까요/확인해주세요" 류 질문 자체가 규칙 위반. (`/rehost-setup` 만은
+처리 후 계속·마무리한다. "계속할까요/확인해주세요" 류 질문 자체가 규칙 위반. (`/sboot-rehost:rehost-setup` 만은
 펌웨어·필수 슬롯이 없으면 종료-보고 — 이건 데이터 결손이지 선택 질문이 아니다.)
 
 INPUT.md 의 `autonomous` 슬롯으로 제어: `true`(기본) = 자동 결정, `false` = 기존처럼
@@ -167,21 +167,21 @@ INPUT.md 의 `autonomous` 슬롯으로 제어: `true`(기본) = 자동 결정, `
 
 ## 사용 가능한 슬래시 명령
 
-- **`/rehost-init`** — 설치 후 1회. 작업 루트 `rehost_workspaces/` + 드롭 폴더 `_inbox/` 를
+- **`/sboot-rehost:rehost-init`** — 설치 후 1회. 작업 루트 `rehost_workspaces/` + 드롭 폴더 `_inbox/` 를
   Windows cwd 에 생성 + 의존성 확인·설치. (SessionStart 훅이 안 도는 VS Code 확장 대비 수동 스캐폴딩.)
-- **`/rehost-setup <이름>`** — 펌웨어 드롭 후. `_inbox/` 펌웨어 **자동 인식** + 격리 워크스페이스
+- **`/sboot-rehost:rehost-setup <이름>`** — 펌웨어 드롭 후. `_inbox/` 펌웨어 **자동 인식** + 격리 워크스페이스
   `rehost_workspaces/<이름>/` 생성(★ 덮어쓰기 금지) + 언팩·실행 사본 WSL 이동 + **끝에 트랙
   (1 sboot / 2 kernel)·등급을 프롬프트로 물어** INPUT.md 작성 + `.active`.
   (트랙/등급을 `track=`/`target=` 인자로 주면 프롬프트 생략.)
-- **`/rehost-sboot`** — 트랙 1 실행 (active 또는 `workdir=<id>` 워크스페이스) → pipeline.js
-- **`/rehost-kernel`** — 트랙 2 실행 (active 또는 `workdir=<id>`) → pipeline_kernel.js
-- **`/rehost-status`** — 모든 워크스페이스 목록 + 각 상태
-- **`/rehost-export`** — 목표 완료 확인 후 **"빌드 없이 실행" 키트** 조립 →
+- **`/sboot-rehost:rehost-sboot`** — 트랙 1 실행 (active 또는 `workdir=<id>` 워크스페이스) → pipeline.js
+- **`/sboot-rehost:rehost-kernel`** — 트랙 2 실행 (active 또는 `workdir=<id>`) → pipeline_kernel.js
+- **`/sboot-rehost:rehost-status`** — 모든 워크스페이스 목록 + 각 상태
+- **`/sboot-rehost:rehost-export`** — 목표 완료 확인 후 **"빌드 없이 실행" 키트** 조립 →
   `rehost_exports/<model>_<build>/track<N>/` (프리빌트 QEMU+펌웨어+machine+docs+evidence+run.sh).
   ★ 항상 gitignore, 생성 위치 안내. 미완이면 export 금지.
 
-흐름: **install → `/rehost-init`(폴더 생성) → `_inbox/` 에 펌웨어 드롭 → `/rehost-setup <이름>`(펌웨어별
-격리 워크스페이스) → `/rehost-sboot`|`/rehost-kernel`(자율 실행) → (완료) `/rehost-export`(공유 키트)**.
+흐름: **install → `/sboot-rehost:rehost-init`(폴더 생성) → `_inbox/` 에 펌웨어 드롭 → `/sboot-rehost:rehost-setup <이름>`(펌웨어별
+격리 워크스페이스) → `/sboot-rehost:rehost-sboot`|`/sboot-rehost:rehost-kernel`(자율 실행) → (완료) `/sboot-rehost:rehost-export`(공유 키트)**.
 - 여러 펌웨어 = 워크스페이스 여러 개(격리, 서로 안 덮어씀). 실행 대상 = `.active` 또는 `workdir=<id>`.
 - 작업 루트 `rehost_workspaces/` 는 **Windows cwd 밑**. 문서·기록=워크스페이스, 펌웨어 실행 사본·대용량
   트레이스=WSL ext4.
@@ -192,7 +192,7 @@ INPUT.md 의 `autonomous` 슬롯으로 제어: `true`(기본) = 자동 결정, `
 
 ## 작업 디렉터리 표준 구조
 
-`/rehost-setup` 이 **펌웨어마다 독립 워크스페이스** `<cwd>/rehost_workspaces/<id>/` 를 만든다
+`/sboot-rehost:rehost-setup` 이 **펌웨어마다 독립 워크스페이스** `<cwd>/rehost_workspaces/<id>/` 를 만든다
 (id=`<model>_<build>`, 덮어쓰기 금지). 펌웨어 실행 사본은 WSL ext4(`~/rehost/<id>/`)로 이동;
 문서·기록은 워크스페이스(Windows)에 유지. 여러 펌웨어 = 형제 워크스페이스(격리):
 
@@ -252,5 +252,5 @@ run 스크립트가 `console=`(로컬)·`summary=`(로컬)·`trace=`(WSL) 를 �
 - "방향 맞아?" → critic 즉시 호출, 전략 재평가
 - "9820 / 다른 분석가 자료 참고" → methodology/worked_example.md 재읽기
 
-사용자가 명시적으로 다른 명령을 주지 않는 한 실행 명령 (트랙 1 `/rehost-sboot`,
-트랙 2 `/rehost-kernel`) 의 파이프라인을 따른다.
+사용자가 명시적으로 다른 명령을 주지 않는 한 실행 명령 (트랙 1 `/sboot-rehost:rehost-sboot`,
+트랙 2 `/sboot-rehost:rehost-kernel`) 의 파이프라인을 따른다.
