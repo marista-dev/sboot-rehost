@@ -75,12 +75,14 @@ Claude Code 는 세션 시작 후 백그라운드에서 마켓플레이스와 �
 | 스킬이 계속 안 나타남 | 캐시 삭제 후 재설치: `rm -rf ~/.claude/plugins/cache` → Claude Code 재시작 |
 | `/plugin` 명령 자체가 없음 | Claude Code 가 오래됨. `claude --version` 확인 후 업데이트 (`npm install -g @anthropic-ai/claude-code@latest` 또는 `brew upgrade claude-code`) |
 
+각 버전에 무엇이 들어갔는지는 [CHANGELOG.md](CHANGELOG.md) 에 있다.
+
 > **★ 메인테이너 주의 — `version` 을 올려야 배포된다**
 >
 > `plugin.json` 에 `version` 이 **설정돼 있으면 사용자는 그 값을 올렸을 때만 업데이트를
 > 받는다.** 커밋만 푸시하고 버전을 그대로 두면 사용자 쪽에서는 아무 일도 일어나지 않는다.
-> 새 버전을 낼 때는 `.claude-plugin/plugin.json` 과 `.claude-plugin/marketplace.json` 의
-> `version` 을 **함께** 올려서 푸시한다.
+> 새 버전을 낼 때는 다음 셋을 **함께** 갱신해 푸시한다:
+> `.claude-plugin/plugin.json` · `.claude-plugin/marketplace.json` · `CHANGELOG.md`.
 > (`version` 을 아예 비우면 git 커밋 SHA 가 버전이 되어 매 커밋이 새 버전이 된다.)
 
 출처: [Discover and install plugins](https://code.claude.com/docs/en/discover-plugins) ·
