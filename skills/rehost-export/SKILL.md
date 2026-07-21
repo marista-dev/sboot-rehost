@@ -42,21 +42,30 @@ bash <PLUGIN>/scripts/make_export.sh
 ```
 
 이게: `bin/`(프리빌트 QEMU) + `firmware/`(sboot.bin 또는 Image/dtb/initrd) + `machine/`(machine.c
-또는 machine_kernel.c + exynos_ufs.c/.h) + `scripts/`(patch·build) + `evidence/`(console/VERIFICATION/
-JOURNAL/PROGRESS/STATIC) + turnkey `run.sh`·`setup.sh`·`.gitignore` 생성.
+또는 machine_kernel.c + `<hci>.c/.h` + `bypasses.md`) + `scripts/`(patch·build) +
+`evidence/` + turnkey `run.sh`·`setup.sh`·`.gitignore` 생성.
+
+`evidence/` 에는 **사람이 읽는 기록과 기계가 읽는 측정치가 둘 다** 들어간다:
+`VERIFICATION.md` `PROGRESS.md` `JOURNAL.md` `STATIC.md`/`KERNEL_STATIC.md` `INPUT.md`
+콘솔·요약 로그 + **`metrics.jsonl`**(시간·토큰) **`rounds.jsonl`**(회차별 지문/분류/fixer/효과)
+`blockers.jsonl` `verdict_script.json`(스크립트 1 차 5/5 측정).
 
 **대용량 이미지(트랙 2 K3 super/disk)**: make_export 가 자동으로 못 넣은 것은 직접 `firmware/` 로
 복사 (또는 너무 크면 `firmware/README.txt` 에 "본인 disk.img 를 여기 두세요" 안내 + run.sh 가 `EUFS_LU_IMAGE` 참조).
 
 ## Step 3 — 문서 생성 (docs/ + README + HOW-TO-RUN)
 
-워크스페이스의 JOURNAL/PROGRESS/우회목록/VERIFICATION 을 근거로 `DEST/docs/` 에 서술:
+워크스페이스의 JOURNAL/PROGRESS/bypasses/VERIFICATION + `rounds.jsonl`/`metrics.jsonl` 을
+근거로 `DEST/docs/` 에 서술:
 - `01_what-was-built.md` — 무엇을 리호스트했나 (트랙·등급·도달 지점).
 - `02_boot-chain.md` — 부팅 체인 상 이 트랙의 진입점.
-- `03_trial-and-error.md` — JOURNAL 의 시행착오(원인/분석/해결) 요약.
-- `04_timeline.md` — JOURNAL 세션·회차 시각 타임라인.
-- `05_bypasses.md` — 우회_패치_목록 (`[대상/이유/방법/부작용]`).
-- `06_verification.md` — VERIFICATION 5/5 (또는 K3 마일스톤) + 증거.
+- `03_trial-and-error.md` — JOURNAL 의 시행착오(원인/분석/해결) + `rounds.jsonl` 의
+  분류 분포·시도한 변경 목록 요약.
+- `04_timeline.md` — JOURNAL 세션 시각 + **`metrics.jsonl` 의 단계별 소요 시간·누적 토큰**.
+- `05_bypasses.md` — `06_machine/bypasses.md` (`[대상/이유/방법/부작용]`).
+- `06_verification.md` — 5/5 **2 단 검증** 결과: 스크립트 1 차(`verdict_script.json`) 와
+  verifier 2 차(`VERIFICATION.md`) 를 **둘 다** 싣고, 판정이 달랐다면 어느 쪽이 이겼고
+  근거가 무엇인지 명시 (올리는 방향 override 는 byte 증거가 있어야 유효).
 
 `DEST/README.md`(개요 + 한 줄 실행) + `DEST/HOW-TO-RUN.md`(전제·실행·재빌드). 모든 서술은 실제
 기록 근거로만 (지어내기 금지, 정직성).

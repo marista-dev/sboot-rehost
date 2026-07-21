@@ -85,24 +85,59 @@ Claude Code 플러그인.
 
 ---
 
-## 4. 과정
+## 4. 구조
 
-- **`/sboot-rehost:rehost-init`** — 작업 루트 + `_inbox/` 생성, 의존성(QEMU 10.2.2 / capstone / dtc) 확인·설치.
-- **`/sboot-rehost:rehost-setup`** — 펌웨어 언팩 → 실행 사본 WSL 이동 → 자산 검증 → 트랙/등급 프롬프트 → `INPUT.md` + `.active`.
-- **`/sboot-rehost:rehost-sboot`** — Static(bl3-analyzer + stub-locator) → Machine(machine.c + ninja) → 회차 루프(fault-fixer) → 5/5 검증 → 재현 키트.
-- **`/sboot-rehost:rehost-kernel`** — Static(DTB + 커널 게이트) → Machine(+ 코어/커널 패치) → K1 유저스페이스 → K2 rootfs → K3 벤더 UFS 컨트롤러(파티션 + super 마운트) → 5/5 검증.
-- **`/sboot-rehost:rehost-export`** — 완료 확인 → 프리빌트 QEMU + 펌웨어 + machine + docs + evidence + `run.sh` 조립(받는 사람은 `bash run.sh`).
+**측정은 스크립트, 해석·제어는 LLM, 정지의 입력값은 사실.**
+트랙은 정체성이 아니라 인자이며, `workflows/pipeline.js` 하나가 둘 다 돈다.
+
+```
+[static-analyzer] 도출 → (Build) machine + ninja
+   → { (run) 지문·출처게이트 → [supervisor] 라우팅
+        → [fault-classifier] 분류·fixer 순위 → [fixer] 한 변경 → (검문) }*
+   → (verify.py 측정) → [verifier 재검증] → REAL | FORCED → 키트
+```
+
+| 구성 | 이름 |
+|---|---|
+| **LLM** | `static-analyzer`(도출) · `supervisor`(라우팅·정지) · `fault-classifier`(분류) · `fixer-memory`/`el3`/`bootflow`/`kernel`/`storage`(수정) · `verifier`(재검증) |
+| **스크립트** | `run_qemu.sh`/`run_kernel.sh`(실행+지문+출처게이트) · `check_change.sh`(한 변경 검문) · `stop_conditions.py`(정지) · `verify.py`(5/5 측정) · `record.py`(측정 기록) |
+| **데이터** | `fixers/registry.yaml`(오류→fixer) · `knowledge/*.md`(정지점 테이블) · `profiles/*.yaml`(SoC 힌트) |
+
+**fixer 만 코드를 고친다.** 새 정지점 = 테이블 한 줄, 새 fixer = 파일 하나 + 등록부 몇 줄.
 
 ---
 
-## 5. 검증
+## 5. 검증 (2 단, 방향 비대칭)
 
-성공은 **실제 트레이스·콘솔·커널 메시지**로만 판정(regex 매칭 단독 불인정). `reality-verifier` 5/5 통과 = REAL, 미달 = FORCED(성공 표기 금지). 우회는 전부 `[대상/이유/방법/부작용]` 기록.
+성공은 **실제 트레이스·콘솔·커널 메시지**로만 판정(regex 단독 불인정).
+
+1. `verify.py` 가 5 항목을 **코드로 측정** → `verdict_script.json`
+2. `verifier`(LLM) 가 원시 로그·바이트로 **재검증** → `VERIFICATION.md`
+   - 낮추는 방향(REAL→FORCED)은 LLM 우선
+   - **올리는 방향(FORCED→REAL)은 byte-level 증거가 있을 때만**
+
+**5/5 = REAL, 4/5 이하 = FORCED**(성공 표기 금지). 우회는 전부 `[대상/이유/방법/부작용]` 기록.
 
 ---
 
-## 6. 환경 / 기록 / 한계
+## 6. 멈추는 조건
+
+**회차 수·소요 시간은 멈출 이유가 아니다.** 시도할 수(手)가 남아 있는 한 계속한다.
+멈추는 경우는 **구조상 목표에 도달할 수 없을 때뿐**이다:
+
+`BLOCKED_CARVE`(BL3 carve) · `BLOCKED_ASSET`(자산 없음) · `BLOCKED_KO`(K3 인데 벤더 `.ko` 부재) ·
+`BLOCKED_BUILD`(빌드 실패) · `BLOCKED_TEE`(시큐어월드, 범위 밖) ·
+`EXHAUSTED`(**무브 소진** — 지문 정체·진동 + 새 사실 0 + 새 시도 0)
+
+정지는 `success=false` 인 **정직한 미완**이며 재실행하면 이어서 진행된다.
+이 판정은 스크립트가 소유하며 LLM 이 뒤집을 수 없다.
+
+---
+
+## 7. 환경 / 기록 / 한계
 
 - **환경**: WSL2(Ubuntu 22.04+). 첫 `/sboot-rehost:rehost-init` 이 QEMU 10.2.2(aarch64) 등 의존성을 자동 설치.
-- **기록 위치**: 문서·기록(JOURNAL / PROGRESS / INPUT / console)은 로컬 작업 폴더, 대용량(펌웨어 실행 사본·트레이스)은 WSL. 펌웨어·작업 폴더는 전부 `.gitignore`.
+- **기록**: 사람이 읽는 `JOURNAL.md`/`PROGRESS.md`/`VERIFICATION.md` + 기계가 읽는
+  `metrics.jsonl`(시간·토큰) · `rounds.jsonl`(회차 지문/분류/fixer/효과) · `blockers.jsonl`(정지 사유).
+  문서·기록은 로컬 작업 폴더, 대용량(실행 사본·트레이스)은 WSL. 펌웨어·작업 폴더는 전부 `.gitignore`.
 - **한계**: 트랙 1 은 등급 A 안정. 트랙 2 K3 은 벤더 `.ko` 필요. 공통 프론티어 = `/data` 암호화 → TEE(TEEGRIS, 범위 밖).

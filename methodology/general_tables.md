@@ -110,21 +110,28 @@
 | 출력 byte-match | 콘솔 모든 토큰이 BL3 안에 file offset 으로 존재 | `data.find(token)` for all | 텍스트 주입됨 |
 | 소스 negative | 머신 C 에 동일 출력 문자열 0 개 | `grep -F "TOKEN" *.c` | 머신이 직접 텍스트 |
 | UART 단일 경로 | `qemu_chr_fe_write_all` 호출 1 자리, "BL3 가 UTXH 에 쓸 때만" | `grep -n chr_fe_write` | 머신이 주입 가능 |
-| 우회 목록 | `[대상/이유/방법/부작용]` 4 항 × N 개 | 우회_패치_목록.md 존재 | 우회를 모델로 위장 |
+| 우회 목록 | `[대상/이유/방법/부작용]` 4 항 × N 개 | `06_machine/bypasses.md` 존재 | 우회를 모델로 위장 |
 
 5/5 = REAL. 4/5 = FORCED. 3/5 이하 = 가짜.
 
 ---
 
-## Table H — 위기 5 신호 (critic agent 자동 발화)
+## Table H — 정지 조건 (`scripts/stop_conditions.py`, 결정론)
 
-| # | 트리거 | LLM 응답 |
+> 과거 이 표는 "위기 5 신호" 로 LLM 이 발화하는 권고였다. 지금은 **스크립트가 계산하는
+> 정지 조건**이며 LLM 이 뒤집을 수 없다. **회차 수·소요 시간은 정지 사유가 아니다.**
+
+| 코드 | 조건 | 감지 주체 |
 |---|---|---|
-| 1 | 회차 30+ + 마지막 5 fault 같은 카테고리 | 전략 재평가: entry redirect 더 앞으로 / BL3 이미지 검토 |
-| 2 | UART 의미있는 텍스트 등장 + 검증 미실행 | Table G 5/5 자가 수행 → 보고 |
-| 3 | "미확정" 도출 5 개 이상 | 참조 자산 재읽기, 청사진 차용 |
-| 4 | BL3 안 알려진 ASCII 없음 / carve 의심 | 다시 carve, 크기·entropy·ASCII 비교 |
-| 5 | target=A 인데 UFS/PMIC 우회 시도 중 | A 등급은 entry redirect 우회로 충분 |
+| `BLOCKED_CARVE` | BL3 가 carve (알려진 ASCII 부족) | static-analyzer 도출 |
+| `BLOCKED_ASSET` | 부팅 자산(Image/DTB) 없음 | 파일 체크 |
+| `BLOCKED_KO` | target=K3 인데 벤더 `.ko` 부재 | 파일 체크 |
+| `BLOCKED_BUILD` | ninja 실패 | 빌드 결과 (추측 수정 금지) |
+| `BLOCKED_TEE` | vold/Keymint/TEEGRIS 시큐어월드 | 범위 밖 — 미달로 기록 |
+| `EXHAUSTED` | **무브 소진**: (지문 정체 or 진동) AND 새 사실 0 AND 새 시도 0 | `stop_conditions.py` |
+
+정체·미지 상황은 정지가 아니라 **라우팅**으로 처리된다:
+`unknown`/정체 → `static-analyzer` 재도출, 정체 2회 → 기존 우회의 부작용을 먼저 의심.
 
 ---
 
@@ -143,8 +150,8 @@
 | `[QEMU 버전 + 빌드 경로]` | 10.x.x + path | ★ 변함 |
 | `[정직성 규칙 7]` | instruction §1 | 변하지 않음 (CLAUDE.md) |
 | `[작업 순서 0~10]` | Table A | 변하지 않음 (CLAUDE.md) |
-| `[검증 5/5]` | Table G | 변하지 않음 (reality-verifier agent) |
-| `[위기 5 신호]` | Table H | 변하지 않음 (critic agent) |
+| `[검증 5/5]` | Table G | 변하지 않음 (`verify.py` 측정 + `verifier` 재검증) |
+| `[정지 조건]` | Table H | 변하지 않음 (`stop_conditions.py`, 결정론) |
 
 앞 9 슬롯 = 펌웨어마다 새로 채움. 뒤 4 슬롯 = 플러그인이 항상 강제.
 
@@ -158,22 +165,26 @@
 | `skills/rehost-init/SKILL.md` | 설치 후 1회: 작업 루트 + `_inbox/` 생성 + 의존성 |
 | `skills/rehost-setup/SKILL.md` | 펌웨어 드롭 후: 격리 워크스페이스 + 트랙 프롬프트 + INPUT.md |
 | `hooks/hooks.json` + `scripts/ensure_inbox.ps1` | SessionStart 훅: `_inbox/` 자동 생성 (CLI/web; 확장에선 `/sboot-rehost:rehost-init`) |
-| `skills/rehost-sboot/SKILL.md` | 트랙 1 실행 (pipeline.js) |
-| `skills/rehost-kernel/SKILL.md` | 트랙 2 실행 (pipeline_kernel.js) |
+| `skills/rehost-sboot/SKILL.md` | 트랙 1 실행 → `pipeline.js({track: 1})` |
+| `skills/rehost-kernel/SKILL.md` | 트랙 2 실행 → `pipeline.js({track: 2})` |
 | `skills/rehost-status/SKILL.md` | 워크스페이스 목록/상태 |
 | `skills/rehost-export/SKILL.md` + `scripts/make_export.sh` | 완료 후 "빌드 없이 실행" 키트 (rehost_exports/<fw>/track<N>/, gitignore) |
-| `agents/bl3-analyzer.md` | Table C (정적 7) + carve 판정 (트랙 1) |
-| `agents/stub-locator.md` | Table E (보조 4) (트랙 1) |
+| **`workflows/pipeline.js`** | **트랙 1·2 공용 파이프라인** (track 인자 + 목표 사다리) |
+| `agents/static-analyzer.md` | Table C (정적 7) + Table E (보조 4) + carve 판정 (트랙 1) / Table J (자산·DTB 골격·게이트) (트랙 2) |
+| `agents/supervisor.md` | Table H (정지 조건) 소비 + 라우팅 |
+| `agents/fault-classifier.md` | Table F / L / M 의 **분류** 부분 |
+| `agents/fixer-memory.md` `fixer-el3.md` `fixer-bootflow.md` | Table F (트랙 1 정지점 **처치**) |
+| `agents/fixer-kernel.md` | Table L (커널 정지점 처치) (트랙 2) |
+| `agents/fixer-storage.md` | Table M (스토리지 HCI 함정) (트랙 2) |
+| `agents/verifier.md` + `scripts/verify.py` | Table G / G2 (검증 5/5, 2 단 비대칭) |
+| `scripts/stop_conditions.py` | Table H (정지 조건, 결정론) |
+| `scripts/check_change.sh` | 회차 = 한 변경 (diff 검문) |
+| `scripts/record.py` | `metrics.jsonl` / `rounds.jsonl` / `blockers.jsonl` |
+| `fixers/registry.yaml` | 오류 이름 → 담당 fixer (확장 지점) |
+| `knowledge/faults_bootloader.md` `faults_kernel.md` `faults_storage.md` `kernel_gates.md` | Table F / L / M 의 데이터 본체 |
+| `profiles/*.yaml` | SoC 탐색 힌트 (값 아님) |
 | `templates/machine.c.tmpl` | Table D (머신 13 요소) (트랙 1) |
-| `agents/fault-fixer.md` | Table F (정지점 처치) (트랙 1) |
-| `agents/reality-verifier.md` | Table G / G2 (검증 5/5) |
-| `agents/critic.md` | Table H / H2 (위기 5 신호) |
-| `workflows/iter-loop.js` / `pipeline.js` | 트랙 1 회차 루프 / 파이프라인 |
-| `agents/kernel-boot-analyzer.md` | Table J (부팅 자산 + DTB 골격 + 게이트) (트랙 2) |
-| `agents/boot-fault-fixer.md` | Table L (커널 정지점 처치) (트랙 2) |
-| `agents/storage-modeler.md` | Table M (스토리지 HCI 함정) (트랙 2) |
 | `templates/machine_kernel.c.tmpl` / `storage_hci.c.tmpl` | Table K (트랙 2 머신 요소) |
-| `workflows/pipeline_kernel.js` | 트랙 2 파이프라인 (Static→K1→K2→K3→Verify) |
 
 ---
 
