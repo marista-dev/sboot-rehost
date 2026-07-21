@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-verify_byte_match.py — Table G #2 (출력 byte-match) + #3 (소스 negative).
-reality-verifier agent 가 호출.
+verify_byte_match.py — 검증 #2 (출력 byte-match) + #3 (소스 negative) 단독 실행용.
+scripts/verify.py 가 같은 판정을 내장하고 있으며, 이 스크립트는 개별 확인용이다.
 
 사용법:
   verify_byte_match.py <bl3.bin> <console.txt> <machine.c>

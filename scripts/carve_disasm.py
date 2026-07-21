@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 carve_disasm.py — capstone 래퍼.
-bl3-analyzer / stub-locator agent 에서 호출.
+static-analyzer agent 가 호출 (트랙 1 도출).
 
 사용법:
   carve_disasm.py disasm <bl3.bin> <file_off> <size> <base_va>

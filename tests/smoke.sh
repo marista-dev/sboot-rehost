@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# End-to-end smoke test of the sboot-rehost deterministic layer.
+# Substitutes a fake QEMU so the whole run/fingerprint/gate/stop/verify chain
+# can be exercised without real firmware.
+set -u
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+S="$REPO/scripts"
+ROOT="$(mktemp -d)"
+PASS=0; FAIL=0
+
+ok()   { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m %s\n' "$1"; }
+bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n'  "$1"; [ -n "${2:-}" ] && printf '        %s\n' "$2"; }
+chk()  { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "기대=$3  실제=$2"; fi; }
+hdr()  { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
+
+# --- shims: fake qemu + timeout (macOS lacks GNU timeout) --------------------
+BIN="$ROOT/bin"; mkdir -p "$BIN"
+if ! command -v timeout >/dev/null 2>&1; then
+  cat > "$BIN/timeout" <<'EOF'
+#!/usr/bin/env bash
+shift; exec "$@"
+EOF
+  chmod +x "$BIN/timeout"
+fi
+export PATH="$BIN:$PATH"
+
+make_qemu() {   # $1 = console payload file, $2 = trace payload file
+  cat > "$BIN/fake-qemu" <<EOF
+#!/usr/bin/env bash
+OUT=""; LOG=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -serial) OUT="\${2#file:}"; shift 2;;
+    -D) LOG="\$2"; shift 2;;
+    *) shift;;
+  esac
+done
+[ -n "\$OUT" ] && cat "$1" > "\$OUT"
+[ -n "\$LOG" ] && cat "$2" > "\$LOG"
+echo "fake-qemu done"
+EOF
+  chmod +x "$BIN/fake-qemu"
+}
+
+new_ws() {      # $1 = name -> echoes workdir
+  local wd="$ROOT/$1"; mkdir -p "$wd/06_machine" "$wd/07_logs" "$wd/fw"
+  printf '### 우회1\n- 대상: t\n- 이유: r\n- 방법: m\n- 부작용: s\n' > "$wd/06_machine/bypasses.md"
+  echo "$wd"
+}
+
+export TRACE_DIR="$ROOT/_traces"
+
+# =============================================================================
+hdr "1. 트랙 1 — 정상 도달 (셸)"
+WD=$(new_ws t1ok)
+printf 'static void w(void){ qemu_chr_fe_write_all(s->chr,b,1); }\n' > "$WD/06_machine/machine.c"
+printf 'S-BOOT # help\nFollowing commands are supported\n' > "$ROOT/con1.txt"
+printf 'no exceptions here\n0x9021f3dc: stp x29,x30\n' > "$ROOT/trc1.txt"
+make_qemu "$ROOT/con1.txt" "$ROOT/trc1.txt"
+printf 'S-BOOT # \x00Following commands are supported\x00help\x00' > "$WD/bl3.bin"
+printf '| shell_func | 0x9021f3dc | prompt xref |\n' > "$WD/STATIC.md"
+
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD" 1 sboot-test 1 shell "shell" "$WD/bl3.bin" help > "$ROOT/obs1.json" 2>/dev/null
+python3 -c "import json;json.load(open('$ROOT/obs1.json'))" 2>/dev/null && ok "observation.json 이 유효한 JSON" || bad "observation.json 파싱"
+M=$(python3 -c "import json;print(json.load(open('$ROOT/obs1.json'))['milestone'])" 2>/dev/null)
+chk "마일스톤 shell 도달" "$M" "shell"
+I=$(python3 -c "import json;print(json.load(open('$ROOT/obs1.json'))['injected'])" 2>/dev/null)
+chk "자가주입 아님" "$I" "False"
+ST=$(python3 -c "import json;print(json.load(open('$ROOT/obs1.json'))['stop'])" 2>/dev/null)
+chk "정지 아님" "$ST" "False"
+RO=$(python3 -c "import json;print(json.load(open('$ROOT/obs1.json'))['run_ok'])" 2>/dev/null)
+chk "run_ok 참" "$RO" "True"
+
+# =============================================================================
+hdr "2. 트랙 1 — 자가주입 차단 (머신이 문자열을 갖고 있음)"
+WD2=$(new_ws t1inj)
+printf 'static const char*p="S-BOOT # ";\nqemu_chr_fe_write_all(c,b,1);\n' > "$WD2/06_machine/machine.c"
+cp "$WD/bl3.bin" "$WD2/bl3.bin"
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD2" 1 sboot-test 1 shell "shell" "$WD2/bl3.bin" help > "$ROOT/obs2.json" 2>/dev/null
+M2=$(python3 -c "import json;print(json.load(open('$ROOT/obs2.json'))['milestone'])" 2>/dev/null)
+I2=$(python3 -c "import json;print(json.load(open('$ROOT/obs2.json'))['injected'])" 2>/dev/null)
+chk "도달로 인정 안 함" "$M2" "none"
+chk "자가주입 감지됨" "$I2" "True"
+
+# =============================================================================
+hdr "3. 트랙 1 — Data Abort 지문 추출"
+WD3=$(new_ws t1fault)
+printf 'int x;\n' > "$WD3/06_machine/machine.c"
+printf '' > "$ROOT/con3.txt"
+printf 'Taking exception 4 [Data Abort]\nFAR 0x12860010\nELR 0xf48343a4\nTaking exception 4 [Data Abort]\n' > "$ROOT/trc3.txt"
+make_qemu "$ROOT/con3.txt" "$ROOT/trc3.txt"
+cp "$WD/bl3.bin" "$WD3/bl3.bin"
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD3" 1 sboot-test 1 shell "shell" "$WD3/bl3.bin" help > "$ROOT/obs3.json" 2>/dev/null
+F=$(python3 -c "import json;d=json.load(open('$ROOT/obs3.json'));print(d['far'])" 2>/dev/null)
+E=$(python3 -c "import json;d=json.load(open('$ROOT/obs3.json'));print(d['exceptions'])" 2>/dev/null)
+chk "FAR 를 16진 문자열로 보존" "$F" "0x12860010"
+chk "예외 2 건 계수" "$E" "2"
+
+# =============================================================================
+hdr "4. 트랙 2 — 마일스톤 사다리 (가장 높은 것 채택)"
+WD4=$(new_ws t2)
+printf 'int y;\n' > "$WD4/06_machine/machine_kernel.c"
+touch "$WD4/fw/Image.patched"
+printf 'Run /init\nscsi host0: ufshcd\nPower mode change(0): M(1)G(3)\n[sda] Attached SCSI disk\n' > "$ROOT/con4.txt"
+printf 'kernel trace\n' > "$ROOT/trc4.txt"
+make_qemu "$ROOT/con4.txt" "$ROOT/trc4.txt"
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD4" 2 test-kernel 1 link_up "userspace,link_up,power_mode,scsi_attach,partitions_up" > "$ROOT/obs4.json" 2>/dev/null
+M4=$(python3 -c "import json;print(json.load(open('$ROOT/obs4.json'))['milestone'])" 2>/dev/null)
+chk "최고 마일스톤 scsi_attach" "$M4" "scsi_attach"
+
+# 4b. 트랙 2 자가주입 — 낮은 단이 오염되면 높은 단도 인정 금지
+WD4B=$(new_ws t2inj)
+printf 'qemu_log("Run /init");\n' > "$WD4B/06_machine/machine_kernel.c"
+touch "$WD4B/fw/Image.patched"
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD4B" 2 test-kernel 1 link_up "userspace,link_up,power_mode,scsi_attach" > "$ROOT/obs4b.json" 2>/dev/null
+M4B=$(python3 -c "import json;print(json.load(open('$ROOT/obs4b.json'))['milestone'])" 2>/dev/null)
+I4B=$(python3 -c "import json;print(json.load(open('$ROOT/obs4b.json'))['injected'])" 2>/dev/null)
+chk "오염 시 상위 단도 불인정" "$M4B" "none"
+chk "트랙 2 자가주입 감지"     "$I4B" "True"
+
+# 4c. 사다리가 건너뛴 단 때문에 하위 도달이 가려지지 않아야 한다
+#     (K3 사다리에는 rootfs 가 없다. 최고 마일스톤만 보면 userspace 도달이 숨는다)
+WD4C=$(new_ws t2skip)
+printf 'int q;\n' > "$WD4C/06_machine/machine_kernel.c"
+touch "$WD4C/fw/Image.patched"
+printf 'Run /init\nerofs: (device dm-0): mounted\n' > "$ROOT/con4c.txt"
+printf 'trace\n' > "$ROOT/trc4c.txt"
+make_qemu "$ROOT/con4c.txt" "$ROOT/trc4c.txt"
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD4C" 2 test-kernel 1 userspace "userspace,link_up,power_mode" > "$ROOT/obs4c.json" 2>/dev/null
+TOP=$(python3 -c "import json;print(json.load(open('$ROOT/obs4c.json'))['milestone'])" 2>/dev/null)
+LIST=$(python3 -c "import json;print(','.join(json.load(open('$ROOT/obs4c.json'))['milestones_reached']))" 2>/dev/null)
+chk "최고 마일스톤은 rootfs" "$TOP" "rootfs"
+chk "도달 목록에 userspace 포함" "$LIST" "userspace,rootfs"
+# 파이프라인의 사다리 인덱스 계산을 그대로 재현
+IDX=$(node -e '
+const goals=["userspace","link_up","power_mode"];
+const reached=process.argv[1].split(",");
+console.log(reached.reduce((b,n)=>Math.max(b,goals.indexOf(n)),-1));
+' "$LIST" 2>/dev/null)
+chk "사다리 인덱스 0 (userspace 도달 인식)" "$IDX" "0"
+
+# =============================================================================
+hdr "5. 한 변경 검문 (check_change)"
+WD5=$(new_ws gate)
+printf 'int a;\nint b;\n' > "$WD5/06_machine/machine.c"
+printf 'int x;\n' > "$WD5/06_machine/other.c"
+bash "$S/check_change.sh" "$WD5" snapshot >/dev/null
+printf 'int a;\nint b2;\n' > "$WD5/06_machine/machine.c"
+if bash "$S/check_change.sh" "$WD5" verify >/dev/null 2>&1; then ok "한 파일 1 hunk + 우회 4항목 통과"; else bad "정상 변경이 거부됨"; fi
+printf 'int x2;\n' > "$WD5/06_machine/other.c"
+if bash "$S/check_change.sh" "$WD5" verify >/dev/null 2>&1; then bad "두 파일 동시 수정이 통과됨"; else ok "두 파일 동시 수정 거부"; fi
+bash "$S/check_change.sh" "$WD5" restore >/dev/null 2>&1
+R=$(cat "$WD5/06_machine/other.c")
+chk "restore 로 원본 복구" "$R" "int x;"
+rm -f "$WD5/06_machine/bypasses.md"
+printf 'int a;\nint bX;\n' > "$WD5/06_machine/machine.c"
+if bash "$S/check_change.sh" "$WD5" verify >/dev/null 2>&1; then bad "우회 기록 없는데 통과됨"; else ok "우회 기록 누락 거부"; fi
+
+# =============================================================================
+hdr "6. 정지 조건 (stop_conditions)"
+W6="$ROOT/stopA"; mkdir -p "$W6"
+for i in 1 2; do
+  python3 "$S/record.py" "$W6" round round=$i goal=link_up fp_exc=1 fp_far=0xA$i fp_elr=0xB fp_milestone=none fp_bytes=5 analyst_new_facts=3 fixer_no_new_change=false >/dev/null
+done
+J=$(python3 "$S/stop_conditions.py" "$W6")
+chk "진전 중엔 정지 안 함" "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop"])')" "False"
+
+W7="$ROOT/stopB"; mkdir -p "$W7"
+for i in 1 2 3; do
+  python3 "$S/record.py" "$W7" round round=$i goal=link_up fp_exc=1 fp_far=0xSAME fp_elr=0xB fp_milestone=none fp_bytes=5 analyst_new_facts=2 fixer_no_new_change=false >/dev/null
+done
+J=$(python3 "$S/stop_conditions.py" "$W7")
+chk "정체 2 → 에스컬레이션 발화" "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["escalate_to_analyst"])')" "True"
+chk "정체 2 → 아직 정지 아님"   "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop"])')" "False"
+
+for i in 4 5; do
+  python3 "$S/record.py" "$W7" round round=$i goal=link_up fp_exc=1 fp_far=0xSAME fp_elr=0xB fp_milestone=none fp_bytes=5 analyst_new_facts=0 fixer_no_new_change=true >/dev/null
+done
+J=$(python3 "$S/stop_conditions.py" "$W7")
+chk "무브 소진 → EXHAUSTED" "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop_reason"])')" "EXHAUSTED"
+
+W8="$ROOT/stopC"; mkdir -p "$W8"
+for i in 1 2 3 4; do
+  if [ $((i % 2)) -eq 1 ]; then FF=0xAAA; else FF=0xBBB; fi
+  python3 "$S/record.py" "$W8" round round=$i goal=link_up fp_exc=1 fp_far=$FF fp_elr=0x1 fp_milestone=none fp_bytes=9 analyst_new_facts=0 fixer_no_new_change=true >/dev/null
+done
+J=$(python3 "$S/stop_conditions.py" "$W8")
+chk "진동 A↔B 감지" "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["oscillating"])')" "True"
+
+W9="$ROOT/stopD"; mkdir -p "$W9"
+python3 "$S/record.py" "$W9" blocker code=BLOCKED_KO detail="벤더 .ko 없음" >/dev/null
+J=$(python3 "$S/stop_conditions.py" "$W9")
+chk "사실 블로커 → 즉시 정지" "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop_reason"])')" "BLOCKED_KO"
+
+# =============================================================================
+hdr "7. 검증 5/5 (verify.py)"
+VW=$(new_ws verify)
+printf 'Following commands are supported\x00' > "$VW/bl3.bin"
+printf 'Following commands are supported\n'   > "$VW/07_logs/console_1.txt"
+printf 'qemu_chr_fe_write_all(s->chr,b,1);\n' > "$VW/06_machine/machine.c"
+printf '| shell_func | 0x9021f3dc |\n' > "$VW/STATIC.md"
+printf '0x9021f3dc: stp\n' > "$VW/07_logs/run_1.log"
+V=$(python3 "$S/verify.py" "$VW" --track 1 --bl3 "$VW/bl3.bin" --trace "$VW/07_logs/run_1.log" 2>/dev/null)
+chk "정상 → 5/5 REAL" "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["verdict"])')" "REAL"
+printf 'const char*s="Following commands are supported";\nqemu_chr_fe_write_all(c,b,1);\n' > "$VW/06_machine/machine.c"
+V=$(python3 "$S/verify.py" "$VW" --track 1 --bl3 "$VW/bl3.bin" --trace "$VW/07_logs/run_1.log" 2>/dev/null)
+chk "자가주입 → FORCED" "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["verdict"])')" "FORCED"
+
+# =============================================================================
+hdr "8. 측정 기록 (record.py 타입 보존)"
+RW="$ROOT/rec"; mkdir -p "$RW"
+python3 "$S/record.py" "$RW" start t1 >/dev/null
+python3 "$S/record.py" "$RW" metric phase=Run timer=t1 tokens_total=12345 milestone=none far=0x1234ABCD ok=true >/dev/null
+L=$(tail -1 "$RW/metrics.jsonl")
+chk "16진은 문자열 유지" "$(echo "$L" | python3 -c 'import json,sys;print(json.load(sys.stdin)["far"])')" "0x1234ABCD"
+chk "none 은 문자열 유지"  "$(echo "$L" | python3 -c 'import json,sys;print(json.load(sys.stdin)["milestone"])')" "none"
+chk "정수는 정수"          "$(echo "$L" | python3 -c 'import json,sys;print(type(json.load(sys.stdin)["tokens_total"]).__name__)')" "int"
+chk "불리언은 불리언"      "$(echo "$L" | python3 -c 'import json,sys;print(type(json.load(sys.stdin)["ok"]).__name__)')" "bool"
+chk "elapsed_s 기록됨"     "$(echo "$L" | python3 -c 'import json,sys;print("elapsed_s" in json.load(sys.stdin))')" "True"
+
+# =============================================================================
+hdr "9. 기록 파일 생성 확인 (JOURNAL / rounds / observation)"
+[ -s "$WD/JOURNAL.md" ]        && ok "JOURNAL.md 생성"        || bad "JOURNAL.md 없음"
+[ -s "$WD/observation.json" ]  && ok "observation.json 생성"  || bad "observation.json 없음"
+[ -s "$WD/fingerprint.json" ]  && ok "fingerprint.json 생성"  || bad "fingerprint.json 없음"
+[ -s "$WD/metrics.jsonl" ]     && ok "metrics.jsonl 생성"     || bad "metrics.jsonl 없음"
+grep -q "try #1" "$WD/JOURNAL.md" && ok "JOURNAL 에 회차 시작 기록" || bad "JOURNAL 회차 기록 없음"
+
+# =============================================================================
+hdr "10. QEMU 실행 실패 시 정직한 보고"
+FW=$(new_ws qfail)
+printf 'int z;\n' > "$FW/06_machine/machine.c"
+QEMU="/nonexistent/qemu" bash "$S/run_round.sh" "$FW" 1 m 1 shell "shell" "$FW/bl3.bin" help > "$ROOT/obsf.json" 2>/dev/null
+RF=$(python3 -c "import json;print(json.load(open('$ROOT/obsf.json'))['run_ok'])" 2>/dev/null)
+chk "run_ok=false 로 정직 보고" "$RF" "False"
+
+printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
+echo "작업 폴더: $ROOT"
+[ "$FAIL" -eq 0 ]

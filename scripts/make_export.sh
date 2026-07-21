@@ -23,7 +23,10 @@ else
 fi
 
 # ── evidence (기록·증거) ──
-for f in VERIFICATION.md PROGRESS.md JOURNAL.md STATIC.md STUBS.md KERNEL_STATIC.md INPUT.md; do
+# 사람이 읽는 기록(JOURNAL/PROGRESS/VERIFICATION) + 기계가 읽는 측정치(*.jsonl) 둘 다.
+for f in VERIFICATION.md PROGRESS.md JOURNAL.md STATIC.md STUBS.md KERNEL_STATIC.md INPUT.md \
+         metrics.jsonl rounds.jsonl blockers.jsonl verdict_script.json \
+         fingerprint.json observation.json; do
   [ -f "$WS/$f" ] && cp "$WS/$f" "$DEST/evidence/"
 done
 cp "$WS"/07_logs/console_*.txt "$WS"/07_logs/*.summary.txt "$WS"/07_logs/kboot_*.txt "$DEST/evidence/" 2>/dev/null || true

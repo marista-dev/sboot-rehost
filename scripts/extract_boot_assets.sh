@@ -62,4 +62,4 @@ if [ -n "$SUPER" ]; then
 fi
 
 echo "== 결과 =="; ls -la "$FW"
-echo "다음: kernel-boot-analyzer 가 DTB 로 머신 골격 + 커널 게이트 도출"
+echo "다음: static-analyzer 가 DTB 로 머신 골격 + 커널 게이트 도출"
