@@ -1,0 +1,24 @@
+# profiles/mediatek.yaml - MediaTek search hints.
+# No values (addresses, offsets) live here; they are derived from the target
+# firmware (honesty rule 1).
+
+name: mediatek
+description: search hints for the MediaTek family
+extends: generic
+
+bootloader:
+  known_strings: ["lk", "LK", "boot mode", "fastboot", "preloader"]
+  prompt_candidates: ["> ", "fastboot> "]
+  notes:
+    - the bootloader is LK-based, so its strings and layout differ from S-Boot
+    - when preloader and lk ship separately, state in INPUT.md which one is the target
+
+kernel:
+  uart_earlycon: mtk
+  notes:
+    - confirm the earlycon family from the DTB serial node compatible
+
+storage:
+  hci_kind: ufs                       # some devices are eMMC instead; confirm from the DTB
+  notes:
+    - decide ufs versus mmc from which node actually exists in the DTB

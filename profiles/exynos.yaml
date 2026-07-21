@@ -1,0 +1,26 @@
+# profiles/exynos.yaml - Samsung Exynos search hints.
+# No values (addresses, offsets) live here; they are derived from the target
+# firmware (honesty rule 1).
+
+name: exynos
+description: search hints for the Samsung Exynos family
+extends: generic
+
+bootloader:
+  known_strings: ["S-BOOT", "autoboot", "Following commands", "dramtest", "reset"]
+  prompt_candidates: ["S-BOOT # "]
+  notes:
+    - sboot.bin is usually a multi-stage BL1/BL2/BL3 image; carve out the BL3 region only
+    - if the carve verdict fails, re-scan the original sboot.bin on 4 KB alignment
+
+kernel:
+  uart_earlycon: exynos4210          # earlycon family, confirm against DTB /chosen
+  notes:
+    - /chosen bootargs commonly carries kvm-arm.mode=protected, so HVC belongs to the kernel pKVM
+    - always wire arch-timer as full INTIDs; the DTB lists relative numbers
+
+storage:
+  hci_kind: ufs
+  notes:
+    - the vendor UFS driver often ships as a separate .ko, which is required for K3
+    - a platform telemetry function causing a null dereference is a .ko bypass candidate

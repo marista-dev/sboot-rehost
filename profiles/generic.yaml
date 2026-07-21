@@ -1,0 +1,41 @@
+# profiles/generic.yaml - SoC profile (defaults).
+#
+# A profile carries **hints about where to look**, never values.
+# Real addresses and offsets are always derived from the target firmware
+# (honesty rule 1, never borrow).
+#
+# Supporting a new SoC means copying this file and adjusting the hints.
+# The agent prompts stay untouched.
+
+name: generic
+description: default search hints for an unknown or unprofiled target
+
+bootloader:            # track 1
+  # ASCII worth looking for when judging whether a BL3 is full.
+  # Their absence alone does not prove a carve.
+  known_strings: ["S-BOOT", "autoboot", "Following commands", "help", "reset"]
+  # Alignment and range for the entry candidate sweep
+  entry_align: 0x1000
+  entry_scan_limit: 0x300000
+  # Prompt candidates - the starting point for the shell function xref
+  prompt_candidates: ["S-BOOT # ", "# ", "> "]
+
+kernel:                # track 2
+  # Which DTB nodes to read - what to look for, not where it is
+  dtb_nodes:
+    cmdline: /chosen
+    cpus: /cpus
+    memory: /memory
+    interrupt_controller: "compatible=arm,gic-v3"
+    uart: "serial|uart"
+    storage_hci: "ufs|mmc|nvme"
+  # arch-timer must be wired as full INTIDs; relative numbers trip a GIC assert
+  arch_timer_intid: { secure_phys: 29, nonsecure_phys: 30, virt: 27, hyp: 26 }
+  # Keywords for locating security gates
+  gate_keywords: [fips, crypto, defex, selinux, avb, vbmeta, complete_formation]
+
+storage:               # track 2 K3
+  # Backing image block size candidates, settled by the EFI PART signature offset
+  block_size_candidates: [4096, 512]
+  # UniPro DME opcodes - spec constants, identical across devices
+  dme_opcode: { get: 0x01, set: 0x02, peer_get: 0x03, peer_set: 0x04 }
