@@ -11,28 +11,85 @@
 
 ---
 
-## 1. 설치 (마켓플레이스)
+## 1. 설치
 
 **전제**: `hyu-sslab` org 접근 권한 + 로컬 git 인증(HTTPS 토큰 또는 SSH).
 
+### CLI (터미널)
 ```
 /plugin marketplace add hyu-sslab/sboot-rehost
-```
-```
 /plugin install sboot-rehost@sboot-rehost-marketplace
+/reload-plugins
 ```
 
-**VS Code 확장**은 `/plugin` 대신 `/plugins` 로 관리창을 연 뒤 **Add marketplace**
-`hyu-sslab/sboot-rehost` → **Install** `sboot-rehost`.
+### VS Code 확장
+프롬프트 상자에 **`/plugins`** (복수형) 를 입력하면 **Manage plugins** 창이 열린다.
 
-새 버전 받기:
-```
-/plugin marketplace update sboot-rehost-marketplace
-```
+1. **Marketplaces** 탭 → 입력란에 `hyu-sslab/sboot-rehost` 를 넣어 마켓플레이스 추가
+2. **Plugins** 탭 → 목록에서 `sboot-rehost` 찾아 **Install**
+3. 설치 범위 선택 — *Install for you*(전체 프로젝트) / *Install for this project* / *Install locally*
+4. 하단 배너의 안내대로 **Claude Code 재시작**
+
+> 확장의 플러그인 관리는 내부적으로 CLI 와 같은 명령을 쓴다. 확장에서 추가한
+> 마켓플레이스·플러그인은 CLI 에서도 그대로 보이고 그 반대도 같다.
 
 ---
 
-## 2. 사용
+## 2. 업데이트
+
+### CLI (터미널)
+```
+/plugin marketplace update sboot-rehost-marketplace   # 카탈로그 갱신
+/reload-plugins                                       # 재시작 없이 적용
+```
+
+`/plugin` 을 실행하면 4개 탭(**Discover · Installed · Marketplaces · Errors**)이 있는
+관리 화면이 열린다. **Marketplaces** 탭에서 갱신·삭제를 GUI 로도 할 수 있다.
+
+### VS Code 확장
+1. 프롬프트 상자에 **`/plugins`** 입력
+2. **Marketplaces** 탭으로 이동
+3. `sboot-rehost-marketplace` 옆의 **새로고침(refresh) 아이콘** 클릭 → 플러그인 목록 갱신
+4. 배너가 뜨면 **Claude Code 재시작**
+
+### 자동 업데이트 (기본 꺼짐)
+
+Claude Code 는 세션 시작 후 백그라운드에서 마켓플레이스와 설치된 플러그인을 자동으로
+갱신할 수 있다. 다만 **서드파티 마켓플레이스는 자동 업데이트가 기본 비활성**이다
+(Anthropic 공식 마켓플레이스만 기본 활성). 이 플러그인도 서드파티이므로 켜려면:
+
+```
+/plugin  →  Marketplaces 탭  →  sboot-rehost-marketplace 선택  →  Enable auto-update
+```
+
+켜 두면 세션 시작 후 최대 10분 이내 무작위 지연을 두고 확인하며, 갱신되면
+`/reload-plugins` 를 실행하라는 알림이 뜬다(또는 다음 실행 때 새 버전이 로드된다).
+실행 중인 세션은 시작 시점에 로드한 버전을 계속 쓴다.
+
+### 업데이트가 안 될 때
+
+| 증상 | 조치 |
+|---|---|
+| 새 명령·스킬이 안 보임 | `/reload-plugins` → 그래도 안 되면 Claude Code 재시작 |
+| 마켓플레이스에 플러그인이 없다고 나옴 | 로컬 카탈로그가 낡음 → `/plugin marketplace update sboot-rehost-marketplace` |
+| 스킬이 계속 안 나타남 | 캐시 삭제 후 재설치: `rm -rf ~/.claude/plugins/cache` → Claude Code 재시작 |
+| `/plugin` 명령 자체가 없음 | Claude Code 가 오래됨. `claude --version` 확인 후 업데이트 (`npm install -g @anthropic-ai/claude-code@latest` 또는 `brew upgrade claude-code`) |
+
+> **★ 메인테이너 주의 — `version` 을 올려야 배포된다**
+>
+> `plugin.json` 에 `version` 이 **설정돼 있으면 사용자는 그 값을 올렸을 때만 업데이트를
+> 받는다.** 커밋만 푸시하고 버전을 그대로 두면 사용자 쪽에서는 아무 일도 일어나지 않는다.
+> 새 버전을 낼 때는 `.claude-plugin/plugin.json` 과 `.claude-plugin/marketplace.json` 의
+> `version` 을 **함께** 올려서 푸시한다.
+> (`version` 을 아예 비우면 git 커밋 SHA 가 버전이 되어 매 커밋이 새 버전이 된다.)
+
+출처: [Discover and install plugins](https://code.claude.com/docs/en/discover-plugins) ·
+[Use Claude Code in VS Code](https://code.claude.com/docs/en/vs-code) ·
+[Create plugins](https://code.claude.com/docs/en/plugins)
+
+---
+
+## 3. 사용
 
 **① 폴더 준비 (설치 후 1회)**
 ```
@@ -63,7 +120,7 @@
 
 ---
 
-## 3. 명령어
+## 4. 명령어
 
 | 명령 | 역할 |
 |---|---|
@@ -79,7 +136,7 @@
 
 ---
 
-## 4. 구조
+## 5. 구조
 
 **측정은 스크립트, 해석·제어는 LLM, 정지의 입력값은 사실.**
 
@@ -108,7 +165,7 @@
 
 ---
 
-## 5. 검증 (2단, 방향 비대칭)
+## 6. 검증 (2단, 방향 비대칭)
 
 성공은 **실제 트레이스·콘솔·커널 메시지**로만 판정한다(regex 단독 불인정).
 
@@ -126,7 +183,7 @@
 
 ---
 
-## 6. 멈추는 조건
+## 7. 멈추는 조건
 
 **회차 수·소요 시간은 멈출 이유가 아니다.** 시도할 수(手)가 남아 있는 한 계속한다.
 멈추는 경우는 **구조상 목표에 도달할 수 없을 때뿐**이다:
@@ -140,7 +197,7 @@
 
 ---
 
-## 7. 환경 / 기록 / 한계
+## 8. 환경 / 기록 / 한계
 
 - **환경**: WSL2(Ubuntu 22.04+). 첫 `rehost-init` 이 QEMU 10.2.2(aarch64) 등을 자동 설치.
 - **기록**: 사람이 읽는 `JOURNAL.md`/`PROGRESS.md`/`VERIFICATION.md` +
@@ -152,7 +209,7 @@
 
 ---
 
-## 8. 문서
+## 9. 문서
 
 **[docs/components.md](docs/components.md)** — 아키텍처의 각 컴포넌트를 실행 순서대로
 정리한 문서. 컴포넌트마다 역할 · 정체 · 입력/출력 · 동작 과정 · 규칙을 항목화했다.
