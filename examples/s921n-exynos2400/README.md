@@ -1,6 +1,6 @@
 # SM-S921N (Exynos 2400) — 트랙 1 Worked Example
 
-`/sboot-rehost:rehost-sboot` (트랙 1) 가 처음부터 끝까지 동작했을 때 도달하는 최종 상태.
+`/sboot-rehost:rehost-bootloader` (트랙 1) 가 처음부터 끝까지 동작했을 때 도달하는 최종 상태.
 
 ## 파일
 

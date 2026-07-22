@@ -285,7 +285,6 @@ success·REAL 금지.
   생성(★ 덮어쓰기 금지) + 언팩·WSL 이동 + 트랙·등급 프롬프트 → INPUT.md + `.active`.
 - **`/sboot-rehost:rehost-bootloader`** — 트랙 1 실행 → `pipeline.js({track: 1})`.
   S-Boot·LK·aboot 등 **벤더 구현체가 달라도 같은 단계이므로 같은 명령**이다.
-  (구 이름 `rehost-sboot` 은 별칭으로 남아 있다.)
 - **`/sboot-rehost:rehost-kernel`** — 트랙 2 실행 → `pipeline.js({track: 2})`
 - **`/sboot-rehost:rehost-status`** — 워크스페이스 목록 + 진행/검증/정지 요약
 - **`/sboot-rehost:rehost-export`** — **목표 완료 확인 후** "빌드 없이 실행" 키트 조립 →

@@ -73,4 +73,4 @@ which meson && meson --version || true
 
 echo
 echo "OK: 환경 셋업 완료."
-echo "다음 단계: Claude Code 에서 /sboot-rehost:rehost-sboot (트랙 1) 또는 /sboot-rehost:rehost-kernel (트랙 2) 호출"
+echo "다음 단계: Claude Code 에서 /sboot-rehost:rehost-bootloader (트랙 1) 또는 /sboot-rehost:rehost-kernel (트랙 2) 호출"
