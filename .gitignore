@@ -39,6 +39,7 @@ KERNEL_STATIC.md
 PROGRESS.md
 VERIFICATION.md
 JOURNAL.md
+new_example/
 
 # ────────────────────────────────────────────────────────────────
 # examples/ — 전부 무시 (로컬 펌웨어 작업 예제가 git 에 안 섞이게).

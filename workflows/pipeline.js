@@ -88,27 +88,37 @@ const machine = track === 1 ? `${slug}-bootloader` : `${slug}-kernel`
 // raw partitions can never print it, so keeping it in the ladder unconditionally
 // would strand such a run short of a goal it cannot reach by construction.
 const hasSuper = args?.has_super === true
-const LADDERS = {
-  // Track 1 grades are depth of real bootloader function, and the first rung is
-  // the interactive surface this firmware actually has - not "shell" by
-  // assumption. The rungs above it mean the same thing on every surface:
-  //   A  reach the surface and run its listing command  (help / getvar)
-  //   B  other command handlers actually do their work
-  //   C  the bootloader proceeds with its normal boot flow (autoboot)
-  1: {
-    A: [surface],
-    B: [surface, 'commands'],
-    C: [surface, 'commands', 'autoboot'],
-  },
-  2: {
-    K1: ['userspace'],
-    K2: ['userspace', 'rootfs'],
-    K3: ['userspace', 'link_up', 'power_mode', 'scsi_attach', 'partitions_up']
-          .concat(hasSuper ? ['super_mounted'] : []),
-  },
+
+// The ladder is a function of the surface, because static-analyzer may correct
+// the surface after this point and the goals must follow that correction rather
+// than force a re-run.
+//
+// Track 1 grades are depth of real bootloader function, and the first rung is
+// the interactive surface this firmware actually has - not "shell" by
+// assumption. The rungs above it mean the same thing on every surface:
+//   A  reach the surface and run its listing command  (help / getvar)
+//   B  other command handlers actually do their work
+//   C  the bootloader proceeds with its normal boot flow (autoboot)
+function goalsFor(surfaceName) {
+  const ladders = {
+    1: {
+      A: [surfaceName],
+      B: [surfaceName, 'commands'],
+      C: [surfaceName, 'commands', 'autoboot'],
+    },
+    2: {
+      K1: ['userspace'],
+      K2: ['userspace', 'rootfs'],
+      K3: ['userspace', 'link_up', 'power_mode', 'scsi_attach', 'partitions_up']
+            .concat(hasSuper ? ['super_mounted'] : []),
+    },
+  }
+  return (ladders[track] || {})[target] || ladders[1].A
 }
-const goals = (LADDERS[track] || {})[target] || LADDERS[1].A
-const ladderArg = goals.join(',')
+
+let activeSurface = surface
+let goals = goalsFor(activeSurface)
+let ladderArg = goals.join(',')
 const KNOWN_FIXERS = ['fixer-memory', 'fixer-el3', 'fixer-bootflow',
                       'fixer-kernel', 'fixer-storage']
 
@@ -338,17 +348,22 @@ if (track === 2 && prior?.assets_ok === false) {
 }
 
 // static-analyzer may correct setup's surface hint; measurement wins over the hint.
+// Adopt the derived surface and keep going - stopping to ask the user to edit
+// INPUT.md would break the autonomy contract, and a corrected goal is a derived
+// fact, not a structural impossibility.
 const derivedSurface = String(prior?.bl_surface ?? '').toLowerCase()
-if (track === 1 && SURFACES.includes(derivedSurface) && derivedSurface !== surface) {
-  log(`[분석] 표면 정정: 힌트 "${surface}" → 도출 "${derivedSurface}". ` +
-      `목표 사다리를 "${derivedSurface}" 로 바꿔 재실행하세요 ` +
-      `(INPUT.md 의 bl_surface 갱신).`)
-  return {
-    success: false, stopped: true, stop_reason: 'SURFACE_CORRECTED',
-    hinted_surface: surface, derived_surface: derivedSurface,
-    note: `INPUT.md 의 bl_surface 를 "${derivedSurface}" 로 고치고 같은 명령을 다시 실행하면 ` +
-          `그 표면을 목표로 진행합니다. 잘못된 표면으로 회차를 태우지 않기 위한 조기 종료입니다.`,
-  }
+if (track === 1 && SURFACES.includes(derivedSurface) && derivedSurface !== activeSurface) {
+  const before = activeSurface
+  activeSurface = derivedSurface
+  goals = goalsFor(activeSurface)
+  ladderArg = goals.join(',')
+  log(`[분석] 표면 정정: 힌트 "${before}" → 도출 "${activeSurface}". ` +
+      `목표 사다리를 ${goals.join(' → ')} 로 바꿔 계속합니다.`)
+  await shell('surface-correction', 'Analyze',
+    `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" decision ` +
+    `${shq('부트로더 인터랙티브 표면')} ${shq(activeSurface)} ` +
+    `${shq(`setup 힌트는 ${before} 였으나 static-analyzer 가 입력 경로를 도출해 정정`)}`,
+    OK_SCHEMA)
 }
 
 if (blockers.length) {
@@ -441,7 +456,7 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   const obs = await shell(`run-${round}`, 'Loop',
     `bash "${PLUGIN}/scripts/run_round.sh" "${workdir}" ${track} ${machine} ${round} ` +
     `${shq(goal)} ${shq(ladderArg)}` +
-    (track === 1 ? ` ${shq(bootloader_path)} help ${shq(surface)}` : '') + `\n` +
+    (track === 1 ? ` ${shq(bootloader_path)} help ${shq(activeSurface)}` : '') + `\n` +
     `\n# This prints ONE observation document, also saved to ${workdir}/observation.json.\n` +
     `# Relay it as-is. Do not merge, re-derive or adjust any field - above all\n` +
     `# stop and stop_reason, which the pipeline enforces against your route.`,
@@ -686,7 +701,7 @@ phase('Verify')
 const verifyCmd =
   `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Verify"\n` +
   `python3 "${PLUGIN}/scripts/verify.py" "${workdir}" --track ${track} --target ${target}` +
-  (track === 1 ? ` --bl3 "${bootloader_path}" --surface ${surface}` : '')
+  (track === 1 ? ` --bl3 "${bootloader_path}" --surface ${activeSurface}` : '')
 
 const verifier = await agent(
   `This is stage 2 of the 5/5 verification.\n\n` +

@@ -110,6 +110,42 @@ Inside the shell function, find `mrs x?, cntpct_el0` followed by `cmp` and
 `b.ls`/`b.gt`, and report that branch address. If absent, undetermined with
 `confirm_plan: "confirmed in round N when the shell exits immediately"`.
 
+### 13) Interactive surface (do this before anything else)
+
+A command table existing in the binary does **not** mean it is reachable.
+Establish, as fact, whether an input path exists:
+
+- **UART**: does the driver have a receive path (RBR read, rx polling), or only
+  `putc`? An output-only UART cannot carry a shell.
+- **USB**: which dispatchers exist (fastboot, download agent, vendor protocols),
+  and does any of them reference the console command table? A table that no
+  dispatcher walks is an island.
+
+Report `bl_surface` as `shell`, `fastboot`, or **`none`** when nothing has an
+input path. `none` is a hard blocker - say so rather than inventing a route.
+Forcing the listing command through a trampoline is FORCED, not a reachable
+surface.
+
+### 14) Milestone tokens (required for grades B and C)
+
+Write `<workdir>/milestone_tokens.txt` with the console strings that prove each
+rung, one per line as `<milestone>\t<token>`:
+
+```
+shell     <TAB>  S-BOOT #
+shell     <TAB>  Following commands
+commands  <TAB>  <a string only a working command handler prints>
+autoboot  <TAB>  <a string only the normal boot flow prints>
+```
+
+Use the surface name (`shell` or `fastboot`) for the first rung. **These must be
+strings you found in the bootloader image**, not strings you expect - the run
+script checks each one against the machine source, and anything the machine also
+contains is treated as self-injection.
+
+Without this file only the surface rung can be observed, so a run targeting
+grade B or C would never advance past A.
+
 Write the results and the disassembly evidence into `STATIC.md`.
 
 ---

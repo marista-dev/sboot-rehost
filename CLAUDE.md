@@ -148,7 +148,7 @@ python3 scripts/record.py <wd> blocker code=BLOCKED_KO detail="…"
 
 | 코드 | 조건 | 감지 |
 |---|---|---|
-| `BLOCKED_CARVE` | BL3 가 carve | static-analyzer 도출 (사실) |
+| `BLOCKED_CARVE` | 부트로더 이미지가 carve | static-analyzer 도출 (사실) |
 | `BLOCKED_ASSET` | 부팅 자산 없음 | 파일 체크 |
 | `BLOCKED_KO` | K3 인데 **`.ko` 부재 AND 커널 빌트인도 아님** | static-analyzer 도출 |
 | `BLOCKED_BUILD` | ninja 실패 | 빌드 결과 (추측 수정 금지) |
@@ -317,7 +317,8 @@ success·REAL 금지.
     ├── 07_logs/                   회차별 콘솔 + 요약 (로컬)
     ├── 08_docs/                   분석 메모 (+ .record/ 타이머·스냅샷)
     ├── 10_reproduce/              재현 키트
-    ├── (트랙 1) STATIC.md · 01_firmware/ 02_unpacked/ 03_bl3/ 04_static-analysis/
+    ├── (트랙 1) STATIC.md · milestone_tokens.txt · 01_firmware/ 02_unpacked/
+    │            03_bootloader/ 04_static-analysis/
     └── (트랙 2) KERNEL_STATIC.md · fw/ (Image.patched, *.dtb, initramfs, super)
 
 WSL ext4 (대용량):

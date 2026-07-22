@@ -69,8 +69,15 @@ should suspect an existing bypass's side effects before adding a new one.
 ## Reaching a goal is not a stop point
 
 If the run reached a milestone, report it in `milestone_reached` instead of a
-category: `shell`, `userspace`, `rootfs`, `link_up`, `power_mode`, `scsi_attach`,
-`partitions_up`, `super_mounted`.
+category.
+
+| track | rungs |
+|---|---|
+| 1 (bootloader) | the surface — `shell` or `fastboot` — then `commands`, then `autoboot` |
+| 2 (kernel) | `userspace`, `rootfs`, `link_up`, `power_mode`, `scsi_attach`, `partitions_up`, `super_mounted` |
+
+Track 1's first rung is whichever surface this bootloader actually has, so a
+MediaTek LK run reports `fastboot` where an S-Boot run reports `shell`.
 
 But when `fingerprint.json` has `source_gate.injected == true`, **nothing was
 reached** - our machine printed that string. Keep classifying the stop point and
