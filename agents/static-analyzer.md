@@ -161,6 +161,43 @@ Report each site as `(file_off, expected_word, new_word, why)`. **Confirm
 `expected_word` with capstone** and attach it. A gate you cannot locate is
 "undetermined - derive later from the panic symbol".
 
+### 4) Storage driver provenance (decides K3 vs K3*)
+
+A missing vendor `.ko` does **not** by itself mean K3 is unreachable. Many
+kernels compile the vendor storage driver in (`CONFIG_SCSI_UFS_*=y`), so no
+module exists by design while the real vendor driver is still present and will
+still drive a modelled controller.
+
+Determine which case this firmware is, as a fact:
+
+```bash
+# module form: is there a vendor storage .ko in vendor/ or the ramdisk?
+find <vendor_or_ramdisk> -name '*ufs*.ko' -o -name '*scsi*.ko'
+# built-in form: does the kernel image itself carry the driver?
+strings <Image> | grep -iE 'ufshcd|ufs-exynos|exynos-ufs|ufs_qcom|Power mode change'
+```
+
+| finding | verdict | what it means |
+|---|---|---|
+| vendor `.ko` present | **K3** | load the real module against the modelled HCI |
+| no `.ko`, but driver strings/symbols in `Image` | **K3\*** | driver is built in; model the real HCI and the built-in vendor driver drives it |
+| no `.ko` and no driver in `Image` | **`BLOCKED_KO`** | genuinely unreachable - report as a hard blocker |
+
+Report this as `storage_driver: { form: "module" | "builtin" | "absent", evidence: … }`.
+Only `absent` is a blocker. Declaring a blocker on `builtin` would refuse a run
+that is actually reachable, which is the worst kind of stop.
+
+### 5) Rootfs topology (decides the K3 capstone)
+
+Whether `super_mounted` is even reachable depends on the image layout:
+
+| finding | consequence |
+|---|---|
+| `super.img` present (dm-linear, usually EROFS) | capstone `super_mounted` applies |
+| separate `system`/`vendor` raw images (often ext4) | **no capstone** - K3 completes at `partitions_up` |
+
+Report `has_super: true/false` with the evidence (which image files exist).
+
 Write the results into `KERNEL_STATIC.md`.
 
 ---

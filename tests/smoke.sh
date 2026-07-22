@@ -234,6 +234,57 @@ QEMU="/nonexistent/qemu" bash "$S/run_round.sh" "$FW" 1 m 1 shell "shell" "$FW/b
 RF=$(python3 -c "import json;print(json.load(open('$ROOT/obsf.json'))['run_ok'])" 2>/dev/null)
 chk "run_ok=false 로 정직 보고" "$RF" "False"
 
+# =============================================================================
+hdr "11. 펌웨어 형상 다양성 (9820 사례 회귀)"
+
+# 11a. ext4 rootfs 를 K2 증거로 인정하는가 (EROFS 만 인정하던 회귀)
+EW=$(new_ws ext4); printf 'int y;\n' > "$EW/06_machine/machine_kernel.c"
+printf -- '- 대상: t\n- 이유: r\n- 방법: m\n- 부작용: s\n' > "$EW/06_machine/bypasses.md"
+printf 'Run /init\nEXT4-fs (sda): mounted filesystem\nVFS: Mounted root (ext4 filesystem) readonly\n' > "$EW/07_logs/kboot_1.txt"
+V=$(python3 "$S/verify.py" "$EW" --track 2 --target K2 2>/dev/null)
+chk "ext4 rootfs 를 K2 로 인정" "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][1]["pass"])')" "True"
+
+# 11b. K3 는 partitions_up 필수 — 중간 마일스톤으로 통과 금지
+KW=$(new_ws k3mid); printf 'int y;\n' > "$KW/06_machine/machine_kernel.c"
+printf '### b\n- **대상**: t\n- **이유**: r\n- **방법**: m\n- **알려진 부작용**: s\n' > "$KW/06_machine/bypasses.md"
+printf 'Run /init\nscsi host0: ufshcd\nPower mode change(0)\n' > "$KW/07_logs/kboot_1.txt"
+printf 'UTRD UPIU Query SCSI\n' > "$KW/07_logs/kboot_1.log"
+V=$(python3 "$S/verify.py" "$KW" --track 2 --target K3 --trace "$KW/07_logs/kboot_1.log" 2>/dev/null)
+chk "K3 중간 마일스톤은 항목2 불통과" "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][1]["pass"])')" "False"
+chk "UFS 단계를 미완으로 보고"        "$(echo "$V" | python3 -c 'import json,sys;print("미완" in json.load(sys.stdin)["ufs_controller"]["stage"])')" "True"
+chk "마크다운 강조 우회 4항목 인식"    "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][4]["pass"])')" "True"
+
+# 11c. partitions_up 도달 시 K3a 완료
+printf 'Run /init\nscsi host0: ufshcd\n[sda] Attached SCSI disk\nsda: sda1 sda2\n' > "$KW/07_logs/kboot_1.txt"
+V=$(python3 "$S/verify.py" "$KW" --track 2 --target K3 --trace "$KW/07_logs/kboot_1.log" 2>/dev/null)
+chk "partitions_up → K3a 완료" "$(echo "$V" | python3 -c 'import json,sys;print("K3a" in json.load(sys.stdin)["ufs_controller"]["stage"])')" "True"
+
+# 11d. 소스 negative — 주석·#include 는 출력이 아니다
+CW=$(new_ws srcneg)
+printf '#include "qapi/error.h"\n/* 분석 주석: autoboot 게이트 */\nstatic void f(void){ qemu_chr_fe_write_all(c,b,1); }\n' > "$CW/06_machine/machine.c"
+printf 'autoboot error\n' > "$CW/07_logs/console_1.txt"
+printf 'x\x00autoboot\x00error\x00' > "$CW/bl3.bin"
+printf '| shell_func | 0x1234abcd |\n' > "$CW/STATIC.md"
+printf '0x1234abcd: stp\n' > "$CW/07_logs/run_1.log"
+V=$(python3 "$S/verify.py" "$CW" --track 1 --bl3 "$CW/bl3.bin" --trace "$CW/07_logs/run_1.log" 2>/dev/null)
+chk "주석·#include 는 누출로 안 셈" "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][2]["pass"])')" "True"
+
+# 11e. 0 바이트 initramfs 를 QEMU 에 넘기지 않는가
+ZW=$(new_ws zeroinit); : > "$ZW/fw/initramfs.cpio.gz"; touch "$ZW/fw/Image.patched"
+printf 'int z;\n' > "$ZW/06_machine/machine_kernel.c"
+printf 'boot\n' > "$ROOT/conz.txt"; printf 'trace\n' > "$ROOT/trcz.txt"; make_qemu "$ROOT/conz.txt" "$ROOT/trcz.txt"
+cat > "$BIN/fake-qemu-args" <<'EOF'
+#!/usr/bin/env bash
+echo "$@" > /tmp/qemu_args_seen.txt
+OUT=""; LOG=""
+while [ $# -gt 0 ]; do case "$1" in -serial) OUT="${2#file:}"; shift 2;; -D) LOG="$2"; shift 2;; *) shift;; esac; done
+[ -n "$OUT" ] && echo boot > "$OUT"; [ -n "$LOG" ] && echo trace > "$LOG"
+EOF
+chmod +x "$BIN/fake-qemu-args"
+QEMU="$BIN/fake-qemu-args" bash "$S/run_kernel.sh" "$ZW" test-kernel 1 >/dev/null 2>&1
+if grep -q '\-initrd' /tmp/qemu_args_seen.txt 2>/dev/null; then bad "0 바이트 initramfs 가 QEMU 로 전달됨"; else ok "0 바이트 initramfs 는 전달 안 함"; fi
+rm -f /tmp/qemu_args_seen.txt
+
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
 echo "작업 폴더: $ROOT"
 [ "$FAIL" -eq 0 ]

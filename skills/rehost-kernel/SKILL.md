@@ -1,6 +1,6 @@
 ---
 name: rehost-kernel
-description: 트랙 2 (kernel + storage) 실행. active(또는 workdir=<id>) 워크스페이스의 INPUT.md(track 2) 로 workflows/pipeline.js 를 track=2 로 호출 → static-analyzer 자산·DTB 골격 도출 → machine_kernel.c + 코어/커널 패치 + ninja → 목표 사다리(userspace → link_up → power_mode → scsi_attach → partitions_up → super_mounted) 루프 → 검증 5/5 → 재현 키트. 진짜 커널·벤더 드라이버를 QEMU 에서 실행.
+description: 트랙 2 (kernel + storage) 실행. 목표는 진짜 벤더 UFS 컨트롤러를 실제로 구동시키는 것이며, 마일스톤은 그 완성도의 눈금이다. active(또는 workdir=<id>) 워크스페이스의 INPUT.md(track 2) 로 workflows/pipeline.js 를 track=2 로 호출 → static-analyzer 자산·DTB 골격·드라이버 형태(모듈/빌트인) 도출 → machine_kernel.c + 코어/커널 패치 + ninja → 목표 사다리(userspace → link_up → power_mode → scsi_attach → partitions_up = K3a 완료, super 이미지가 있으면 super_mounted 캡스톤) 루프 → 검증 5/5 → 재현 키트.
 disable-model-invocation: true
 ---
 
@@ -21,9 +21,19 @@ disable-model-invocation: true
    없으면 "먼저 `/sboot-rehost:rehost-setup <이름>`" 안내 후 종료.
 2. **INPUT.md `track: 2`** 확인. `track: 1` 이면 트랙 1 안내 후 종료.
 3. **부팅 자산**: `<workdir>/fw/Image`(+`*.dtb`, initrd).
-   - target=K2/K3 이면 `super_path`.
-   - **target=K3 이면 `storage_driver_ko`(벤더 `.ko`) 필수** — 없으면 하드 블로커.
-     `record.py blocker code=BLOCKED_KO` 기록 후 중단·보고 (K2 로 낮추거나 `.ko` 확보 후 재세팅).
+   - **target=K3 의 드라이버 판정은 `.ko` 유무만으로 하지 않는다.** static-analyzer 가
+     사실로 도출한다:
+
+     | 사실 | 판정 | 진행 |
+     |---|---|---|
+     | 벤더 `.ko` 있음 | **K3** | 진짜 모듈 로드 |
+     | `.ko` 없지만 `Image` 에 드라이버 심볼·문자열 | **K3\*** | 빌트인 벤더 드라이버가 모델을 구동 — **계속 진행** |
+     | `.ko` 없고 `Image` 에도 없음 | `BLOCKED_KO` | `record.py blocker` 기록 후 중단 |
+
+     커널이 UFS 를 빌트인(`=y`)으로 컴파일하면 `.ko` 는 설계상 없다. 이때 블로커를 내면
+     **도달 가능한 실행을 거부**하는 것이다.
+   - **rootfs 토폴로지**도 사실로 도출한다 — `super.img` 가 있으면 캡스톤
+     `super_mounted` 가 적용되고, system/vendor 분리 raw 면 **K3a(`partitions_up`)가 완료**다.
 4. 의존성은 setup 에서 설치됨. 진행 중이면 자동 대기 — 안 묻는다.
 
 ## Step 0.5 — JOURNAL 세션 시작 (필수)
@@ -43,18 +53,24 @@ Workflow({
     target: '<INPUT.md target K1/K2/K3>',
     model: '<INPUT.md model>',
     plugin_dir: '<PLUGIN_DIR>',
+    has_super: <super.img 가 있으면 true, 분리형 system/vendor 면 false>,
     // runtime_round_cap 은 목표 판정이 아니라 런타임 한계(재개 가능). 기본 120.
   }
 })
 ```
 
-### 목표 사다리 (등급이 정한다)
+### 목표 사다리 (등급 + 토폴로지가 정한다)
 
 | 등급 | 사다리 |
 |---|---|
 | K1 | `userspace` |
 | K2 | `userspace` → `rootfs` |
-| K3 | `userspace` → `link_up` → `power_mode` → `scsi_attach` → **`partitions_up`** → `super_mounted` |
+| K3 | `userspace` → `link_up` → `power_mode` → `scsi_attach` → **`partitions_up`**(K3a 완료) |
+| K3 + `has_super` | 위 + `super_mounted` (K3b 캡스톤) |
+
+**K3 는 트랙 2 의 본령이다** — 목표는 rootfs 마운트가 아니라 **진짜 벤더 UFS 컨트롤러를
+실제로 구동시키는 것**이고, 마일스톤은 그 완성도의 눈금이다.
+`partitions_up` 미도달 = 컨트롤러 미완성.
 
 각 목표의 **도달 증거는 커널이 찍은 줄**이다:
 
@@ -95,7 +111,7 @@ pipeline 의 log 를 그대로 전달 (`[Loop] 회차 18 (목표 power_mode) —
 | stop_reason | 의미 |
 |---|---|
 | `BLOCKED_ASSET` | 부팅 자산 미확보 |
-| `BLOCKED_KO` | K3 인데 벤더 `.ko` 부재 → K2 로 낮출지 검토 안내 |
+| `BLOCKED_KO` | K3 인데 `.ko` 부재 **그리고** 커널 빌트인도 아님 → K2 로 낮출지 검토 안내. **빌트인이면 K3\* 로 계속 진행하지 블로커가 아니다** |
 | `BLOCKED_BUILD` | ninja 실패 (원문 그대로) |
 | `BLOCKED_TEE` | vold/Keymint/TEEGRIS 시큐어월드 — **범위 밖**, 미달로 정직 기록 |
 | `EXHAUSTED` | 무브 소진 — 최고 마일스톤과 함께 정직한 미완 |

@@ -52,6 +52,7 @@ fixers:
     handles:
       - poll_stall
       - desc_addr_corrupt
+      - prdt_stride
       - pwrmode_timeout
       - gear_source
       - upiu_field_off

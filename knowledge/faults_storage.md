@@ -3,9 +3,21 @@
 The trap table for `fixer-storage`. **A new wall is one new row here.**
 Methodology: `methodology/track2_kernel_storage.md` section 7.
 
+## What K3 is for
+
+K3 is **the point of track 2**: rehosting *by implementing the controller*. The
+goal is not "mount a rootfs" - it is **driving the real vendor UFS controller**
+far enough that the kernel enumerates partitions. Every milestone below is a
+graduation mark on that controller's completeness, not a separate objective.
+
 Core idea: **use the driver as the instrument.** With no datasheet, observe which
 registers the real vendor driver polls and what value it waits for, then fill the
 model from that observation.
+
+**The vendor driver need not be a `.ko`.** Kernels that compile UFS in
+(`CONFIG_SCSI_UFS_*=y`) have no module by design, yet the real vendor driver is
+present and will drive a modelled controller - that case is **K3\***. Only
+"no `.ko` **and** no driver in the kernel image" is a genuine blocker.
 
 Log sources: the kernel console plus the storage model's own `qemu_log` (vendor
 window reads and writes, UTRD/UPIU transactions).
@@ -14,6 +26,7 @@ window reads and writes, UTRD/UPIU transactions).
 |---|---|---|
 | `poll_stall` | hundreds of repeating `RD <win>+0x… -> 0x0` lines | if that offset is a done/ready bit, set **only that bit**. If the awaited bit is unknown, derive it |
 | `desc_addr_corrupt` | `NOP OUT failed -22`, response ttype mismatch | dump the raw 32-byte UTRD. Bit 31 set in the lo dword means a **sign-extension bug**: cast to `(uint32_t)` before widening |
+| `prdt_stride` | reads "succeed" (`got == bytes`) but userspace executes wrong bytes: SIGILL, `init` dies early, loaded page contents mismatch the on-disk block | dump PRDT entries and measure the **actual stride between them**. Vendor extensions widen the sg entry (Samsung Exynos FMP inline crypto: 16 B descriptor + 112 B = **128 B stride**). Fix the scatter walk's stride; do not assume 16 B |
 | `pwrmode_timeout` | `change_power_mode … -110`, `uic … timeout` | re-check the DME opcode. For `attr==PWRMode`, set `HCS.UPMCRS=1` and raise the `IS.UPMS` completion IRQ |
 | `gear_source` | `max_gear(0)`, `Failed getting max … power mode` | when the log has no gear read, confirm the window and offset by `.ko` disassembly and return the gear value there |
 | `upiu_field_off` | `[sda] Attached` but no `sda1`, `lun=68 edtl=0` | correct `handle_scsi` to `lun = cmd[2]`, `edtl = cmd[12..15]` |
@@ -32,16 +45,25 @@ window reads and writes, UTRD/UPIU transactions).
 
 ## Milestone ladder - the K3 completion bar
 
-| milestone | line the kernel prints | walls to clear |
-|---|---|---|
-| `link_up` | `scsi host0: ufshcd` | PHY calibration (`poll_stall`) |
-| `power_mode` | `Power mode change(0): M(1)G(3)L(2)HS-series(2)` | `desc_addr_corrupt`, `pwrmode_timeout`, `gear_source` |
-| `scsi_attach` | `[sda] Attached SCSI disk` | Query device, `vendor_telemetry_null` |
-| `partitions_up` | `sda: sda1 sda2 sda3 sda4` | `upiu_field_off`, `block_size` |
-| `super_mounted` | `erofs: (device dm-0/dm-4): mounted` plus `supermount: SUCCESS` | async probe timing |
+| stage | milestone | line the kernel prints | walls to clear |
+|---|---|---|---|
+| — | `link_up` | `scsi host0: ufshcd`, or `… UFS link established` | PHY calibration (`poll_stall`) |
+| — | `power_mode` | `Power mode change(0): M(1)G(3)L(2)HS-series(2)` | `desc_addr_corrupt`, `pwrmode_timeout`, `gear_source` |
+| — | `scsi_attach` | `[sda] Attached SCSI disk` | Query device, `vendor_telemetry_null` |
+| **K3a** | **`partitions_up`** | `sda: sda1 sda2 sda3 sda4` | `upiu_field_off`, `block_size`, `prdt_stride` |
+| **K3b** | `super_mounted` | `erofs: (device dm-0/dm-4): mounted` plus `supermount: SUCCESS` | async probe timing |
 
-**`partitions_up` is the K3 minimum, `super_mounted` is full completion.**
-Stopping midway is not completion - report the highest milestone honestly.
+**`partitions_up` (K3a) is minimum completion; `super_mounted` (K3b) is the
+capstone - the full UFS controller.** Below K3a the controller is unfinished:
+report the highest milestone honestly and treat the next wall. Never dress
+partial progress up as completion.
+
+**The capstone depends on the image topology, not on effort.** Only firmware that
+ships a `super.img` (dm-linear, usually EROFS) can print that line. Firmware with
+separate `system`/`vendor` raw images - often ext4, mounting as
+`EXT4-fs (sda): mounted filesystem` / `VFS: Mounted root (ext4 filesystem)` -
+**completes at K3a** and never has a capstone. Keeping `super_mounted` as a
+required rung there would demand a goal that cannot exist.
 
 ## When the value lives in code - `.ko` disassembly (ask static-analyzer)
 
@@ -60,7 +82,14 @@ because the driver visibly progresses. It sends the firmware down a wrong branch
 and **fakes a pass** (honesty rule 1). **Model constant ready values only.**
 
 - **Rule out hypotheses with a raw byte dump** before concluding, especially for
-  `desc_addr_corrupt`.
+  `desc_addr_corrupt` and `prdt_stride`.
+- **Completeness is not correctness.** Instrumenting a read to check
+  `got == bytes` proves every byte arrived; it says nothing about *where* they
+  were placed. A wrong PRDT stride passes that check and still corrupts
+  multi-page transfers, so the mount (single-entry, one page) works while
+  userspace executes garbage. When reads "succeed" but the loaded pages disagree
+  with the on-disk blocks, measure the descriptor stride before blaming anything
+  outside the storage model.
 - **Doubt constants, field positions and block sizes**; re-check them against the
   spec or the on-disk signature rather than intuition.
 - **Document every `.ko` bypass.** Replacing real driver code defeats the point of K3.

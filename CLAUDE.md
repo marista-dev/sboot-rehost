@@ -131,7 +131,7 @@ python3 scripts/record.py <wd> blocker code=BLOCKED_KO detail="…"
 |---|---|---|
 | `BLOCKED_CARVE` | BL3 가 carve | static-analyzer 도출 (사실) |
 | `BLOCKED_ASSET` | 부팅 자산 없음 | 파일 체크 |
-| `BLOCKED_KO` | target=K3 인데 벤더 `.ko` 부재 | 파일 체크 |
+| `BLOCKED_KO` | K3 인데 **`.ko` 부재 AND 커널 빌트인도 아님** | static-analyzer 도출 |
 | `BLOCKED_BUILD` | ninja 실패 | 빌드 결과 (추측 수정 금지) |
 | `BLOCKED_TEE` | vold/Keymint/TEEGRIS 시큐어월드 | 범위 밖 — 미달로 정직 기록 |
 | `EXHAUSTED` | **무브 소진** | `stop_conditions.py` |
@@ -218,9 +218,34 @@ pipeline 이 강제 정지하고 모순을 JOURNAL 에 기록한다. 매몰비�
 | 4 | 드라이버 진짜 구동 (K3) | 트랜잭션 로그에 UTRD/Query/SCSI, `.ko` 는 원본 + 문서화된 우회만 |
 | 5 | 우회 목록 | 커널 패치 + `.ko` 패치 + SMC 셤 전부 4 항목 |
 
-**K3 완료 기준** — 마일스톤 사다리 `link_up` → `power_mode` → `scsi_attach` →
-**`partitions_up`**(최소 완료) → `super_mounted`(완전). **`partitions_up` 미도달이면
-최고 마일스톤을 "미완" 으로 정직 보고하고 success·REAL 금지.**
+**K3 = 트랙 2 의 본령 — "컨트롤러를 구현하면서 리호스팅".** 목표는 rootfs 마운트가 아니라
+**진짜 벤더 UFS 컨트롤러를 실제로 구동시키는 것**이고, 마일스톤은 그 완성도의 눈금이다.
+
+| 단계 | 마일스톤 | 뜻 |
+|---|---|---|
+| — | `link_up` → `power_mode` → `scsi_attach` | 진행 중 (컨트롤러 미완성) |
+| **K3a** | **`partitions_up`** (`sda: sda1…`) | **최소 완료** — 커널이 파티션을 열거 |
+| **K3b** | `super_mounted` | **캡스톤 = 완전한 UFS 컨트롤러** |
+
+**`partitions_up` 미도달 = UFS 컨트롤러 미완성.** 최고 마일스톤을 "미완" 으로 정직 보고하고
+success·REAL 금지.
+
+**캡스톤은 토폴로지가 정한다.** `super.img`(dm-linear, 보통 EROFS)가 있는 펌웨어만
+`super_mounted` 에 도달할 수 있다. system/vendor 가 분리된 raw(ext4) 펌웨어는 구조상 그 줄을
+찍을 수 없으므로 **K3a 가 완료**이며, 사다리에 캡스톤을 넣지 않는다(`has_super`).
+
+### ★ `.ko` 부재 ≠ K3 불가 (K3\*)
+
+벤더 드라이버가 커널에 빌트인(`CONFIG_SCSI_UFS_*=y`)이면 `.ko` 는 **설계상 존재하지 않는다.**
+그래도 진짜 벤더 드라이버는 커널 안에 있고, HCI 를 모델링하면 그 드라이버가 구동한다.
+
+| 사실 | 판정 |
+|---|---|
+| 벤더 `.ko` 있음 | **K3** — 진짜 모듈 로드 |
+| `.ko` 없지만 `Image` 에 드라이버 심볼·문자열 있음 | **K3\*** — 빌트인 드라이버가 모델을 구동 |
+| `.ko` 없고 `Image` 에도 없음 | **`BLOCKED_KO`** — 진짜 도달 불가 |
+
+`.ko` 부재만 보고 블로커를 내면 **도달 가능한 실행을 거부**하는 것이다.
 
 ---
 

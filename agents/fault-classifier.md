@@ -44,6 +44,7 @@ are not sure, answer `unknown` - it costs you nothing.
 | `console_silent` | `unmapped_mmio` | `upiu_field_off` |
 | `fpu_trap` | `rootfs_mount` | `block_size` |
 | `shell_exit_early` | `psci_suspend` / `hvc_pkvm` | `vendor_telemetry_null` |
+| | | `prdt_stride` |
 
 plus **`unknown`** when nothing fits.
 

@@ -15,7 +15,8 @@ Track 1 (bootloader shell) items:
 
 Track 2 (kernel + storage) items:
   1. boot progress   `Run /init`
-  2. kernel evidence per grade (K2: erofs mounted / K3: sda partitions, power mode)
+  2. kernel evidence per grade. For K3 this is the UFS controller completion
+     bar, not "any storage line" - see K3_STAGES.
   3. source negative the machine .c (+HCI) contains none of those strings
   4. real driver     UTRD/Query/SCSI transactions in the trace (N/A unless K3)
   5. bypass record   four fields
@@ -36,7 +37,14 @@ import os
 import re
 import sys
 
-BYPASS_KEYS = ("대상:", "이유:", "방법:", "부작용:")
+# The four bypass fields, written with optional markdown emphasis and, for the
+# side-effect field, the longer "알려진 부작용" wording that real workspaces use.
+BYPASS_FIELDS = {
+    "대상": r"대상",
+    "이유": r"이유",
+    "방법": r"방법",
+    "부작용": r"(?:알려진\s*)?부작용",
+}
 
 
 # --- input discovery ---------------------------------------------------------
@@ -118,31 +126,59 @@ def read_text(path):
 
 # --- shared items ------------------------------------------------------------
 def check_bypass(workdir):
+    """Every bypass entry must carry all four fields.
+
+    Real workspaces write these with markdown emphasis (`**대상**:`) and often
+    spell the last one "알려진 부작용", so matching the bare literal `대상:`
+    reported zero fields and failed a compliant file. Match the field name with
+    optional emphasis and an optional leading list marker instead.
+    """
     path = find_bypass(workdir)
     if not path:
         return False, "우회 기록 파일이 없습니다 (06_machine/bypasses.md)"
     text = read_text(path)
-    counts = {key: text.count(key) for key in BYPASS_KEYS}
-    entries = counts["대상:"]
+    counts = {}
+    for label, pattern in BYPASS_FIELDS.items():
+        rx = re.compile(rf"^[\s>\-*+]*\**\s*{pattern}\s*\**\s*[:：]", re.M)
+        counts[label] = len(rx.findall(text))
+    entries = counts["대상"]
     complete = entries > 0 and len(set(counts.values())) == 1
     if complete:
         return True, f"{os.path.basename(path)}: 우회 {entries} 건, 모두 4 항목을 갖췄습니다"
     return False, f"{os.path.basename(path)}: 항목 수가 어긋납니다 {counts}"
 
 
+def code_literals(path):
+    """Return only the C string literals of a source file.
+
+    Item 3 asks whether the machine *prints* console text. Searching the whole
+    file also hits analysis comments and `#include "qapi/error.h"`, which are
+    not output at all - that produced false leaks on a workspace whose verdict
+    was genuinely 5/5. Strip comments and includes, then keep the literals.
+    """
+    src = read_text(path)
+    src = re.sub(r"/\*.*?\*/", " ", src, flags=re.S)      # block comments
+    src = re.sub(r"//[^\n]*", " ", src)                    # line comments
+    src = re.sub(r"^\s*#\s*include[^\n]*", " ", src, flags=re.M)
+    return " ".join(re.findall(r'"((?:[^"\\]|\\.)*)"', src))
+
+
 def check_source_negative(sources, console_bytes):
-    """A console token of 5+ chars showing up in machine source means self-injection."""
+    """A console token of 5+ chars appearing in a machine string literal is
+    self-injection. Comments and include paths are not output, so they do not
+    count."""
     tokens = set(re.findall(rb"[\w\-]{5,}", console_bytes))
     leaked = []
     for path in sources:
-        src = read_text(path)
+        literals = code_literals(path)
         for token in tokens:
             word = token.decode("latin-1")
-            if word in src:
+            if word in literals:
                 leaked.append(f"{os.path.basename(path)}:{word}")
     if leaked:
-        return False, f"머신 소스에 출력 문자열이 {len(leaked)} 건 누출됐습니다: {leaked[:10]}"
-    return True, f"머신 소스 {len(sources)} 개에 출력 문자열이 없습니다"
+        return False, f"머신 소스의 문자열 리터럴에 출력 문자열이 {len(leaked)} 건 있습니다: {leaked[:10]}"
+    return True, (f"머신 소스 {len(sources)} 개의 문자열 리터럴에 출력 문자열이 없습니다 "
+                  f"(주석·#include 는 출력이 아니므로 제외)")
 
 
 # --- track 1 -----------------------------------------------------------------
@@ -191,11 +227,38 @@ def verify_track1(workdir, args):
 
 
 # --- track 2 -----------------------------------------------------------------
-MILESTONE_EVIDENCE = {
-    "K1": [r"Run /init"],
-    "K2": [r"erofs: \(device dm-\d+\): mounted"],
-    "K3": [r"\bsda: sda\d", r"Power mode change", r"\[sda\] Attached SCSI disk"],
+# Rootfs and link-up wording differ by firmware: EROFS over dm-linear on a super
+# image, or plain ext4 on a raw block device; ufshcd core or the vendor glue
+# driver. Accept either rather than encoding one device's shape as universal.
+ROOTFS_PATTERNS = [
+    r"erofs: \(device dm-\d+\): mounted",
+    r"EXT4-fs \([^)]+\): mounted filesystem",
+    r"VFS: Mounted root \(\w+ filesystem\)",
+]
+LINK_UP_PATTERNS = [
+    r"scsi host\d+: ufshcd",
+    r"ufs\w*[^\n]*: UFS link established",
+]
+
+# K3 is the point of track 2: driving a real vendor UFS controller far enough
+# that the kernel enumerates partitions. The methodology sets the bar at
+# partitions_up (minimum completion); super_mounted is the capstone and only
+# applies to firmware that ships a super image.
+K3_STAGES = {
+    "partitions_up": [r"\bsda: sda\d"],
+    "super_mounted": [r"supermount: SUCCESS",
+                      r"erofs: \(device dm-\d+\): mounted"],
 }
+# Rungs below the completion bar. Reaching one of these is progress, not K3.
+K3_PROGRESS = {
+    "link_up": LINK_UP_PATTERNS,
+    "power_mode": [r"Power mode change\(\d+\)"],
+    "scsi_attach": [r"\[sda\] Attached SCSI disk"],
+}
+
+
+def any_match(patterns, haystack):
+    return [p for p in patterns if re.search(p, haystack)]
 
 
 def verify_track2(workdir, args):
@@ -213,14 +276,30 @@ def verify_track2(workdir, args):
                   "evidence": ("콘솔에서 'Run /init' 을 확인했습니다" if init_ok
                                else "'Run /init' 이 콘솔·트레이스에 없습니다")})
 
-    patterns = MILESTONE_EVIDENCE.get(target, MILESTONE_EVIDENCE["K2"])
-    found = [p for p in patterns if re.search(p, haystack)]
-    items.append({
-        "n": 2, "name": f"커널 메시지 증거 ({target})",
-        "pass": bool(found),
-        "evidence": (f"커널이 찍은 줄에서 {found} 패턴을 확인했습니다" if found
-                     else f"기대한 패턴 {patterns} 이 보이지 않습니다"),
-    })
+    # --- item 2: grade-specific kernel evidence ---
+    if target == "K3":
+        reached = [name for name, pats in K3_PROGRESS.items() if any_match(pats, haystack)]
+        parts = any_match(K3_STAGES["partitions_up"], haystack)
+        capstone = any_match(K3_STAGES["super_mounted"], haystack)
+        if parts:
+            best = "super_mounted (캡스톤)" if capstone else "partitions_up (최소 완료)"
+            evidence = (f"커널이 파티션을 열거했습니다 — 도달 {best}. "
+                        f"통과한 하위 단: {reached or '기록 없음'}")
+        else:
+            evidence = (f"파티션 열거(`sda: sdaN`)가 없습니다. 도달한 하위 단: "
+                        f"{reached or '없음'} — 방법론상 partitions_up 미도달은 "
+                        f"UFS 컨트롤러 미완성입니다")
+        items.append({"n": 2, "name": "커널 메시지 증거 (K3 — partitions_up 필수)",
+                      "pass": bool(parts), "evidence": evidence})
+    else:
+        patterns = ROOTFS_PATTERNS if target == "K2" else [r"Run /init"]
+        found = any_match(patterns, haystack)
+        items.append({
+            "n": 2, "name": f"커널 메시지 증거 ({target})",
+            "pass": bool(found),
+            "evidence": (f"커널이 찍은 줄에서 {found} 확인" if found
+                         else f"기대한 패턴 {patterns} 이 보이지 않습니다"),
+        })
 
     ok, detail = check_source_negative(sources, console)
     items.append({"n": 3, "name": "소스 negative (머신 C 에 그 문자열 없음)",
@@ -242,6 +321,22 @@ def verify_track2(workdir, args):
     return items, console_path, trace_path, sources
 
 
+def k3_stage_report(haystack):
+    """Which rung of the UFS controller ladder the run actually cleared."""
+    cleared = [n for n, p in K3_PROGRESS.items() if any_match(p, haystack)]
+    if any_match(K3_STAGES["partitions_up"], haystack):
+        cleared.append("partitions_up")
+    if any_match(K3_STAGES["super_mounted"], haystack):
+        cleared.append("super_mounted")
+    if "super_mounted" in cleared:
+        stage = "K3b (캡스톤 — 완전한 UFS 컨트롤러)"
+    elif "partitions_up" in cleared:
+        stage = "K3a (최소 완료 — 파티션 열거)"
+    else:
+        stage = "미완 (UFS 컨트롤러 미완성)"
+    return {"stage": stage, "cleared": cleared}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("workdir")
@@ -260,8 +355,11 @@ def main():
             print("verify: track 1 requires --bl3", file=sys.stderr)
             sys.exit(1)
         items, console, trace, sources = verify_track1(args.workdir, args)
+        storage = None
     else:
         items, console, trace, sources = verify_track2(args.workdir, args)
+        storage = k3_stage_report(
+            read_bytes(console).decode("utf-8", errors="replace") + "\n" + read_text(trace))
 
     passes = sum(1 for i in items if i["pass"])
     result = {
@@ -275,6 +373,8 @@ def main():
         "note": ("스크립트 1 차 측정입니다. verifier 가 2 차로 재검증하며, "
                  "FORCED 를 REAL 로 올리려면 byte-level 증거가 필요합니다."),
     }
+    if storage:
+        result["ufs_controller"] = storage
 
     with open(os.path.join(args.workdir, "verdict_script.json"), "w", encoding="utf-8") as fh:
         json.dump(result, fh, ensure_ascii=False, indent=2)

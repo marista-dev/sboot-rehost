@@ -39,6 +39,7 @@ Knowledge: `knowledge/faults_storage.md`
 |---|---|---|
 | `poll_stall` | hundreds of `RD <win>+0x… -> 0x0` lines | if that offset is a done/ready bit, set **only that bit**. If you cannot tell which, escalate |
 | `desc_addr_corrupt` | `NOP OUT failed -22`, response ttype mismatch | dump the raw 32-byte UTRD. If bit 31 of the lo dword is set it is a **sign-extension bug**: cast to `(uint32_t)` before widening |
+| `prdt_stride` | reads report `got == bytes` yet userspace runs wrong bytes (SIGILL, `init` dies, loaded page ≠ on-disk block) | dump PRDT entries and measure the **actual stride**. Vendor extensions widen the sg entry (Samsung Exynos FMP inline crypto: 16 B + 112 B = **128 B**). Fix the scatter walk's stride |
 | `pwrmode_timeout` | `change_power_mode … -110`, `uic … timeout` | re-check the DME opcodes (GET 0x01, SET 0x02, PEER_GET 0x03, PEER_SET 0x04). For `attr==PWRMode` set `HCS.UPMCRS=1` and raise the `IS.UPMS` completion IRQ |
 | `gear_source` | `max_gear(0)`, `Failed getting max … power mode` | if the log never shows the gear read, **request `.ko` disassembly** and return the gear value from the confirmed window offset |
 | `upiu_field_off` | `[sda] Attached` but no `sda1`, `lun=68 edtl=0` | correct `handle_scsi` to `lun = cmd[2]` and `edtl = cmd[12..15]` |
@@ -59,16 +60,27 @@ It resolves `string -> .rela.text -> .text -> readl(<window>+<imm>)`.
 
 ## Milestone ladder - stopping midway is not completion
 
-| milestone | line the kernel prints |
-|---|---|
-| `link_up` | `scsi host0: ufshcd` |
-| `power_mode` | `Power mode change(0): M(1)G(3)L(2)HS-series(2)` |
-| `scsi_attach` | `[sda] Attached SCSI disk` |
-| `partitions_up` | `sda: sda1 sda2 sda3 sda4` - **K3 minimum completion** |
-| `super_mounted` | `erofs: (device dm-0/dm-4): mounted` plus `supermount: SUCCESS` - full |
+K3 is the point of track 2: rehosting *by implementing the controller*. These
+milestones are graduation marks on that controller's completeness.
+
+| stage | milestone | line the kernel prints |
+|---|---|---|
+| — | `link_up` | `scsi host0: ufshcd`, or `… UFS link established` |
+| — | `power_mode` | `Power mode change(0): M(1)G(3)L(2)HS-series(2)` |
+| — | `scsi_attach` | `[sda] Attached SCSI disk` |
+| **K3a** | `partitions_up` | `sda: sda1 sda2 sda3 sda4` - **minimum completion** |
+| **K3b** | `super_mounted` | `erofs: (device dm-0/dm-4): mounted` + `supermount: SUCCESS` - **capstone** |
 
 Below `partitions_up`, **report the highest milestone honestly as incomplete**
 and treat the next wall. Never dress partial progress up as completion.
+
+**The capstone depends on topology, not effort.** Only firmware shipping a
+`super.img` can print it. Separate `system`/`vendor` raw images (often ext4,
+mounting as `EXT4-fs (sda): mounted filesystem`) **complete at K3a**.
+
+**A missing `.ko` is not automatically a blocker.** When the kernel compiles UFS
+in (`=y`) there is no module by design, yet the real vendor driver is present -
+that is **K3\***, and modelling the HCI still lets the genuine driver run.
 
 ## Output (JSON)
 

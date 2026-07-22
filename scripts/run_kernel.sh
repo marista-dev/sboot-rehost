@@ -52,7 +52,9 @@ python3 "$HERE/record.py" "$WORKDIR" start "kboot_${RUN_N}" >/dev/null 2>&1 || t
 
 ARGS=( -M "$MACHINE" -cpu "$CPU" -smp "$SMP" -m "$MEM" -nographic -kernel "$IMAGE" )
 [ -n "$DTB" ]        && ARGS+=( -dtb "$DTB" )
-[ -f "$INITRD" ]     && ARGS+=( -initrd "$INITRD" )
+# -s, not -f: system-as-root firmware ships a zero-byte initramfs placeholder
+# (boot.img ramdisk_size=0). Passing an empty -initrd to QEMU is not harmless.
+[ -s "$INITRD" ]     && ARGS+=( -initrd "$INITRD" )
 [ -n "${CMDLINE:-}" ] && ARGS+=( -append "$CMDLINE" )
 ARGS+=( -serial "file:$OUT" -d "${DFLAGS:-unimp,guest_errors,int}" -D "$LOG" )
 
@@ -89,9 +91,12 @@ check_milestone() {   # $1 = milestone name, $2 = regex the KERNEL must print
     return 0
 }
 
-check_milestone userspace     "Run /init"
-check_milestone rootfs        "erofs: \(device dm-[0-9]+\): mounted"
-check_milestone link_up       "scsi host0: ufshcd"
+# Wording differs by firmware: EROFS over dm-linear on a super image, or plain
+# ext4 on a raw block device; ufshcd core or the vendor glue driver. Encoding
+# one device's shape here would strand every firmware with another shape.
+check_milestone userspace     "Run /init|init: init first stage started"
+check_milestone rootfs        "erofs: \(device dm-[0-9]+\): mounted|EXT4-fs \([^)]+\): mounted filesystem|VFS: Mounted root \([a-z0-9]+ filesystem\)"
+check_milestone link_up       "scsi host[0-9]+: ufshcd|UFS link established"
 check_milestone power_mode    "Power mode change\([0-9]+\)"
 check_milestone scsi_attach   "\[sda\] Attached SCSI disk"
 check_milestone partitions_up "sda: sda[0-9]"

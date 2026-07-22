@@ -67,13 +67,21 @@ const slug = model.toLowerCase().replace(/[^a-z0-9]/g, '')
 const machine = track === 1 ? `sboot-${slug}` : `${slug}-kernel`
 
 // The ladder is what the track/grade actually changes; the loop stays the same.
+//
+// K3 is the point of track 2: driving a real vendor UFS controller until the
+// kernel enumerates partitions. The methodology sets minimum completion at
+// `partitions_up` (K3a); `super_mounted` is the capstone (K3b) and only exists
+// for firmware that ships a super image. Firmware with separate system/vendor
+// raw partitions can never print it, so keeping it in the ladder unconditionally
+// would strand such a run short of a goal it cannot reach by construction.
+const hasSuper = args?.has_super === true
 const LADDERS = {
   1: { A: ['shell'], B: ['shell'], C: ['shell'] },
   2: {
     K1: ['userspace'],
     K2: ['userspace', 'rootfs'],
-    K3: ['userspace', 'link_up', 'power_mode', 'scsi_attach',
-         'partitions_up', 'super_mounted'],
+    K3: ['userspace', 'link_up', 'power_mode', 'scsi_attach', 'partitions_up']
+          .concat(hasSuper ? ['super_mounted'] : []),
   },
 }
 const goals = (LADDERS[track] || {})[target] || LADDERS[1].A

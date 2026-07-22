@@ -67,12 +67,19 @@ case "$OP" in
         fi
     done
 
+    # Field names appear with markdown emphasis (`**대상**:`) and a list marker in
+    # real workspaces, and the last one is often written "알려진 부작용".
+    # Matching the bare literal `대상:` scored a compliant file as zero fields.
+    count_field() {   # $1 = field regex
+        grep -cE "^[[:space:]>*+-]*\**[[:space:]]*$1[[:space:]]*\**[[:space:]]*[:：]" "$2" 2>/dev/null || echo 0
+    }
+
     BF="$(bypass_file)"
     if [ -n "$BF" ]; then
-        n_target=$(grep -c '대상:' "$BF" 2>/dev/null || echo 0)
-        n_reason=$(grep -c '이유:' "$BF" 2>/dev/null || echo 0)
-        n_method=$(grep -c '방법:' "$BF" 2>/dev/null || echo 0)
-        n_effect=$(grep -c '부작용:' "$BF" 2>/dev/null || echo 0)
+        n_target=$(count_field '대상' "$BF")
+        n_reason=$(count_field '이유' "$BF")
+        n_method=$(count_field '방법' "$BF")
+        n_effect=$(count_field '(알려진[[:space:]]*)?부작용' "$BF")
     else
         n_target=0; n_reason=0; n_method=0; n_effect=0
     fi
