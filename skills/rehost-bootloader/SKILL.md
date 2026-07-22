@@ -40,6 +40,18 @@ ARM TF-A 용어의 **BL33(non-secure world bootloader)** 자리다. **벤더 구
 
 `INPUT.md` 의 `bl_surface` 슬롯이 결정하며, **static-analyzer 가 사실로 확정**한다.
 
+### 등급 A/B/C — 표면 위에서 얼마나 깊이 동작하나
+
+| 등급 | 사다리 | `shell` 표면 | `fastboot` 표면 |
+|---|---|---|---|
+| **A** | `[표면]` | 프롬프트 + `help` 출력 | `getvar:` 수신·에코·dispatch |
+| **B** | `[표면, commands]` | `reset`·`printenv` 등 핸들러 동작 | `flash`·`reboot` 등 핸들러 동작 |
+| **C** | `[표면, commands, autoboot]` | autoboot 진행 | 부트모드 결정 → 커널 로드 |
+
+각 단의 관측 문자열은 **static-analyzer 가 도출**해 `<workdir>/milestone_tokens.txt` 에
+`<마일스톤>\t<토큰>` 형식으로 쓴다. 파일이 없으면 표면 기본 토큰만 쓰이므로 **등급 A 만
+관측 가능**하다 — B/C 를 목표로 잡았다면 이 파일이 반드시 있어야 한다.
+
 ### 표면을 잘못 잡으면 도달 불가를 도달로 착각한다
 
 실제 사례(MediaTek LK): 12명령 콘솔이 바이너리에 **실재하지만** UART 드라이버에 수신

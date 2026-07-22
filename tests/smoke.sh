@@ -329,6 +329,19 @@ printf 'static void f(void){}\n' > "$VW/06_machine/machine.c"
 V=$(python3 "$S/verify.py" "$VW" --track 1 --surface fastboot --bl3 "$VW/lk.bin" --trace "$VW/07_logs/run_1.log" 2>/dev/null)
 chk "외부 입력이면 항목4 통과"           "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][3]["pass"])')" "True"
 
+
+# 12d. 등급이 실제로 사다리를 바꾸는가 (A/B/C)
+GW=$(new_ws grades); printf 'int g;\n' > "$GW/06_machine/machine.c"
+printf 'S-BOOT # help\nFollowing commands\nreset: OK\nautoboot aborted..\n' > "$ROOT/cong.txt"
+printf 'trace\n' > "$ROOT/trcg.txt"; make_qemu "$ROOT/cong.txt" "$ROOT/trcg.txt"
+printf 'shell\tFollowing commands\ncommands\treset: OK\nautoboot\tautoboot aborted\n' > "$GW/milestone_tokens.txt"
+printf 'x' > "$GW/bl.bin"
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$GW" 1 bl-test 1 shell "shell,commands,autoboot" "$GW/bl.bin" help shell > "$ROOT/obsg.json" 2>/dev/null
+LISTG=$(python3 -c "import json;print(','.join(json.load(open('$ROOT/obsg.json'))['milestones_reached']))" 2>/dev/null)
+TOPG=$(python3 -c "import json;print(json.load(open('$ROOT/obsg.json'))['milestone'])" 2>/dev/null)
+chk "등급 단(commands·autoboot) 관측" "$LISTG" "shell,commands,autoboot"
+chk "최고 단은 autoboot"              "$TOPG"  "autoboot"
+
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
 echo "작업 폴더: $ROOT"
 [ "$FAIL" -eq 0 ]

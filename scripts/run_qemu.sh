@@ -88,34 +88,50 @@ FAR="${FAR:-none}"; ELR="${ELR:-none}"
 # produces a fake success, and this project always takes the former.
 MILESTONE="none"; INJECTED="false"; INJECTED_TOKEN=""
 SRC_DIR="$WORKDIR/06_machine"
-CONSOLE_HIT="false"
+
+# milestone_tokens.txt lines are "<milestone>\t<token>"; a line with no tab is a
+# token for the surface rung. static-analyzer writes the strings it derived, so
+# grades B/C (commands, autoboot) can be observed on any bootloader.
+REACHED=""
+TAB="$(printf '\t')"
+
+scan_token() {   # $1 = milestone, $2 = console token
+    grep -qF "$2" "$OUT" 2>/dev/null || return 0
+    if grep -qF "$2" "$SRC_DIR"/*.c 2>/dev/null; then
+        INJECTED="true"
+        INJECTED_TOKEN="${INJECTED_TOKEN:+$INJECTED_TOKEN, }$2"
+    else
+        case " $REACHED " in *" $1 "*) ;; *) REACHED="$REACHED $1";; esac
+    fi
+}
 
 TOKEN_FILE="$WORKDIR/milestone_tokens.txt"
 if [ -s "$TOKEN_FILE" ]; then
-    TOKENS=()
     while IFS= read -r line; do
-        [ -n "$line" ] && TOKENS+=("$line")
+        [ -n "$line" ] || continue
+        case "$line" in
+            *"$TAB"*) scan_token "${line%%$TAB*}" "${line#*$TAB}" ;;
+            *)        scan_token "$SURFACE" "$line" ;;
+        esac
     done < "$TOKEN_FILE"
 elif [ "$SURFACE" = "fastboot" ]; then
-    TOKENS=("fastboot: processing commands" "fastboot_init(" "command buf")
+    for t in "fastboot: processing commands" "fastboot_init(" "command buf"; do
+        scan_token "$SURFACE" "$t"
+    done
 else
-    TOKENS=("S-BOOT" "autoboot" "Following commands")
+    for t in "S-BOOT" "Following commands"; do
+        scan_token "$SURFACE" "$t"
+    done
 fi
 
-for token in "${TOKENS[@]}"; do
-    grep -qF "$token" "$OUT" 2>/dev/null || continue
-    if grep -qF "$token" "$SRC_DIR"/*.c 2>/dev/null; then
-        INJECTED="true"
-        INJECTED_TOKEN="${INJECTED_TOKEN:+$INJECTED_TOKEN, }$token"
-    else
-        CONSOLE_HIT="true"
-    fi
+# Injection is dominant: a contaminated console credits nothing at all.
+[ "$INJECTED" = "true" ] && REACHED=""
+
+# Highest rung wins, in track 1 ladder order.
+for m in "$SURFACE" commands autoboot; do
+    case " $REACHED " in *" $m "*) MILESTONE="$m" ;; esac
 done
-MILESTONES_JSON="[]"
-if [ "$CONSOLE_HIT" = "true" ] && [ "$INJECTED" = "false" ]; then
-    MILESTONE="$SURFACE"
-    MILESTONES_JSON="[\"$SURFACE\"]"
-fi
+MILESTONES_JSON=$(python3 -c 'import sys,json;print(json.dumps(sys.argv[1].split()))' "$REACHED")
 
 # Escape anything that could break the JSON document below.
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\n\r\t'; }

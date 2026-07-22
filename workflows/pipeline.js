@@ -89,8 +89,17 @@ const machine = track === 1 ? `${slug}-bootloader` : `${slug}-kernel`
 // would strand such a run short of a goal it cannot reach by construction.
 const hasSuper = args?.has_super === true
 const LADDERS = {
-  // Track 1's rung is the interactive surface, not "shell" by assumption.
-  1: { A: [surface], B: [surface], C: [surface] },
+  // Track 1 grades are depth of real bootloader function, and the first rung is
+  // the interactive surface this firmware actually has - not "shell" by
+  // assumption. The rungs above it mean the same thing on every surface:
+  //   A  reach the surface and run its listing command  (help / getvar)
+  //   B  other command handlers actually do their work
+  //   C  the bootloader proceeds with its normal boot flow (autoboot)
+  1: {
+    A: [surface],
+    B: [surface, 'commands'],
+    C: [surface, 'commands', 'autoboot'],
+  },
   2: {
     K1: ['userspace'],
     K2: ['userspace', 'rootfs'],
