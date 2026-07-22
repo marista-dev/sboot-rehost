@@ -388,6 +388,63 @@ chk "Linux/macOS 에서는 가드 무동작" \
     "$(echo "$JL" | python3 -c 'import json,sys;print(json.load(sys.stdin)["os"] in ("Linux","Darwin"))')" "True"
 
 
+# 14. 도출 결과 배선 (derived_facts.py) — 찾은 것이 실제로 쓰이는가
+printf '\n\033[1m== 14. 도출 결과 배선 ==\033[0m\n'
+DW=$(new_ws derived)
+cat > "$DW/STATIC.md" <<'EOF'
+# 정적 도출
+
+## 도출된 정지점
+
+| 시그니처 | 관측 | 메커니즘 (근거) | 담당 fixer | 시도할 변경 |
+|---|---|---|---|---|
+| `entry_vector_refault` | FAR==ELR=0x620 | VBAR 미설정 (capstone 근거) | `fixer-bootflow` | 진입 PC 수정 |
+EOF
+D1=$(python3 "$S/derived_facts.py" "$DW" --track 1)
+chk "도출한 정지점을 읽는다"     "$(echo "$D1" | python3 -c 'import json,sys;print(json.load(sys.stdin)["new"])')" "1"
+chk "담당 fixer 를 뽑아낸다"     "$(echo "$D1" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop_points"][0]["fixer"])')" "fixer-bootflow"
+
+# 같은 정지점을 또 도출해도 '새 사실' 이 늘면 안 된다 (자기신고 대체의 핵심)
+D2=$(python3 "$S/derived_facts.py" "$DW" --track 1)
+chk "같은 정지점 재도출은 new=0" "$(echo "$D2" | python3 -c 'import json,sys;print(json.load(sys.stdin)["new"])')" "0"
+
+printf '| `smc_unhandled` | 예외2, ELR 이 smc | psci 미구현 (근거) | `fixer-el3` | id 처리 |\n' >> "$DW/STATIC.md"
+D3=$(python3 "$S/derived_facts.py" "$DW" --track 1)
+chk "진짜 새 정지점은 new=1"     "$(echo "$D3" | python3 -c 'import json,sys;print(json.load(sys.stdin)["new"])')" "1"
+
+# 표가 없으면 0 이어야 한다 (없는 걸 지어내지 않음)
+EW2=$(new_ws derived_empty)
+D4=$(python3 "$S/derived_facts.py" "$EW2" --track 1)
+chk "표가 없으면 new=0"          "$(echo "$D4" | python3 -c 'import json,sys;print(json.load(sys.stdin)["new"])')" "0"
+
+# 측정값이 정지 판정까지 이어지는가
+python3 - "$DW" <<'PY2'
+import json, os, sys
+w = sys.argv[1]
+with open(os.path.join(w, "rounds.jsonl"), "w") as f:
+    for i in range(5, 23):
+        f.write(json.dumps({"round": i, "goal": "shell", "fp_exc": "2020000",
+            "fp_far": "0x620", "fp_elr": "0x620", "fp_milestone": "none", "fp_bytes": 0,
+            "category": "unknown", "fixer": "fixer-bootflow", "change_key": None,
+            "effect": "stall", "analyst_new_facts": 0, "fixer_no_new_change": True}) + "\n")
+PY2
+SC=$(python3 "$S/stop_conditions.py" "$DW" --ladder shell)
+chk "새 도출 0 + fixer 소진 → EXHAUSTED" \
+    "$(echo "$SC" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop_reason"])')" "EXHAUSTED"
+
+# 반대로 도출이 계속 나오면 멈추면 안 된다
+python3 - "$DW" <<'PY3'
+import json, os, sys
+w = sys.argv[1]
+rows = open(os.path.join(w, "rounds.jsonl")).read().replace('"analyst_new_facts": 0',
+                                                            '"analyst_new_facts": 1')
+open(os.path.join(w, "rounds.jsonl"), "w").write(rows)
+PY3
+SC2=$(python3 "$S/stop_conditions.py" "$DW" --ladder shell)
+chk "새 도출이 있으면 계속 진행" \
+    "$(echo "$SC2" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop"])')" "False"
+
+
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
 echo "작업 폴더: $ROOT"
 [ "$FAIL" -eq 0 ]

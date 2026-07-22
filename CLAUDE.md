@@ -66,6 +66,7 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 | `wsl_bridge.sh` | 셸이 Windows 면 WSL 로 건너뜀 (scripts 공통 가드) | 실행은 Linux, 기록은 Windows |
 | `check_env.sh` | 루프 전 실행 환경 선행 검사 | 못 도는 셸에서 회차 소모 금지 |
 | `check_change.sh` | 한 변경 검문 (diff · 우회 4항목) | 회차 = 한 변경 |
+| `derived_facts.py` | 도출표의 **새 정지점 수 측정** (시그니처 dedup) | 도출 자기신고 금지 |
 | `stop_conditions.py` | 정지 조건 계산 | 무한 진동 차단 |
 | `verify.py` | 5/5 **측정** | §6 실증거 |
 | `record.py` | 측정치 JSONL 기록 | 추적 가능성 |
@@ -77,6 +78,24 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 **새 정지점 = 테이블 한 줄. 새 fixer = 파일 하나 + 등록부 몇 줄.** 프롬프트는 안 고친다.
 
 ---
+
+## 도출은 기록으로 남아야 쓰인다
+
+**펌웨어당 기록은 하나다** — `STATIC.md`(트랙 1) / `KERNEL_STATIC.md`(트랙 2).
+static-analyzer 는 **덮어쓰지 않고 append** 하며, 루프 안의 재도출도 여기에 쌓는다.
+
+```
+[사전 도출]  static-analyzer → STATIC.md      → Build 가 읽어 머신을 만든다
+[재도출]     static-analyzer → STATIC.md 의
+                              `## 도출된 정지점` 표 한 줄
+                                               → fault-classifier 가 매칭
+                                               → fixer 가 그 줄의 "시도할 변경" 적용
+                                               → check_change → ninja 재빌드
+```
+
+**답변에만 있는 사실은 아무에게도 안 닿는다.** 분류기도 fixer 도 표를 읽지 에이전트의
+답을 읽지 않으므로, 기록되지 않은 도출은 없는 것과 같다. 메커니즘이 미확정이면
+줄을 쓰지 않는다 — 근거 없는 줄은 fixer 를 틀린 가지로 보내므로 §1 위반이다.
 
 ## Flow
 
@@ -165,6 +184,11 @@ python3 scripts/record.py <wd> blocker code=BLOCKED_KO detail="…"
 AND static-analyzer 에스컬레이션이 새 사실 0
 AND 담당 fixer 전원이 "새로 시도할 변경 없음"
 ```
+
+**두 입력 모두 사실이어야 한다.** "새 사실 0" 은 분석가가 세는 숫자가 아니라
+`derived_facts.py` 가 **도출표에 늘어난 줄을 센 값**이다 (같은 시그니처 재도출 = 0).
+"fixer 소진" 도 **실제로 물어본 fixer 의 답**이어야 한다 — 아무도 안 부른 회차를
+전원 포기로 기록하면 소진 조건이 거짓으로 성립한다.
 
 **정지 판정은 LLM 이 뒤집을 수 없다.** `stop=true` 인데 supervisor 가 계속을 내면
 pipeline 이 강제 정지하고 모순을 JOURNAL 에 기록한다. 매몰비용("한 번만 더")이

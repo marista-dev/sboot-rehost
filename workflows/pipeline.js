@@ -66,6 +66,11 @@ const arch      = String(args?.arch ?? 'arm64').toLowerCase()
 const PLUGIN    = posix(args?.plugin_dir) ?? '${CLAUDE_PLUGIN_ROOT}'
 const ROUND_CAP = Number(args?.runtime_round_cap ?? 120)
 
+// One accumulating record per firmware. The analyst appends to it, the
+// classifier and the fixers read it. Everything derived about this target lives
+// here so a finding made in round 5 is still available in round 40.
+const staticDoc = `${workdir}/${track === 2 ? 'KERNEL_STATIC.md' : 'STATIC.md'}`
+
 // The bootloader's interactive surface is what track 1 actually targets. A UART
 // shell is only one kind: MediaTek LK has an output-only UART, so its reachable
 // surface is fastboot over USB. Undeclared means static-analyzer decides.
@@ -179,6 +184,17 @@ function journalTryEnd(round, cause, analysis, fix, evidence) {
 const OK_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } } }
 
 // --- schemas -----------------------------------------------------------------
+const DERIVED_SCHEMA = {
+  type: 'object',
+  properties: {
+    total: { type: 'integer' },
+    new: { type: 'integer' },
+    new_signatures: { type: 'array' },
+    stop_points: { type: 'array' },
+  },
+  required: ['total', 'new'],
+}
+
 const ANALYST_SCHEMA = {
   type: 'object',
   properties: {
@@ -581,6 +597,7 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   }
 
   let analystNewFacts = -1
+  let derived = null
   if (route === 'static-analyzer' || obs?.escalate_to_analyst) {
     const esc = await agent(
       `Run in mode=escalation. Round ${round}, goal ${goal}.\n` +
@@ -589,20 +606,57 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
         far: obs?.far, elr: obs?.elr, exceptions: obs?.exceptions })}\n` +
       `Summary log: ${obs?.summary}\nFull trace: ${obs?.trace}\n\n` +
       `Derive what is actually executing at that address, who called it, or where ` +
-      `the value comes from. Disassemble; do not guess.\n` +
-      `If you find nothing new, report new_facts_count=0 honestly - that number ` +
-      `feeds the stop condition, so inflating it means the loop never ends.`,
+      `the value comes from. Disassemble; do not guess.\n\n` +
+      `THEN WRITE WHAT YOU FOUND DOWN. Append a row to the "## 도출된 정지점" table ` +
+      `in ${staticDoc} - one accumulating record for this firmware. A finding that ` +
+      `stays in your answer reaches nobody: the classifier and the fixers read that ` +
+      `table, so an unwritten fact is the same as no fact.\n` +
+      `Columns: signature | observation | mechanism with evidence | owning fixer | ` +
+      `change to try. Owning fixer must be one of ${KNOWN_FIXERS.join(', ')}.\n` +
+      `If the mechanism is still undetermined, write no row. A row without a ` +
+      `derived mechanism is a guess, and a guessed row sends a fixer down a wrong ` +
+      `branch - honesty rule 1.`,
       { agentType: 'static-analyzer', schema: ANALYST_SCHEMA, label: `escalate-${round}`, phase: 'Loop' }
     )
-    analystNewFacts = esc?.new_facts_count ?? 0
-    log(`[루프] 도출 에스컬레이션 — 새 사실 ${analystNewFacts} 개`)
+    // Measure what was actually written rather than trusting the reported count.
+    // A self-reported number cannot be contradicted, so re-deriving the same
+    // address would count as "new" every round and exhaustion never arrives.
+    const measured = await shell(`derived-${round}`, 'Loop',
+      `bash "${PLUGIN}/scripts/py.sh" derived_facts.py "${workdir}" --track ${track}`,
+      DERIVED_SCHEMA)
+    derived = measured
+    analystNewFacts = measured?.new ?? 0
+    log(`[루프] 도출 에스컬레이션 — 기록된 새 정지점 ${analystNewFacts} 개 ` +
+        `(누적 ${measured?.total ?? 0}개)` +
+        (esc?.new_facts_count > 0 && analystNewFacts === 0
+          ? ' · 분석가는 새 사실을 주장했지만 표에 추가된 줄이 없어 0 으로 셉니다'
+          : ''))
   }
+
+  // Accumulated stop points for this firmware, whether or not we escalated this
+  // round. This is the wiring that was missing: derivation used to end in a
+  // counter, so the classifier saw identical input every round and answered
+  // "unknown" every round.
+  if (!derived) {
+    derived = await shell(`derived-peek-${round}`, 'Loop',
+      `bash "${PLUGIN}/scripts/py.sh" derived_facts.py "${workdir}" --track ${track} --peek`,
+      DERIVED_SCHEMA)
+  }
+  const derivedRows = (derived?.stop_points ?? [])
+  const derivedTable = derivedRows.length
+    ? derivedRows.map(r => `- ${r.signature}: ${r.observation} → ${r.mechanism} ` +
+                           `[담당 ${r.fixer}] 시도: ${r.treatment}`).join('\n')
+    : '(아직 도출된 정지점 없음)'
 
   const cls = await agent(
     `Round ${round}, goal ${goal}, track ${track}.\n` +
     `Fingerprint: ${workdir}/fingerprint.json (provenance gate injected=${obs?.injected})\n` +
     `Console: ${obs?.console}\nSummary: ${obs?.summary}\nFull trace if needed: ${obs?.trace}\n` +
     `Registry: fixers/registry.yaml\n` +
+    `Derived stop points for THIS firmware (accumulated in ${staticDoc}):\n` +
+    `${derivedTable}\n` +
+    `Match against these as well as the knowledge tables - they were derived from ` +
+    `this exact target, so they outrank a generic signature.\n` +
     `Already attempted changes: read change_key values from ${workdir}/rounds.jsonl\n` +
     (sup?.suspect_prior_bypass || obs?.suspect_prior_bypass
       ? `The run is stalling. Before blaming anything new, suspect the side effects ` +
@@ -617,24 +671,44 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     .filter(f => KNOWN_FIXERS.includes(f?.fixer))
     .sort((a, b) => (a?.rank ?? 99) - (b?.rank ?? 99))
 
-  if (cls?.category === 'unknown' || ranked.length === 0) {
-    log(`[루프] 회차 ${round}: 분류할 수 없어(unknown) 담당 fixer 가 없습니다 — 다음 회차에 도출로 넘깁니다.`)
+  // A stop point the analyst already derived for this firmware names its own
+  // owner, so an unrecognised category is not automatically a dead end.
+  const derivedOwner = derivedRows
+    .map(r => r.fixer)
+    .find(f => KNOWN_FIXERS.includes(f))
+
+  if (ranked.length === 0 && !derivedOwner) {
+    // Nobody to ask. Record that honestly - and do NOT claim the fixers are out
+    // of moves, because none of them was asked. fixer_no_new_change is an input
+    // to the exhaustion condition; asserting it here would let a round where no
+    // fixer ran count as a round where every fixer gave up.
+    log(`[루프] 회차 ${round}: 분류 불가(unknown)이고 도출된 담당도 없습니다 — 재도출로 넘깁니다.`)
     await shell(`unknown-${round}`, 'Loop',
       journalTryEnd(round, 'unknown',
                     cls?.novelty?.why ?? '기존 분류와 시그니처가 맞지 않음',
                     'static-analyzer 재도출로 이관', obs?.summary ?? '') + `\n` +
       recordRoundCmd(round, goal, obs, cls?.category ?? 'unknown', null, null,
-                     'stall', analystNewFacts, true),
+                     'stall', analystNewFacts, false),
       OK_SCHEMA)
     continue
   }
 
-  const chosen = ranked[0].fixer
+  // Prefer the classifier's ranking; fall back to the owner named in the derived
+  // table. An unknown category with a derived owner still gets a real attempt -
+  // the fixer can answer not_mine, and that answer is a fact we can record,
+  // unlike a round where nobody was asked at all.
+  const chosen = ranked.length ? ranked[0].fixer : derivedOwner
+  if (!ranked.length) {
+    log(`[루프] 회차 ${round}: 분류는 unknown 이지만 도출표가 ${chosen} 를 담당으로 지목 — 넘깁니다.`)
+  }
   const fix = await agent(
     `Round ${round}, goal ${goal}. Classification: ${cls?.category}\n` +
     `Evidence: ${JSON.stringify(cls?.evidence ?? {})}\n` +
     `Fingerprint: ${JSON.stringify({ far: obs?.far, elr: obs?.elr, exceptions: obs?.exceptions })}\n` +
-    `Derived facts: ${track === 1 ? `${workdir}/STATIC.md` : `${workdir}/KERNEL_STATIC.md`}\n` +
+    `Derived facts: ${staticDoc}  (read it - the analyst appends there every round)\n` +
+    `Stop points derived for this firmware:\n${derivedTable}\n` +
+    `If one of these matches the fingerprint, apply its "시도할 변경" - it was ` +
+    `derived from this exact target with evidence attached.\n` +
     `Current sources: ${workdir}/06_machine/\n` +
     `Already attempted: ${workdir}/rounds.jsonl - never repeat an existing change_key\n` +
     `Bypass record: ${workdir}/06_machine/bypasses.md\n` +
