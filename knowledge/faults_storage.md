@@ -32,6 +32,10 @@ window reads and writes, UTRD/UPIU transactions).
 | `upiu_field_off` | `[sda] Attached` but no `sda1`, `lun=68 edtl=0` | correct `handle_scsi` to `lun = cmd[2]`, `edtl = cmd[12..15]` |
 | `block_size` | only LBA0 is read, `EFI PART` not found | locate the `EFI PART` signature in the backing image, then set `EUFS_LBS` to 512 or 4096 |
 | `vendor_telemetry_null` | null-pointer Oops after the power mode passes | return early from the telemetry function (`*_sec_set_features` family) with `mov w0,#0; ret`. Bypass documentation mandatory |
+| `irq_edge_level` | UIC command times out `-110` even though the model set the completion bit | the HCI interrupt must be **level-triggered** (`qemu_set_irq` held while IS & IE), not a pulse. An edge is missed and the driver waits forever |
+| `is_bit_layout` | power-mode change times out `-110` while link-up worked | the IS register bit positions are wrong. Derive each from the driver's masks - **UPMS is bit 4**, ULSS bit 8, UCCS bit 10; guessing bit 8 for UPMS is the common miss |
+| `query_upiu_overwrite` | `Response size is bigger than buffer`, or the descriptor arrives with a corrupt header | write the response UPIU **once**: place the descriptor at `resp+32` and write header+payload in a single transfer. Writing them separately lets the second write clobber the header. Cap the length by the request's own field |
+| `sparse_super_gpt` | `[sda] Attached` but no partitions, and the backing image is `super.img` | an Android **sparse super is not a GPT disk**. Decode the sparse image and synthesise a LUN with a GPT (primary + backup) whose partition covers it, then back the model with that |
 | `unknown` | nothing above matches | **static-analyzer re-derivation** |
 
 ## UniPro DME opcodes

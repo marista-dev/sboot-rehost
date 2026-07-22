@@ -12,8 +12,8 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 
 | 트랙 | 진입점 (체인) | 도달 지점 | 등급 | 방법론 |
 |---|---|---|---|---|
-| **1 sboot-shell** | 부트로더 BL3 (③) | 진짜 S-Boot 셸 + `help` | A/B/C | [instruction.md](methodology/instruction.md) |
-| **2 kernel-storage** | 커널 EL1 (⑥⑦) | 커널 → rootfs 마운트 → 진짜 벤더 스토리지 드라이버 → Android 2단계 | K1/K2/K3 | [track2_kernel_storage.md](methodology/track2_kernel_storage.md) |
+| **1 부트로더** | 부트로더 (③) | 그 부트로더의 **인터랙티브 표면** — UART 셸(S-Boot) 또는 fastboot/USB(LK) | A/B/C | [instruction.md](methodology/instruction.md) |
+| **2 커널** | 커널 EL1 (⑥⑦) | 커널 → rootfs 마운트 → 진짜 벤더 스토리지 드라이버 → Android 2단계 | K1/K2/K3 | [track2_kernel_storage.md](methodology/track2_kernel_storage.md) |
 
 **트랙은 정체성이 아니라 인자다.** 루프 골격은 하나이고, 바뀌는 것은 목표 사다리·지식
 테이블·실행 스크립트뿐이다. `workflows/pipeline.js` 하나가 `track` 인자로 둘 다 돈다.
@@ -115,7 +115,7 @@ python3 scripts/record.py <wd> blocker code=BLOCKED_KO detail="…"
 
 ## 자율 실행 — 기본 켜짐
 
-**실행 명령(`/sboot-rehost:rehost-sboot`·`/sboot-rehost:rehost-kernel`)은 시작하면
+**실행 명령(`/sboot-rehost:rehost-bootloader`·`/sboot-rehost:rehost-kernel`)은 시작하면
 끝까지 자율이다.** `AskUserQuestion` 호출 금지 — "계속할까요 / 확인해주세요" 류 질문
 자체가 규칙 위반이다. 모든 분기는 자동 결정하고 `journal.sh decision` 으로 남긴다.
 
@@ -264,14 +264,16 @@ success·REAL 금지.
 - **`/sboot-rehost:rehost-init`** — 설치 후 1회. `rehost_workspaces/` + `_inbox/` 생성 + 의존성 설치.
 - **`/sboot-rehost:rehost-setup <이름>`** — `_inbox/` 펌웨어 자동 인식 + 격리 워크스페이스
   생성(★ 덮어쓰기 금지) + 언팩·WSL 이동 + 트랙·등급 프롬프트 → INPUT.md + `.active`.
-- **`/sboot-rehost:rehost-sboot`** — 트랙 1 실행 → `pipeline.js({track: 1})`
+- **`/sboot-rehost:rehost-bootloader`** — 트랙 1 실행 → `pipeline.js({track: 1})`.
+  S-Boot·LK·aboot 등 **벤더 구현체가 달라도 같은 단계이므로 같은 명령**이다.
+  (구 이름 `rehost-sboot` 은 별칭으로 남아 있다.)
 - **`/sboot-rehost:rehost-kernel`** — 트랙 2 실행 → `pipeline.js({track: 2})`
 - **`/sboot-rehost:rehost-status`** — 워크스페이스 목록 + 진행/검증/정지 요약
 - **`/sboot-rehost:rehost-export`** — **목표 완료 확인 후** "빌드 없이 실행" 키트 조립 →
   `rehost_exports/<model>_<build>/track<N>/`. ★ 항상 gitignore, 미완이면 export 금지.
 
 흐름: **install → `rehost-init` → `_inbox/` 드롭 → `rehost-setup <이름>` →
-`rehost-sboot`|`rehost-kernel`(자율) → (완료) `rehost-export`**.
+`rehost-bootloader`|`rehost-kernel`(자율) → (완료) `rehost-export`**.
 
 ---
 
@@ -315,5 +317,5 @@ WSL ext4 (대용량):
 - "방향 맞아?" → `stop_conditions.py` 결과 + `rounds.jsonl` 분류 분포로 사실 보고
 - "9820 / 다른 분석가 자료 참고" → `methodology/worked_example.md` 재읽기
 
-사용자가 명시적으로 다른 명령을 주지 않는 한 실행 명령(트랙 1 `/sboot-rehost:rehost-sboot`,
+사용자가 명시적으로 다른 명령을 주지 않는 한 실행 명령(트랙 1 `/sboot-rehost:rehost-bootloader`,
 트랙 2 `/sboot-rehost:rehost-kernel`)의 파이프라인을 따른다.

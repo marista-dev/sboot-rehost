@@ -165,7 +165,7 @@
 | `skills/rehost-init/SKILL.md` | 설치 후 1회: 작업 루트 + `_inbox/` 생성 + 의존성 |
 | `skills/rehost-setup/SKILL.md` | 펌웨어 드롭 후: 격리 워크스페이스 + 트랙 프롬프트 + INPUT.md |
 | `hooks/hooks.json` + `scripts/ensure_inbox.ps1` | SessionStart 훅: `_inbox/` 자동 생성 (CLI/web; 확장에선 `/sboot-rehost:rehost-init`) |
-| `skills/rehost-sboot/SKILL.md` | 트랙 1 실행 → `pipeline.js({track: 1})` |
+| `skills/rehost-bootloader/SKILL.md` | 트랙 1 실행 → `pipeline.js({track: 1})` |
 | `skills/rehost-kernel/SKILL.md` | 트랙 2 실행 → `pipeline.js({track: 2})` |
 | `skills/rehost-status/SKILL.md` | 워크스페이스 목록/상태 |
 | `skills/rehost-export/SKILL.md` + `scripts/make_export.sh` | 완료 후 "빌드 없이 실행" 키트 (rehost_exports/<fw>/track<N>/, gitignore) |

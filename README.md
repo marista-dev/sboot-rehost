@@ -3,8 +3,9 @@
 벤더 펌웨어를 QEMU 위에서 **진짜로 실행**시키고, 실증 가능한 증거로만 도달 여부를
 판정하는 리호스팅 하니스. Claude Code 플러그인.
 
-- **트랙 1 (sboot-shell)** — 부트로더 BL3 → 진짜 `S-BOOT #` 셸 + `help`
-- **트랙 2 (kernel-storage)** — 커널 직부팅 → rootfs 마운트 → 진짜 벤더 UFS 컨트롤러 → Android
+- **트랙 1 (부트로더)** — 커널 직전 부트로더를 실행해 그 **인터랙티브 표면**에 도달
+  (Samsung S-Boot → UART 셸 · MediaTek LK → fastboot/USB · Qualcomm aboot …)
+- **트랙 2 (커널)** — 커널 직부팅 → rootfs 마운트 → **진짜 벤더 스토리지 컨트롤러 구현** → Android
 
 재구현이 아니라 **원본 바이너리를 구동**한다. 모델링하는 것은 환경(페리페럴·SMC·HCI)뿐이고,
 값은 전부 대상 펌웨어에서 도출한다.
@@ -99,8 +100,8 @@ Claude Code 는 세션 시작 후 백그라운드에서 마켓플레이스와 �
 
 **④ 실행** — 프롬프트에서 고른 트랙 하나. 시작하면 **끝까지 자율**로 진행한다.
 ```
-/sboot-rehost:rehost-sboot     (트랙 1)
-/sboot-rehost:rehost-kernel    (트랙 2)
+/sboot-rehost:rehost-bootloader    (트랙 1 — 부트로더)
+/sboot-rehost:rehost-kernel        (트랙 2 — 커널)
 ```
 
 **⑤ 상태 / 내보내기**
@@ -110,7 +111,7 @@ Claude Code 는 세션 시작 후 백그라운드에서 마켓플레이스와 �
 ```
 
 - 다른 펌웨어: `_inbox/` 에 드롭 후 `/sboot-rehost:rehost-setup <다른이름>` → 새 워크스페이스(기존 안 덮어씀).
-- 특정 워크스페이스 실행: `/sboot-rehost:rehost-sboot workdir=<이름>`.
+- 특정 워크스페이스 실행: `/sboot-rehost:rehost-bootloader workdir=<이름>`.
 
 ---
 
@@ -120,7 +121,7 @@ Claude Code 는 세션 시작 후 백그라운드에서 마켓플레이스와 �
 |---|---|
 | `rehost-init` | 작업 루트 + `_inbox/` 생성, 의존성 설치 (1회) |
 | `rehost-setup <이름>` | 펌웨어 인식 → 격리 워크스페이스 + 트랙·등급 → `INPUT.md` |
-| `rehost-sboot` | 트랙 1 실행 — BL3 → 셸 + `help` |
+| `rehost-bootloader` | 트랙 1 실행 — 부트로더의 인터랙티브 표면(셸 또는 fastboot) 도달 |
 | `rehost-kernel` | 트랙 2 실행 — 커널 + 진짜 UFS 컨트롤러 → rootfs·Android |
 | `rehost-status` | 워크스페이스 목록 + 진행·검증·정지·소요 요약 |
 | `rehost-export` | 완료 후 "빌드 없이 실행" 키트 → `rehost_exports/<fw>/track<N>/` |
@@ -198,8 +199,9 @@ Claude Code 는 세션 시작 후 백그라운드에서 마켓플레이스와 �
   기계가 읽는 `metrics.jsonl`(시간·토큰) · `rounds.jsonl`(회차 지문·분류·효과) ·
   `blockers.jsonl`(정지 사유). 문서는 로컬 작업 폴더, 대용량(실행 사본·트레이스)은 WSL.
   펌웨어·작업 폴더는 전부 `.gitignore`. → [docs/components.md](docs/components.md#기록-사람용--기계용)
-- **한계**: 트랙 1 은 등급 A 안정. 트랙 2 K3 은 벤더 `.ko` 필요.
-  공통 프론티어 = `/data` 암호화 → TEE(TEEGRIS, 범위 밖).
+- **한계**: 트랙 1 은 AArch64 부트로더(S-Boot)가 안정. **AArch32(MediaTek LK)는 머신
+  템플릿이 아직 없어 Build 가 정직하게 실패를 보고한다.** 트랙 2 는 Exynos·MediaTek 모두
+  지식·프로필이 준비돼 있다. 공통 프론티어 = TEE(TEEGRIS) · AVB.
 
 ---
 
@@ -224,4 +226,4 @@ Claude Code 는 세션 시작 후 백그라운드에서 마켓플레이스와 �
 
 방법론 원본(도출 절차와 Table A~M)은 [methodology/](methodology/) 에 있다.
 
-회귀 검증: `bash tests/smoke.sh` (결정론 계층 38 케이스).
+회귀 검증: `bash tests/smoke.sh` (결정론 계층).

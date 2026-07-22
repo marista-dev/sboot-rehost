@@ -21,7 +21,7 @@ version: 1
 fixers:
   fixer-memory:
     description: memory map and peripheral windows
-    handles: [data_abort_unmapped, infinite_poll, unmapped_mmio]
+    handles: [data_abort_unmapped, infinite_poll, unmapped_mmio, cpu_cluster_mpidr]
     knowledge: [knowledge/faults_bootloader.md, knowledge/faults_kernel.md]
     tools: [fdtdump, grep]
     edits: [machine.c, machine_kernel.c]
@@ -53,6 +53,10 @@ fixers:
       - poll_stall
       - desc_addr_corrupt
       - prdt_stride
+      - irq_edge_level
+      - is_bit_layout
+      - query_upiu_overwrite
+      - sparse_super_gpt
       - pwrmode_timeout
       - gear_source
       - upiu_field_off

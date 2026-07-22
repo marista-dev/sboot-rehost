@@ -215,10 +215,27 @@ def verify_track1(workdir, args):
     items.append({"n": 3, "name": "소스 negative (머신 C 에 출력 문자열 없음)",
                   "pass": ok, "evidence": detail})
 
-    calls = sum(read_text(p).count("qemu_chr_fe_write") for p in sources)
-    items.append({"n": 4, "name": "UART 단일 경로 (qemu_chr_fe_write 1 자리)",
-                  "pass": calls == 1,
-                  "evidence": f"qemu_chr_fe_write 호출이 {calls} 곳입니다"})
+    # Item 4 depends on the interactive surface. For a UART shell the risk is the
+    # machine writing text itself, so we count output paths. For a fastboot
+    # surface the output path is USB and the real risk is the machine inventing
+    # the *input* command - that would be circular verification, not a rehost.
+    if args.surface == "fastboot":
+        token = args.input_token or "getvar:"
+        planted = [os.path.basename(p) for p in sources if token in code_literals(p)]
+        items.append({
+            "n": 4, "name": "입력이 외부에서 옴 (머신이 명령을 지어내지 않음)",
+            "pass": not planted,
+            "evidence": (f"머신 소스에 입력 명령 '{token}' 리터럴이 없습니다 — "
+                         f"호스트가 보낸 것으로 처리됩니다"
+                         if not planted else
+                         f"머신 소스 {planted} 에 입력 명령 '{token}' 이 리터럴로 있습니다 — "
+                         f"머신이 명령을 지어낸 순환검증입니다"),
+        })
+    else:
+        calls = sum(read_text(p).count("qemu_chr_fe_write") for p in sources)
+        items.append({"n": 4, "name": "UART 단일 경로 (qemu_chr_fe_write 1 자리)",
+                      "pass": calls == 1,
+                      "evidence": f"qemu_chr_fe_write 호출이 {calls} 곳입니다"})
 
     ok, detail = check_bypass(workdir)
     items.append({"n": 5, "name": "우회 기록 4 항목", "pass": ok, "evidence": detail})
@@ -348,6 +365,10 @@ def main():
     parser.add_argument("--trace", default=None)
     parser.add_argument("--pc", action="append",
                         help="track 1 item 1 expected PC; derived from STATIC.md when omitted")
+    parser.add_argument("--surface", default="shell", choices=("shell", "fastboot"),
+                        help="track 1 interactive surface; selects item 4")
+    parser.add_argument("--input-token", default=None,
+                        help="fastboot surface: the command the host injects (default getvar:)")
     args = parser.parse_args()
 
     if args.track == 1:

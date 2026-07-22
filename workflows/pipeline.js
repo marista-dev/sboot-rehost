@@ -28,7 +28,8 @@
  *
  * args: {
  *   workdir, track (1|2), target, model, plugin_dir,
- *   bl3_path            (track 1),
+ *   bootloader_path     (track 1; bl3_path also accepted),
+ *   soc_family, arch, bl_surface, has_super,
  *   runtime_round_cap   (default 120 - runtime limit, not a stop reason),
  * }
  */
@@ -49,22 +50,34 @@ export const meta = {
 const workdir   = args?.workdir
 const track     = Number(args?.track ?? 1)
 const model     = args?.model
-const bl3_path  = args?.bl3_path
+// bl3_path is the pre-0.10 name. BL3 is ARM/Exynos wording and reads wrong for a
+// MediaTek LK image, so the slot is bootloader_path now; both are accepted.
+const bootloader_path = args?.bootloader_path ?? args?.bl3_path
 const target    = String(args?.target ?? (track === 1 ? 'A' : 'K2')).toUpperCase()
+const socFamily = String(args?.soc_family ?? 'generic').toLowerCase()
+const arch      = String(args?.arch ?? 'arm64').toLowerCase()
 const PLUGIN    = args?.plugin_dir ?? '${CLAUDE_PLUGIN_ROOT}'
 const ROUND_CAP = Number(args?.runtime_round_cap ?? 120)
+
+// The bootloader's interactive surface is what track 1 actually targets. A UART
+// shell is only one kind: MediaTek LK has an output-only UART, so its reachable
+// surface is fastboot over USB. Undeclared means static-analyzer decides.
+const SURFACES = ['shell', 'fastboot']
+const declaredSurface = String(args?.bl_surface ?? '').toLowerCase()
+const surface = SURFACES.includes(declaredSurface) ? declaredSurface : 'shell'
+const surfaceDeclared = SURFACES.includes(declaredSurface)
 
 if (!workdir || !model) {
   log('오류: pipeline.js 는 args.workdir 와 args.model 이 필요합니다.')
   return { error: 'missing_args' }
 }
-if (track === 1 && !bl3_path) {
-  log('오류: 트랙 1 은 args.bl3_path 가 필요합니다.')
-  return { error: 'missing_bl3_path' }
+if (track === 1 && !bootloader_path) {
+  log('오류: 트랙 1 은 args.bootloader_path (구 bl3_path) 가 필요합니다.')
+  return { error: 'missing_bootloader_path' }
 }
 
 const slug = model.toLowerCase().replace(/[^a-z0-9]/g, '')
-const machine = track === 1 ? `sboot-${slug}` : `${slug}-kernel`
+const machine = track === 1 ? `${slug}-bootloader` : `${slug}-kernel`
 
 // The ladder is what the track/grade actually changes; the loop stays the same.
 //
@@ -76,7 +89,8 @@ const machine = track === 1 ? `sboot-${slug}` : `${slug}-kernel`
 // would strand such a run short of a goal it cannot reach by construction.
 const hasSuper = args?.has_super === true
 const LADDERS = {
-  1: { A: ['shell'], B: ['shell'], C: ['shell'] },
+  // Track 1's rung is the interactive surface, not "shell" by assumption.
+  1: { A: [surface], B: [surface], C: [surface] },
   2: {
     K1: ['userspace'],
     K2: ['userspace', 'rootfs'],
@@ -145,6 +159,8 @@ const ANALYST_SCHEMA = {
     mode: { type: 'string' },
     carve_is_full: { type: ['boolean', 'null'] },
     assets_ok: { type: ['boolean', 'null'] },
+    bl_surface: { type: ['string', 'null'] },
+    storage_driver: { type: ['object', 'null'] },
     undetermined_count: { type: 'integer' },
     new_facts_count: { type: 'integer' },
     facts: { type: 'array' },
@@ -263,10 +279,26 @@ log(`[분석] 트랙 ${track} / 등급 ${target} — 목표 사다리: ${goals.j
 
 const prior = await agent(
   `Run in mode=prior: derive every fact needed to build the machine model.\n` +
-  `track=${track}, target=${target}\n` +
+  `track=${track}, target=${target}, soc_family=${socFamily}, arch=${arch}\n` +
   `Input: ${workdir}/INPUT.md\n` +
-  (track === 1 ? `BL3 binary: ${bl3_path}\n` : `Boot assets: ${workdir}/fw/\n`) +
-  `Profile hints: profiles/ (hints about WHERE to look, never values)\n\n` +
+  (track === 1 ? `Bootloader image: ${bootloader_path}\n` : `Boot assets: ${workdir}/fw/\n`) +
+  `Profile hints: profiles/${socFamily}.yaml (hints about WHERE to look, never values)\n` +
+  (arch === 'arm32'
+    ? `This bootloader is AArch32/Thumb - disassemble with ` +
+      `scripts/carve_disasm.py --arch arm32.\n`
+    : '') +
+  (track === 1
+    ? `\nDERIVE THE INTERACTIVE SURFACE FIRST` +
+      (surfaceDeclared ? ` (setup's hint: ${surface} - confirm or correct it)` : ' (no hint given)') +
+      `.\nA command table existing in the binary does NOT mean it is reachable. Establish, ` +
+      `as fact, whether an input path exists:\n` +
+      `  - UART: does the driver have a receive path (RBR read / rx polling), or is it ` +
+      `output-only?\n` +
+      `  - USB: which dispatchers exist (fastboot, download/DA, vendor), and do any of them ` +
+      `reference the console command table?\n` +
+      `Report bl_surface as "shell", "fastboot", or "none" when no surface has an input path. ` +
+      `"none" is a hard blocker - say so rather than inventing a route.\n`
+    : '') + `\n` +
   `First record the phase:\n` +
   `  bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Analyze (static-analyzer prior)"\n` +
   `  python3 "${PLUGIN}/scripts/record.py" "${workdir}" start analyze\n\n` +
@@ -285,10 +317,29 @@ const prior = await agent(
 
 const blockers = []
 if (track === 1 && prior?.carve_is_full === false) {
-  blockers.push(['BLOCKED_CARVE', 'BL3 가 carve 로 판정됨 (알려진 ASCII 부족)'])
+  blockers.push(['BLOCKED_CARVE', '부트로더 이미지가 carve 로 판정됨 (알려진 ASCII 부족)'])
+}
+if (track === 1 && String(prior?.bl_surface ?? '').toLowerCase() === 'none') {
+  blockers.push(['BLOCKED_NO_INPUT_PATH',
+                 '어느 표면에도 인터랙티브 입력 경로가 없음 — UART 는 출력 전용이고 ' +
+                 '어떤 USB dispatcher 도 명령 테이블을 참조하지 않음'])
 }
 if (track === 2 && prior?.assets_ok === false) {
   blockers.push(['BLOCKED_ASSET', '부팅 자산을 확보하지 못함 (Image/DTB)'])
+}
+
+// static-analyzer may correct setup's surface hint; measurement wins over the hint.
+const derivedSurface = String(prior?.bl_surface ?? '').toLowerCase()
+if (track === 1 && SURFACES.includes(derivedSurface) && derivedSurface !== surface) {
+  log(`[분석] 표면 정정: 힌트 "${surface}" → 도출 "${derivedSurface}". ` +
+      `목표 사다리를 "${derivedSurface}" 로 바꿔 재실행하세요 ` +
+      `(INPUT.md 의 bl_surface 갱신).`)
+  return {
+    success: false, stopped: true, stop_reason: 'SURFACE_CORRECTED',
+    hinted_surface: surface, derived_surface: derivedSurface,
+    note: `INPUT.md 의 bl_surface 를 "${derivedSurface}" 로 고치고 같은 명령을 다시 실행하면 ` +
+          `그 표면을 목표로 진행합니다. 잘못된 표면으로 회차를 태우지 않기 위한 조기 종료입니다.`,
+  }
 }
 
 if (blockers.length) {
@@ -315,8 +366,17 @@ const built = await agent(
   `Generate the machine source, integrate it into QEMU and build.\n` +
   `track=${track}, model=${model}, machine name=${machine}\n\n` +
   `1. Record the phase: bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Build"\n` +
+  (track === 1 && arch === 'arm32'
+    ? `★ This bootloader is AArch32. templates/machine.c.tmpl models an AArch64\n` +
+      `   machine and would produce a wrong machine rather than a failure, so do\n` +
+      `   NOT use it. Author the machine for AArch32 from the derived facts\n` +
+      `   (exception-vector entry, CP15 MMU/cache setup, 16550-style UART at the\n` +
+      `   derived base, DRAM covering the load address). If you cannot do that\n` +
+      `   from derived facts alone, report build_ok=false saying an AArch32\n` +
+      `   machine template is missing - do not guess.\n`
+    : '') +
   `2. Fill the template ` +
-  `${track === 1 ? 'templates/machine.c.tmpl'
+  `${track === 1 ? (arch === 'arm32' ? '(no AArch32 template yet - see above)' : 'templates/machine.c.tmpl')
                  : 'templates/machine_kernel.c.tmpl' + (target === 'K3' ? ' (plus templates/storage_hci.c.tmpl)' : '')} ` +
   `with values derived in ${track === 1 ? 'STATIC.md' : 'KERNEL_STATIC.md'} and write ` +
   `${workdir}/06_machine/${track === 1 ? 'machine.c' : 'machine_kernel.c'}.\n` +
@@ -372,7 +432,7 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   const obs = await shell(`run-${round}`, 'Loop',
     `bash "${PLUGIN}/scripts/run_round.sh" "${workdir}" ${track} ${machine} ${round} ` +
     `${shq(goal)} ${shq(ladderArg)}` +
-    (track === 1 ? ` ${shq(bl3_path)} help` : '') + `\n` +
+    (track === 1 ? ` ${shq(bootloader_path)} help ${shq(surface)}` : '') + `\n` +
     `\n# This prints ONE observation document, also saved to ${workdir}/observation.json.\n` +
     `# Relay it as-is. Do not merge, re-derive or adjust any field - above all\n` +
     `# stop and stop_reason, which the pipeline enforces against your route.`,
@@ -617,7 +677,7 @@ phase('Verify')
 const verifyCmd =
   `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Verify"\n` +
   `python3 "${PLUGIN}/scripts/verify.py" "${workdir}" --track ${track} --target ${target}` +
-  (track === 1 ? ` --bl3 "${bl3_path}"` : '')
+  (track === 1 ? ` --bl3 "${bootloader_path}" --surface ${surface}` : '')
 
 const verifier = await agent(
   `This is stage 2 of the 5/5 verification.\n\n` +
@@ -651,7 +711,7 @@ await agent(
   `Everything written here is user-facing: use natural Korean.\n\n` +
   `Include:\n` +
   `- README.md (INPUT.md summary, build and run steps, verdict ${passes}/5 ${verdict})\n` +
-  (track === 1 ? `- bl3/ (copy of ${bl3_path})\n`
+  (track === 1 ? `- bootloader/ (copy of ${bootloader_path})\n`
                : `- fw/ (Image.patched, *.dtb, initramfs reference)\n`) +
   `- machine/ (sources from 06_machine plus bypasses.md)\n` +
   `- scripts/ (setup_env.sh, build and run scripts)\n` +

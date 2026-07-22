@@ -5,6 +5,7 @@
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 S="$REPO/scripts"
+export REPO
 ROOT="$(mktemp -d)"
 PASS=0; FAIL=0
 
@@ -284,6 +285,49 @@ chmod +x "$BIN/fake-qemu-args"
 QEMU="$BIN/fake-qemu-args" bash "$S/run_kernel.sh" "$ZW" test-kernel 1 >/dev/null 2>&1
 if grep -q '\-initrd' /tmp/qemu_args_seen.txt 2>/dev/null; then bad "0 바이트 initramfs 가 QEMU 로 전달됨"; else ok "0 바이트 initramfs 는 전달 안 함"; fi
 rm -f /tmp/qemu_args_seen.txt
+
+# =============================================================================
+hdr "12. 벤더 다양성 — MediaTek (LK / MT6833 사례 회귀)"
+
+# 12a. carve_check 가 아키텍처별 기준을 쓰는가 (LK 는 1.5MB, S-Boot 기준이면 오탐)
+REPO="$REPO" python3 - > /tmp/carve_res.txt <<'PY'
+import sys, types, os, io, contextlib
+sys.modules.setdefault('capstone', types.SimpleNamespace(
+    Cs=None, CS_ARCH_ARM64=0, CS_ARCH_ARM=0, CS_MODE_ARM=0, CS_MODE_THUMB=0))
+sys.path.insert(0, os.path.join(os.environ["REPO"], "scripts"))
+import carve_disasm as cd
+blob = bytearray(b"\x00" * (1500 * 1024))
+blob[100:108] = b"fastboot"; blob[200:209] = b"preloader"
+open("/tmp/lk_t.bin","wb").write(bytes(blob))
+def full(a):
+    cd.ARCH = a; b = io.StringIO()
+    with contextlib.redirect_stdout(b): cd.carve_check("/tmp/lk_t.bin")
+    return "is_full: True" in b.getvalue()
+print(full("arm64")); print(full("arm32")); os.remove("/tmp/lk_t.bin")
+PY
+chk "LK 를 arm64 기준으로 보면 carve 오탐" "$(sed -n 1p /tmp/carve_res.txt)" "False"
+chk "LK 를 arm32 기준으로 보면 full"       "$(sed -n 2p /tmp/carve_res.txt)" "True"
+rm -f /tmp/carve_res.txt
+
+# 12b. fastboot 표면의 마일스톤을 run_qemu 가 인식하는가
+FW=$(new_ws mtk_fb); printf 'int q;\n' > "$FW/06_machine/machine.c"
+printf 'fastboot_init()\nfastboot: processing commands\n[fastboot: command buf]-[getvar:version]\n' > "$ROOT/confb.txt"
+printf 'no exceptions\n' > "$ROOT/trcfb.txt"; make_qemu "$ROOT/confb.txt" "$ROOT/trcfb.txt"
+printf 'x' > "$FW/lk.bin"
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$FW" 1 mtk-bootloader 1 fastboot "fastboot" "$FW/lk.bin" help fastboot > "$ROOT/obsfb.json" 2>/dev/null
+chk "fastboot 표면 마일스톤 인식" "$(python3 -c "import json;print(json.load(open('$ROOT/obsfb.json'))['milestone'])" 2>/dev/null)" "fastboot"
+
+# 12c. fastboot 표면에서 머신이 입력 명령을 지어내면 항목4 불통과
+VW=$(new_ws mtk_v); printf 'x\x00fastboot: processing commands\x00' > "$VW/lk.bin"
+printf 'fastboot: processing commands\n' > "$VW/07_logs/console_1.txt"
+printf 'const char *c = "getvar:version";\n' > "$VW/06_machine/machine.c"
+printf -- '- 대상: t\n- 이유: r\n- 방법: m\n- 부작용: s\n' > "$VW/06_machine/bypasses.md"
+printf '| shell_func | 0xdeadbeef |\n' > "$VW/STATIC.md"; printf '0xdeadbeef: x\n' > "$VW/07_logs/run_1.log"
+V=$(python3 "$S/verify.py" "$VW" --track 1 --surface fastboot --bl3 "$VW/lk.bin" --trace "$VW/07_logs/run_1.log" 2>/dev/null)
+chk "머신이 입력 명령을 지어내면 불통과" "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][3]["pass"])')" "False"
+printf 'static void f(void){}\n' > "$VW/06_machine/machine.c"
+V=$(python3 "$S/verify.py" "$VW" --track 1 --surface fastboot --bl3 "$VW/lk.bin" --trace "$VW/07_logs/run_1.log" 2>/dev/null)
+chk "외부 입력이면 항목4 통과"           "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][3]["pass"])')" "True"
 
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
 echo "작업 폴더: $ROOT"

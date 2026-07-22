@@ -9,7 +9,7 @@
 #   deterministically, and the agent only relays one document it did not build.
 #
 # Usage:
-#   run_round.sh <workdir> <track> <machine> <run_n> <goal> <ladder> [bl3_path] [cmd]
+#   run_round.sh <workdir> <track> <machine> <run_n> <goal> <ladder> [bootloader] [cmd] [surface]
 #
 # Output:
 #   <workdir>/observation.json   (also printed to stdout)
@@ -26,6 +26,7 @@ GOAL="${5:-}"
 LADDER="${6:-}"
 BL3="${7:-}"
 CMD="${8:-help}"
+SURFACE="${9:-shell}"   # track 1 interactive surface
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -34,7 +35,7 @@ bash "$HERE/check_change.sh" "$WD" snapshot >/dev/null 2>&1 || true
 
 RUN_RC=0
 if [ "$TRACK" = "1" ]; then
-    bash "$HERE/run_qemu.sh" "$WD" "$MACHINE" "$BL3" "$CMD" "$RUN_N" >/dev/null || RUN_RC=$?
+    bash "$HERE/run_qemu.sh" "$WD" "$MACHINE" "$BL3" "$CMD" "$RUN_N" "$SURFACE" >/dev/null || RUN_RC=$?
 else
     bash "$HERE/run_kernel.sh" "$WD" "$MACHINE" "$RUN_N" >/dev/null || RUN_RC=$?
 fi

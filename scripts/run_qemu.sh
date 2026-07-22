@@ -4,7 +4,7 @@
 # Called by workflows/pipeline.js once per round.
 #
 # Usage:
-#   run_qemu.sh <workdir> <machine_name> <bl3_path> <cmd> <run_n>
+#   run_qemu.sh <workdir> <machine_name> <bootloader_path> <cmd> <run_n> [surface]
 #
 # Output files:
 #   <workdir>/07_logs/console_<run_n>.txt      UART output      (local)
@@ -26,13 +26,14 @@ MACHINE="$2"
 BL3="$3"
 CMD="${4:-help}"
 RUN_N="${5:-1}"
+SURFACE="${6:-shell}"      # shell (UART console) | fastboot (USB dispatch)
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 QEMU="${QEMU:-$HOME/qemu-build/qemu-10.2.2/build/qemu-system-aarch64}"
 TIMEOUT="${TIMEOUT:-8}"
 
 if [[ -z "$WORKDIR" || -z "$MACHINE" || -z "$BL3" ]]; then
-    echo "Usage: $0 <workdir> <machine_name> <bl3_path> <cmd> <run_n>" >&2
+    echo "Usage: $0 <workdir> <machine_name> <bootloader_path> <cmd> <run_n> [surface]" >&2
     exit 1
 fi
 if [[ ! -x "$QEMU" ]]; then
@@ -71,19 +72,37 @@ ELR=$(grep -ohE "ELR 0x[0-9a-fA-F]+" "$LOG" 2>/dev/null | tail -1 | awk '{print 
 FAR="${FAR:-none}"; ELR="${ELR:-none}"
 
 # --- Milestone + provenance gate ---
-# Track 1 reaches the goal when the console shows shell ASCII that the BL3 owns.
+# Track 1 reaches its goal when the console shows text the BOOTLOADER owns, on
+# whichever interactive surface this firmware actually has.
+#
+# The tokens are data, not a constant: a UART shell prints a prompt and a command
+# list, while a fastboot surface prints its own dispatch lines. Encoding one
+# vendor's banner here would strand every other bootloader. static-analyzer
+# derives the real strings and writes them to milestone_tokens.txt; the built-in
+# lists below are only a fallback.
 #
 # Injection is dominant: if ANY milestone token also lives in the machine source,
 # the console is contaminated and nothing is credited, even when another token
 # looks clean. Crediting the clean one would let a machine that fakes the prompt
-# claim the shell. A false "not reached" costs extra rounds; a false "reached"
+# claim the surface. A false "not reached" costs extra rounds; a false "reached"
 # produces a fake success, and this project always takes the former.
-# If this fires on an innocent match (a token quoted in a comment), rename the
-# string in the machine source - the warning below names the exact token.
 MILESTONE="none"; INJECTED="false"; INJECTED_TOKEN=""
 SRC_DIR="$WORKDIR/06_machine"
 CONSOLE_HIT="false"
-for token in "S-BOOT" "autoboot" "Following commands"; do
+
+TOKEN_FILE="$WORKDIR/milestone_tokens.txt"
+if [ -s "$TOKEN_FILE" ]; then
+    TOKENS=()
+    while IFS= read -r line; do
+        [ -n "$line" ] && TOKENS+=("$line")
+    done < "$TOKEN_FILE"
+elif [ "$SURFACE" = "fastboot" ]; then
+    TOKENS=("fastboot: processing commands" "fastboot_init(" "command buf")
+else
+    TOKENS=("S-BOOT" "autoboot" "Following commands")
+fi
+
+for token in "${TOKENS[@]}"; do
     grep -qF "$token" "$OUT" 2>/dev/null || continue
     if grep -qF "$token" "$SRC_DIR"/*.c 2>/dev/null; then
         INJECTED="true"
@@ -94,8 +113,8 @@ for token in "S-BOOT" "autoboot" "Following commands"; do
 done
 MILESTONES_JSON="[]"
 if [ "$CONSOLE_HIT" = "true" ] && [ "$INJECTED" = "false" ]; then
-    MILESTONE="shell"
-    MILESTONES_JSON='["shell"]'
+    MILESTONE="$SURFACE"
+    MILESTONES_JSON="[\"$SURFACE\"]"
 fi
 
 # Escape anything that could break the JSON document below.

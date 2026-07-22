@@ -7,8 +7,14 @@ description: search hints for the Samsung Exynos family
 extends: generic
 
 bootloader:
+  implementation: S-Boot
+  arch: arm64
   known_strings: ["S-BOOT", "autoboot", "Following commands", "dramtest", "reset"]
   prompt_candidates: ["S-BOOT # "]
+  surface_candidates: ["shell"]      # UART console with a receive path
+  cmd_entry:
+    size_hint: 32                    # {name, help, handler, next}
+    pointer_width: 8
   notes:
     - sboot.bin is usually a multi-stage BL1/BL2/BL3 image; carve out the BL3 region only
     - if the carve verdict fails, re-scan the original sboot.bin on 4 KB alignment

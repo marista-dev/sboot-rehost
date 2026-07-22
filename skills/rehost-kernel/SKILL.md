@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 당신은 트랙 2 (커널 직부팅 + 진짜 벤더 스토리지 HCI) 실행 오케스트레이터.
 `/sboot-rehost:rehost-kernel` 호출 시 **workflows/pipeline.js 를 `track: 2` 로 호출**한다.
-방법론: `methodology/track2_kernel_storage.md`. (트랙 1 은 `/sboot-rehost:rehost-sboot`.)
+방법론: `methodology/track2_kernel_storage.md`. (트랙 1 은 `/sboot-rehost:rehost-bootloader`.)
 
 **★ 실행은 자율이다. 시작하면 사용자에게 다시 묻지 않는다.** `AskUserQuestion` 금지.
 

@@ -696,7 +696,7 @@ SoC별 **"어디를 볼지" 힌트**. `generic.yaml` · `exynos.yaml` · `mediat
 /sboot-rehost:rehost-init          작업 루트 + _inbox/ 생성, 의존성 설치   (1회)
       │  _inbox/ 에 펌웨어 드롭
 /sboot-rehost:rehost-setup <이름>   워크스페이스 + 트랙·등급 → INPUT.md
-/sboot-rehost:rehost-sboot          트랙 1 실행  ┐ 자율, 끝까지
+/sboot-rehost:rehost-bootloader          트랙 1 실행  ┐ 자율, 끝까지
 /sboot-rehost:rehost-kernel         트랙 2 실행  ┘
 /sboot-rehost:rehost-status         진행·검증·정지·소요 요약   (아무 때나)
 /sboot-rehost:rehost-export         완료 후 "빌드 없이 실행" 키트
@@ -704,7 +704,7 @@ SoC별 **"어디를 볼지" 힌트**. `generic.yaml` · `exynos.yaml` · `mediat
 
 | 명령 | 사전 조건 |
 |---|---|
-| `rehost-sboot` | `INPUT.md` track=1, `bl3_path` |
+| `rehost-bootloader` | `INPUT.md` track=1, `bl3_path` |
 | `rehost-kernel` | track=2, `fw/Image`(+dtb, initrd) · K2/K3 면 `super_path` · **K3 면 벤더 `.ko`** |
 
 **`rehost-setup` 만 사용자에게 묻는다** (실행 루프 중의 멈춤이 아니라 세팅 시점의 결정).

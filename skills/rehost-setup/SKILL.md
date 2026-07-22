@@ -1,23 +1,23 @@
 ---
 name: rehost-setup
-description: 새 펌웨어 리호스팅 세팅. 사용자는 rehost-setup 뒤에 워크스페이스 이름만 적으면 된다(예 /sboot-rehost:rehost-setup a166b). 플러그인이 rehost_workspaces/_inbox/ 의 펌웨어를 자동 인식·언팩하고 독립 워크스페이스를 만든 뒤, 마지막에 어떤 트랙(1 sboot / 2 kernel)·등급을 실행할지 사용자에게 프롬프트로 물어 INPUT.md 를 작성한다. 의존성은 1회성.
+description: 새 펌웨어 리호스팅 세팅. 사용자는 rehost-setup 뒤에 워크스페이스 이름만 적으면 된다(예 /sboot-rehost:rehost-setup a136u). 플러그인이 rehost_workspaces/_inbox/ 의 펌웨어를 자동 인식·언팩하고, SoC 계열(Exynos/MediaTek/기타)과 부트로더 종류를 사실로 판별한 뒤 독립 워크스페이스를 만들고, 마지막에 트랙(1 부트로더 / 2 커널)·등급을 프롬프트로 물어 INPUT.md 를 작성한다.
 disable-model-invocation: true
 ---
 
 당신은 **새 펌웨어 세팅** 오케스트레이터. 사용자는 **`/sboot-rehost:rehost-setup <이름>`** 만 치면 된다.
-플러그인이 알아서: `_inbox/` 펌웨어 인식 → 격리 워크스페이스 생성 → **마지막에 트랙을 프롬프트로
-물어봄** → INPUT.md. (예전처럼 인자를 다 요구하지 않는다.)
+플러그인이 알아서: `_inbox/` 펌웨어 인식 → **SoC 계열·부트로더 판별** → 격리 워크스페이스 →
+**트랙 프롬프트** → INPUT.md.
 
-- **인자**: `<이름>` (워크스페이스 이름, 자유 라벨). 생략 시 펌웨어에서 `<model>_<build>` 도출.
-  펌웨어를 직접 지정하려면 `fw=<경로>` 도 가능(선택).
-- **트랙/등급은 세팅 끝에 프롬프트로** 고른다 (인자로 `track=`/`target=` 주면 프롬프트 생략).
+- **인자**: `<이름>` (워크스페이스 이름). 생략 시 펌웨어에서 `<model>_<build>` 도출.
+  `fw=<경로>` 로 펌웨어 직접 지정 가능(선택).
+- **트랙/등급은 세팅 끝에 프롬프트**로 고른다 (`track=`/`target=` 인자로 주면 생략).
 
 ---
 
 ## 폴더 규약
 
 ```
-<cwd>/rehost_workspaces/     ← 작업 루트 (설치 시 훅이 _inbox/ 자동 생성)
+<cwd>/rehost_workspaces/     ← 작업 루트
 ├── _inbox/                  ← 펌웨어 zip/tar 드롭
 ├── .active                  ← 실행 명령의 기본 대상
 └── <이름>/                  ← 이 세팅이 만드는 격리 워크스페이스
@@ -25,98 +25,135 @@ disable-model-invocation: true
 
 ## Step 0 — 작업 루트 확인 + 펌웨어 인식
 
-1. `WORKROOT = <cwd>/rehost_workspaces` (보통 `/sboot-rehost:rehost-init` 이 미리 생성). 없으면 "`/sboot-rehost:rehost-init` 을
-   먼저 실행하세요" 안내(또는 자율 시 `WORKROOT/_inbox/` 자동 생성 후 진행). WSL 접근용 `/mnt/c/...` 확보.
-2. **의존성**: `/sboot-rehost:rehost-init` 에서 설치됨. 검사만 하고, 백그라운드 진행 중이면 자율 자동 대기.
-3. **펌웨어 자동 인식**: `fw=` 인자 우선, 없으면 `WORKROOT/_inbox/` 스캔.
-   - zip/tar.md5/이미지가 없으면: "`_inbox/` 에 펌웨어를 넣고 다시 호출" 안내 후 종료(하드 블로커).
-   - 여러 개면 가장 최근(mtime) 것 사용 + 어느 것을 썼는지 보고.
+1. `WORKROOT = <cwd>/rehost_workspaces`. 없으면 `/sboot-rehost:rehost-init` 안내(자율 시 자동 생성).
+2. **의존성**: init 에서 설치됨. 검사만 하고 진행 중이면 자동 대기.
+3. **펌웨어 인식**: `fw=` 우선, 없으면 `_inbox/` 스캔. 없으면 하드 블로커로 종료.
+   여러 개면 가장 최근(mtime) + 어느 것을 썼는지 보고.
 
 ## Step 1 — 워크스페이스 이름
 
-- `id` = 인자 `<이름>`(공백/특수문자 정리). 생략 시 펌웨어 파일명·메타에서 `<model>_<build>` 도출.
-- `WS = WORKROOT/<id>`. **이미 있으면 덮어쓰지 말 것** — "이미 존재. 다른 이름을 주거나 폴더 삭제
-  후 재시도" 안내 후 종료(하드 블로커). 새 id 면 표준 폴더 생성:
-  `01_firmware 02_unpacked 03_bl3 04_static-analysis 06_machine 07_logs 08_docs fw`.
-- 기록: `bash <PLUGIN>/scripts/journal.sh <WS> session-start "/sboot-rehost:rehost-setup" "새 워크스페이스 <id>"`.
+- `id` = 인자 `<이름>`. 생략 시 펌웨어에서 도출.
+- `WS = WORKROOT/<id>`. **이미 있으면 절대 덮어쓰지 말 것** — 안내 후 종료(하드 블로커).
+- 새 id 면 폴더 생성: `01_firmware 02_unpacked 03_bootloader 04_static-analysis 06_machine 07_logs 08_docs fw`.
+- `bash <PLUGIN>/scripts/journal.sh <WS> session-start "/sboot-rehost:rehost-setup" "새 워크스페이스 <id>"`.
 
-## Step 2 — 트랙·등급 선택 (★ 프롬프트)
+## ★ Step 2 — SoC 계열·부트로더 판별 (사실로)
 
-`track=`/`target=` 인자가 **없으면** `AskUserQuestion` 으로 사용자에게 묻는다:
+**추측하지 말고 파일과 매직으로 판별한다.** 결과는 탐색 힌트(`profiles/`)를 고르는 데 쓰이며,
+값 자체는 이후 static-analyzer 가 대상에서 도출한다.
 
-- **Q1 트랙**: 펌웨어에서 추정한 것을 첫 옵션으로(BL_*.tar → 트랙 1 추정, AP_*.tar/boot.img →
-  트랙 2 추정):
-  - "트랙 1 — S-Boot 셸 (`/sboot-rehost:rehost-sboot`)"
-  - "트랙 2 — 커널 + 진짜 UFS 컨트롤러 (`/sboot-rehost:rehost-kernel`)"
-- **Q2 등급**: 트랙 1 → A(help,권장)/B/C, 트랙 2 → K1/K2/K3(진짜 UFS 컨트롤러).
-- **model** 이 펌웨어에서 안 나오면 여기서 함께 묻기(예 SM-A166B).
+| 관찰 | 판정 |
+|---|---|
+| `sboot.bin`(또는 `BL_*.tar` 안) + `S-BOOT`/`Following commands` ASCII | `soc_family: exynos`, 부트로더 `S-Boot` |
+| `lk.bin` · `lk-verified.img` · MTK 헤더 매직 `0x58881688` · `preloader_*` | `soc_family: mediatek`, 부트로더 `LK` |
+| `aboot`/`emmc_appsboot.mbn` | `soc_family: qualcomm`, 부트로더 `aboot` |
+| DTB `compatible` 문자열 | `samsung,exynos*` → exynos · `mediatek,mt*` → mediatek |
+| 위 어디에도 안 맞음 | `soc_family: generic` (프로필 `generic.yaml`) |
 
-인자로 이미 주어졌으면 프롬프트 생략(자율). `interactive` 무관하게 이 선택 프롬프트는 유효.
+실제 명령 예:
+```bash
+strings <bootloader.bin> | grep -m1 -E 'S-BOOT|Little Kernel|LK build'
+xxd -l 8 <lk-verified.img>            # MTK 헤더 매직 확인
+fdtdump <dtb> | grep -m1 compatible
+```
 
-## Step 3 — 언팩 (선택 트랙 기준, WSL)
+### 부트로더 아키텍처(`arch`)
+- AArch64 커널 헤더/`adrp` 패턴 → `arm64` (Exynos S-Boot)
+- ARM/Thumb 벡터(`b reset`), 64-bit 포인터 스캔 0히트 → **`arm32`** (MediaTek LK)
 
-펌웨어를 `WS/01_firmware/` 로 옮긴 뒤:
-- 트랙 1: `tar xf BL_*.tar.md5 sboot.bin.lz4 → lz4 -d → WS/02_unpacked/sboot.bin` (이미 sboot.bin 이면 복사).
-- 트랙 2: `bash <PLUGIN>/scripts/extract_boot_assets.sh <WS> <boot.img> [super] [dtb]` → `WS/fw/`.
+### 인터랙티브 표면(`bl_surface`) — **힌트만**
+setup 은 후보만 적고 **확정하지 않는다.** static-analyzer 가 UART 수신 경로 유무와
+USB dispatcher 를 도출해 확정한다.
 
-## Step 4 — 실행 사본 WSL + 자산 검증
+| 힌트 | 근거 |
+|---|---|
+| `shell` | UART 콘솔 프롬프트 문자열(`S-BOOT #` 등) 존재 |
+| `fastboot` | `fastboot`/`getvar:` 문자열 존재, UART 프롬프트 없음 |
+| `미확정` | 판단 불가 — static-analyzer 가 결정 |
 
-- `WSDIR=$HOME/rehost/<id>` 로 실행 입력 복사. 문서·기록·07_logs 는 `WS`(Windows).
-  `journal.sh <WS> decision "실행 사본" "WSL ($WSDIR)" "/mnt/c I/O 느림 회피"`.
-- 검증(실제 명령): 트랙 1 md5·크기, **4 MB 미만 = carve 의심 하드 블로커**. 트랙 2 Image md5·크기,
-  DTB 매직 `0xd00dfeed`, super EROFS, **K3 인데 `.ko` 없음 = 하드 블로커**.
+`journal.sh <WS> decision "SoC 계열" "<판정>" "<근거: 파일·매직·문자열>"` 로 기록.
 
-## Step 5 — INPUT.md + PROGRESS.md + .active
+## Step 3 — 트랙·등급 선택 (★ 프롬프트)
 
-`WS/INPUT.md` (자산=WSL 경로, workdir=WS 의 `/mnt/c/...`):
+`track=`/`target=` 인자가 없으면 `AskUserQuestion`:
+
+- **Q1 트랙** (펌웨어에서 추정한 것을 첫 옵션으로):
+  - "**트랙 1 — 부트로더** (`/sboot-rehost:rehost-bootloader`) — `<판별한 부트로더>` 의 인터랙티브 표면 도달"
+  - "**트랙 2 — 커널** (`/sboot-rehost:rehost-kernel`) — 커널 + 진짜 스토리지 컨트롤러"
+- **Q2 등급**: 트랙 1 → A/B/C, 트랙 2 → K1/K2/K3.
+- `model` 이 안 나오면 함께 묻기.
+
+## Step 4 — 언팩 (선택 트랙 기준, WSL)
+
+- **트랙 1**: 부트로더 이미지를 `WS/03_bootloader/` 로.
+  - Exynos: `tar xf BL_*.tar.md5 sboot.bin.lz4` → `lz4 -d` → `sboot.bin`
+  - MediaTek: `lk-verified.img` 페이로드(파일 오프셋 0x200~) → `lk.bin`
+- **트랙 2**: `bash <PLUGIN>/scripts/extract_boot_assets.sh <WS> <boot.img> [super] [dtb]` → `WS/fw/`.
+
+## Step 5 — 실행 사본 + 자산 검증
+
+- `WSDIR=$HOME/rehost/<id>` 로 실행 입력 복사 (문서·07_logs 는 Windows `WS`).
+- 검증(실제 명령): md5·크기, 트랙 2 는 DTB 매직 `0xd00dfeed`.
+- **트랙 2 토폴로지**: `super.img` 존재 여부 → `has_super`.
+  분리형 `system`/`vendor` raw 면 `has_super: false` (캡스톤 없음).
+- **`.ko` 부재는 하드 블로커가 아니다.** 커널 빌트인(`=y`)이면 `.ko` 는 설계상 없다
+  (K3\*). 판정은 static-analyzer 가 커널 이미지 심볼로 한다 — 여기서는 경로만 적는다.
+
+## Step 6 — INPUT.md + PROGRESS.md + .active
 
 ```markdown
 | 슬롯 | 값 |
 |---|---|
 | workspace_id | <id> |
-| track | <프롬프트/인자 결과 1|2> |
+| track | <1|2> |
 | autonomous | true |
 | model | <도출/입력> |
 | build | <도출 또는 미확정> |
-| soc | 미확정 |
-| target | <프롬프트 결과> |
-| bl3_path 또는 kernel_path/dtb_path/initrd_path/super_path/storage_driver_ko | <WSL 사본> |
-| md5 | <자동> |
-| file_size | <자동> |
+| soc | <도출 또는 미확정> |
+| soc_family | <exynos | mediatek | qualcomm | generic> |
+| bootloader | <S-Boot | LK | aboot | 미확정>          (트랙 1) |
+| arch | <arm64 | arm32>                              (트랙 1) |
+| bl_surface | <shell | fastboot | 미확정>             (트랙 1, 힌트) |
+| bootloader_path | <WSL 사본>                         (트랙 1) |
+| kernel_path / dtb_path / initrd_path / super_path / storage_driver_ko | <WSL 사본> (트랙 2) |
+| has_super | <true | false>                          (트랙 2) |
+| target | <A/B/C 또는 K1/K2/K3> |
+| md5 / file_size | <자동> |
 | workdir | </mnt/c/.../rehost_workspaces/<id>> |
 | wsl_workspace | ~/rehost/<id> |
-| has_el3_guess | false |
-| has_el2_guess | true |
 | qemu_dir | ~/qemu-build/qemu-10.2.2 |
 ```
 
-`WS/PROGRESS.md`(0회차) + `WORKROOT/.active` 에 `<id>` 기록.
-`journal.sh <WS> session-end "/sboot-rehost:rehost-setup" "INPUT.md 생성, track <1|2>, active=<id>"`.
+`WS/PROGRESS.md`(0회차) + `WORKROOT/.active` 에 `<id>`.
+`journal.sh <WS> session-end "/sboot-rehost:rehost-setup" "INPUT.md 생성, track <1|2>, <soc_family>, active=<id>"`.
 
-## Step 6 — 완료 안내 (★ 선택한 트랙의 실행 명령 하나만)
+## Step 7 — 완료 안내
 
 ```
 == 세팅 완료: 워크스페이스 <id> (active) ==
-| 트랙 / 등급 | <1 sboot-shell | 2 kernel-storage> / <target> |
-| 모델        | <model> |
-| 자산(WSL)   | <경로> (<size>, md5 <md5>) |
-| 의존성      | OK / 백그라운드 설치 중 |
+| 트랙 / 등급  | <1 부트로더 | 2 커널> / <target> |
+| SoC 계열     | <exynos | mediatek | ...>  (프로필 profiles/<계열>.yaml) |
+| 부트로더     | <S-Boot | LK | ...> (<arm64|arm32>)         ← 트랙 1 일 때만
+| 표면(힌트)   | <shell | fastboot | 미확정 — 분석이 확정>     ← 트랙 1 일 때만
+| 모델         | <model> |
+| 자산(WSL)    | <경로> (<size>, md5 <md5>) |
 
 ▶ 다음 — 아래 하나를 실행하세요:
-   <트랙 1 이면>  /sboot-rehost:rehost-sboot          (S-Boot 셸까지 자율 진행)
-   <트랙 2 이면>  /sboot-rehost:rehost-kernel         (커널 → UFS 컨트롤러까지 자율 진행)
+   <트랙 1 이면>  /sboot-rehost:rehost-bootloader     (부트로더 표면 도달까지 자율)
+   <트랙 2 이면>  /sboot-rehost:rehost-kernel         (커널 → 스토리지 컨트롤러까지 자율)
 
-  · 다른 펌웨어: _inbox/ 에 넣고 /sboot-rehost:rehost-setup <다른이름>  (새 워크스페이스, 기존 안 덮어씀)
-  · 워크스페이스 목록/상태: /sboot-rehost:rehost-status
+  · 다른 펌웨어: _inbox/ 에 넣고 /sboot-rehost:rehost-setup <다른이름>
+  · 상태 확인:   /sboot-rehost:rehost-status
 ```
 
-★ 선택한 트랙에 **해당하는 명령 하나만** 굵게 안내(다른 트랙 명령은 흐리게/생략).
+선택한 트랙의 **명령 하나만** 굵게 안내.
 
 ---
 
 ## 정직성
 
-- **덮어쓰기 금지**: 같은 이름 워크스페이스 있으면 절대 덮어쓰지 말 것(기존 펌웨어 보호).
-- 트랙 선택은 사용자 프롬프트(또는 인자). 언팩·md5·크기는 실제 명령. carve/필수 결손/K3 `.ko`
-  부재 = 하드 블로커.
-- 의존성은 1회성 — 두 번째 펌웨어부터 재설치 금지(스킵).
+- **덮어쓰기 금지** — 같은 이름 워크스페이스가 있으면 종료.
+- SoC 계열·부트로더·아키텍처는 **파일·매직·문자열로 판별**한다. 모델명으로 넘겨짚지 않는다.
+- **표면은 힌트일 뿐** — 확정은 static-analyzer 가 수신 경로 유무를 도출해서 한다.
+- `.ko` 부재를 하드 블로커로 취급하지 않는다 (빌트인일 수 있음).
+- 의존성은 1회성 — 두 번째 펌웨어부터 스킵.

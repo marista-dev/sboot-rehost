@@ -44,7 +44,11 @@ are not sure, answer `unknown` - it costs you nothing.
 | `console_silent` | `unmapped_mmio` | `upiu_field_off` |
 | `fpu_trap` | `rootfs_mount` | `block_size` |
 | `shell_exit_early` | `psci_suspend` / `hvc_pkvm` | `vendor_telemetry_null` |
-| | | `prdt_stride` |
+| | `cpu_cluster_mpidr` | `prdt_stride` |
+| | | `irq_edge_level` |
+| | | `is_bit_layout` |
+| | | `query_upiu_overwrite` |
+| | | `sparse_super_gpt` |
 
 plus **`unknown`** when nothing fits.
 

@@ -7,6 +7,66 @@
 
 ---
 
+## 0.10.0 — 2026-07-22
+
+**벤더 중립화.** MediaTek(SM-A136U / MT6833) 실제 산출물과 대조해, 트랙 1 이 Samsung
+S-Boot 한 종류를 전제하고 있던 것을 부트로더 **단계** 전반으로 넓혔다.
+
+### 명령 개명 — `rehost-sboot` → `rehost-bootloader`
+`S-Boot` 은 삼성 Exynos 의 부트로더 **구현체 이름**이라 MediaTek LK·Qualcomm aboot 에
+쓰면 틀린 이름이었다. 명령을 가르는 축은 **부팅 체인의 진입점**이지 벤더가 아니므로,
+명령은 2개(부트로더 / 커널)를 유지하고 이름만 단계 이름으로 바꿨다.
+`rehost-sboot` 은 **별칭으로 남아** 기존 사용자를 깨지 않는다.
+
+### 목표를 "인터랙티브 표면" 으로 일반화
+부트로더마다 사용자 명령을 받는 경로가 다르다. 목표는 셸이 아니라 **그 부트로더에서
+실제로 도달 가능한 표면**이다.
+
+| 표면 | 도달 증거 | 대표 |
+|---|---|---|
+| `shell` | 프롬프트 + `help` 출력 | Samsung S-Boot |
+| `fastboot` | `getvar:` 수신·에코·dispatch | MediaTek LK |
+
+- `bl_surface` 인자로 사다리·검증이 결정된다. setup 은 힌트만 주고 **static-analyzer 가
+  사실로 확정**한다 (UART 수신 경로 유무, USB dispatcher 가 명령 테이블을 참조하는가).
+- 검증 항목 4 가 표면별로 달라진다 — `shell` 은 **UART 단일 경로**, `fastboot` 은
+  **입력이 외부에서 옴**(머신이 명령을 지어내면 순환검증).
+- 새 하드 블로커 **`BLOCKED_NO_INPUT_PATH`** — 어느 표면에도 입력 경로가 없을 때.
+  실제 LK 사례가 이걸 증명했다: 12명령 콘솔이 바이너리에 실재하지만 UART 는 출력
+  전용이고 어떤 USB 리더도 그 테이블을 참조하지 않아 인터랙티브 도달이 구조적으로
+  불가능했다(트램폴린으로 출력을 강제하는 건 FORCED).
+
+### MediaTek 을 막고 있던 결함 (실제 lk.bin 으로 확인)
+- **`carve_check` 가 S-Boot 잣대(4 MB + Exynos 문자열)를 모든 이미지에 적용**해,
+  1.5 MB LK 를 carve 로 오판하고 `BLOCKED_CARVE` 로 **첫 단계에서 거부**했다.
+  아키텍처별 기준(arm32: 512 KB + LK 문자열)으로 교정.
+- **`find_xref_to` 가 8 바이트 포인터만 스캔** — AArch32 는 4 바이트라 명령 테이블을
+  못 찾고 "없음" 으로 오판했다.
+- `carve_disasm.py --arch arm64|arm32` 신설 (Thumb 디스어셈블, AArch32 진입 패턴 점수).
+- `soc_family` · `arch` · `bootloader_path`(구 `bl3_path` 도 인식) 슬롯 도입.
+- setup 이 파일·매직·문자열로 **SoC 계열과 부트로더를 사실로 판별**한다.
+
+### MediaTek 트랙 2 지식 (코드 변경 없이 이득)
+- **`cpu_cluster_mpidr`** — DTB `cpu reg` 와 QEMU cores-per-cluster 불일치로
+  `psci cpu_on -22` → `cpuhp` 가 `cpu_hotplug_lock` 점유 → init 영구 블록.
+  **에러 메시지 없이 부팅이 멈추는** 유형. MTK K1 의 실제 근본원인이었다.
+- **`irq_edge_level`** — HCI 인터럽트는 level-triggered 여야 한다 (edge 면 UIC -110).
+- **`is_bit_layout`** — IS 비트 위치 (UPMS 는 bit 4, bit 8 로 오해하기 쉬움).
+- **`query_upiu_overwrite`** — 응답 UPIU 는 헤더+페이로드를 **1회** 로 써야 한다.
+- **`sparse_super_gpt`** — Android sparse super 는 GPT 디스크가 아니다. LUN 합성 필요.
+- 프로필 `mediatek.yaml` 확장 (LK 구조·엔트리 16 B·포인터 4 B·`-icount`·`initcall_debug`).
+
+### 남은 격차 (정직 기록)
+- **AArch32 머신 템플릿이 없다.** 트랙 1 MediaTek 은 Build 단계에서 AArch64 템플릿을
+  쓰지 않고 **정직하게 실패를 보고**하도록 했다 — 잘못된 머신을 조용히 만드는 것보다
+  낫기 때문이다. USB 컨트롤러 모델도 아직 없다.
+- 트랙 2 MediaTek 은 지식·프로필이 준비됐으나, sparse super → GPT LUN 합성 도구는
+  아직 없다.
+
+### 회귀
+하니스 45 → **50 케이스** (MediaTek 5 케이스 추가: carve 아키텍처 기준, fastboot 표면
+마일스톤, 외부 입력 검증).
+
 ## 0.9.2 — 2026-07-22
 
 실제 리호스팅 산출물(SM-G977N / Exynos 9820)과 대조해 **한 펌웨어 형상에 과적합된

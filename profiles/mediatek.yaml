@@ -1,24 +1,58 @@
 # profiles/mediatek.yaml - MediaTek search hints.
 # No values (addresses, offsets) live here; they are derived from the target
-# firmware (honesty rule 1).
+# firmware (honesty rule 1). These only say WHERE to look.
 
 name: mediatek
-description: search hints for the MediaTek family
+description: search hints for the MediaTek family (LK bootloader, MTK kernel)
 extends: generic
 
-bootloader:
-  known_strings: ["lk", "LK", "boot mode", "fastboot", "preloader"]
-  prompt_candidates: ["> ", "fastboot> "]
-  notes:
-    - the bootloader is LK-based, so its strings and layout differ from S-Boot
-    - when preloader and lk ship separately, state in INPUT.md which one is the target
+bootloader:                          # track 1
+  implementation: LK                 # Little Kernel derivative
+  arch: arm32                        # AArch32 ARM/Thumb-2, NOT AArch64
+  image_names: ["lk.bin", "lk-verified.img", "preloader_*"]
+  container_magic: "0x58881688"      # MTK image header; payload usually at file 0x200
+  known_strings: ["Little Kernel", "lk build", "fastboot", "preloader",
+                  "boot mode", "printenv"]
+  # ★ The console command table exists in many builds but is often UNREACHABLE:
+  #   the UART driver may be output-only and no USB reader references the table.
+  #   static-analyzer must derive the surface before any goal is set.
+  surface_candidates: ["fastboot", "shell"]
+  surface_notes:
+    - check the UART driver for a receive path (RBR read / rx polling) before
+      assuming a shell exists - MediaTek LK is commonly output-only
+    - USB side usually has several independent dispatchers (fastboot, META/AT,
+      download agent); each knows only its own command set
+    - a command table with no caller and no dispatcher reference is an island,
+      not a surface
+  cmd_entry:
+    size_hint: 16                    # {name, help, func, mask} - Exynos uses 32
+    pointer_width: 4                 # AArch32: 4-byte pointers, not 8
+  fastboot_strings: ["fastboot: processing commands", "fastboot_init(",
+                     "command buf", "getvar:"]
 
-kernel:
-  uart_earlycon: mtk
+kernel:                              # track 2
+  uart_earlycon: mtk                 # 16550-compatible, reg-shift 2
+  driver_names: ["ufs_mtk", "ufshcd", "mtk-uart"]
   notes:
     - confirm the earlycon family from the DTB serial node compatible
+    - vendor coprocessors (SCP / SSPM / MCUPM / ADSP) and the modem (CCCI) have
+      no firmware here; their IPIs time out and must fail gracefully
+    - '-icount is often required: timer interrupt overload can look like a hang'
+    - 'initcall_debug on the cmdline pinpoints a stalled initcall'
+  # ★ MPIDR encoding differs per SoC and silently deadlocks the boot when wrong.
+  cpu_topology_hint:
+    check: "fdtdump <dtb> | grep -A3 'cpu@'"
+    note: >
+      DTB cpu reg of 0x0,0x100,0x200 … means Aff1 is the core index, i.e. one
+      core per cluster. QEMU's default 4-per-cluster then produces MPIDRs the
+      DTB never names, psci cpu_on returns -22 and cpuhp holds cpu_hotplug_lock
+      until init blocks forever. See knowledge/faults_kernel.md cpu_cluster_mpidr.
 
-storage:
-  hci_kind: ufs                       # some devices are eMMC instead; confirm from the DTB
+storage:                             # track 2 K3
+  hci_kind: ufs                      # some devices are eMMC; confirm from the DTB
   notes:
-    - decide ufs versus mmc from which node actually exists in the DTB
+    - UFS is usually built into the kernel (=y), so no vendor .ko exists by
+      design - that is K3*, not a blocker
+    - super.img on these devices is an Android sparse super, not a GPT disk;
+      a LUN with a synthesised GPT is required for partition enumeration
+    - the HCI interrupt must be level-triggered, not a pulse
