@@ -342,6 +342,27 @@ TOPG=$(python3 -c "import json;print(json.load(open('$ROOT/obsg.json'))['milesto
 chk "등급 단(commands·autoboot) 관측" "$LISTG" "shell,commands,autoboot"
 chk "최고 단은 autoboot"              "$TOPG"  "autoboot"
 
+# 13. 실행 환경 선행 검사 (BLOCKED_ENV) — 못 도는 셸에서 회차를 태우지 않는가
+EW=$(new_ws env)
+J=$(bash "$S/check_env.sh" "$EW" 1 2>/dev/null)
+chk "정상 셸이면 Git Bash 문제 없음" \
+    "$(echo "$J" | python3 -c 'import json,sys;print(any("Git Bash" in p for p in json.load(sys.stdin)["problems"]))')" "False"
+
+# Git Bash 위장: uname 이 MINGW 를 내면 실행 불가로 판정해야 한다
+mkdir -p "$BIN/mingw"
+printf '#!/usr/bin/env bash\necho "MINGW64_NT-10.0-22631"\n' > "$BIN/mingw/uname"
+chmod +x "$BIN/mingw/uname"
+JM=$(PATH="$BIN/mingw:$PATH" bash "$S/check_env.sh" "$EW" 1 2>/dev/null)
+chk "Git Bash 면 ok=false"        "$(echo "$JM" | python3 -c 'import json,sys;print(json.load(sys.stdin)["ok"])')" "False"
+chk "Git Bash 라고 짚어준다"      "$(echo "$JM" | python3 -c 'import json,sys;print(any("Git Bash" in p for p in json.load(sys.stdin)["problems"]))')" "True"
+chk "WSL 안내가 힌트에 있다"      "$(echo "$JM" | python3 -c 'import json,sys;print("WSL" in json.load(sys.stdin)["hint"])')" "True"
+
+# 워크스페이스가 이 셸에서 안 보이면 그것도 실행 불가다
+JW=$(bash "$S/check_env.sh" "/no/such/workspace" 1 2>/dev/null)
+chk "보이지 않는 워크스페이스 감지" \
+    "$(echo "$JW" | python3 -c 'import json,sys;print(any("보이지 않습니다" in p for p in json.load(sys.stdin)["problems"]))')" "True"
+
+
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
 echo "작업 폴더: $ROOT"
 [ "$FAIL" -eq 0 ]

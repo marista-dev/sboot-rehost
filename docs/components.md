@@ -292,6 +292,17 @@ QEMU 를 실행하고 **원시 지문을 추출**하며 **출처 게이트를 �
 ```
 
 ### 동작 과정
+### ★ 선행 검사 (`check_env.sh`) — 루프에 들어가기 전에 한 번
+
+루프는 QEMU·ninja·python3 를 **에이전트의 Bash 도구**로 돌린다. 그 셸이 작업을 수행할 수
+없으면(네이티브 Windows 의 Git Bash 는 `/mnt/c` 를 못 보고 Linux QEMU 도 못 돌린다) 모든
+회차가 같은 이유로 실패하는데, 파이프라인은 그걸 평범한 정지점으로 보고 런타임 한계까지
+헛돈다.
+
+**실행 불가는 목표 판정이 아니라 선행 조건 문제다.** Analyze 맨 앞에서 한 번 점검하고,
+실패하면 `BLOCKED_ENV` 를 `blockers.jsonl` 에 사실로 남긴 뒤 루프 이전에 정지한다.
+환경만 갖추면 같은 워크스페이스로 그대로 재개된다.
+
 ```
 journal try-start
   → check_change snapshot        (fixer 수정 전 원본 확보)

@@ -111,6 +111,7 @@ pipeline 의 log 를 그대로 전달 (`[Loop] 회차 18 (목표 power_mode) —
 | stop_reason | 의미 |
 |---|---|
 | `BLOCKED_ASSET` | 부팅 자산 미확보 |
+| **`BLOCKED_ENV`** | **이 셸에서 실행 불가** — 네이티브 Windows 의 Git Bash 등. 목표 판정이 아니라 환경 문제이며 **WSL 터미널에서 claude 를 실행**하면 그대로 재개된다 |
 | `BLOCKED_KO` | K3 인데 `.ko` 부재 **그리고** 커널 빌트인도 아님 → K2 로 낮출지 검토 안내. **빌트인이면 K3\* 로 계속 진행하지 블로커가 아니다** |
 | `BLOCKED_BUILD` | ninja 실패 (원문 그대로) |
 | `BLOCKED_TEE` | vold/Keymint/TEEGRIS 시큐어월드 — **범위 밖**, 미달로 정직 기록 |

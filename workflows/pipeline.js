@@ -296,6 +296,45 @@ const VERIFIER_SCHEMA = {
 phase('Analyze')
 log(`[분석] 트랙 ${track} / 등급 ${target} — 목표 사다리: ${goals.join(' → ')}`)
 
+// Precondition: can this shell run the work at all?
+//
+// On native Windows the agent's Bash tool is Git Bash, which cannot see /mnt/c
+// or run a Linux QEMU. Every round would then fail for the same reason while
+// the loop treats it as an ordinary stop point and burns its whole round
+// budget. A shell that cannot execute the work is not a goal judgement - check
+// it once, up front, and stop with something the user can act on.
+const env = await shell('check-env', 'Analyze',
+  `bash "${PLUGIN}/scripts/check_env.sh" "${workdir}" ${track}`,
+  {
+    type: 'object',
+    properties: {
+      ok: { type: 'boolean' },
+      os: { type: 'string' },
+      problems: { type: 'array' },
+      hint: { type: 'string' },
+    },
+    required: ['ok'],
+  })
+
+if (env && env.ok === false) {
+  const problems = (env.problems ?? []).join(' / ')
+  await shell('record-env-blocker', 'Analyze',
+    `python3 "${PLUGIN}/scripts/record.py" "${workdir}" blocker code=BLOCKED_ENV ` +
+    `detail=${shq(problems)} 2>/dev/null || true\n` +
+    `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" note ` +
+    `${shq(`환경 블로커: ${problems}`)} 2>/dev/null || true`,
+    OK_SCHEMA)
+  log(`★ 정지 — BLOCKED_ENV (${env.os ?? '?'}): 이 셸에서는 실행 자체가 불가능합니다.`)
+  ;(env.problems ?? []).forEach(p => log(`    · ${p}`))
+  return {
+    success: false, stopped: true, stop_reason: 'BLOCKED_ENV',
+    os: env.os, problems: env.problems ?? [],
+    note: (env.hint || 'WSL 터미널에서 claude 를 실행하세요.') +
+          ' 이것은 목표 도달 판정이 아니라 실행 환경 문제이며, 환경만 갖추면 ' +
+          '같은 명령으로 그대로 재개됩니다 (워크스페이스·INPUT.md 재사용).',
+  }
+}
+
 const prior = await agent(
   `Run in mode=prior: derive every fact needed to build the machine model.\n` +
   `track=${track}, target=${target}, soc_family=${socFamily}, arch=${arch}\n` +
