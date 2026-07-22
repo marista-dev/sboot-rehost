@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/wsl_bridge.sh"
 # run_round.sh - execute one round and emit a SINGLE observation document.
 #
 # Why this exists:

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/wsl_bridge.sh"
 # setup_env.sh — sboot-rehost 의 의존성 자동 설치
 # /sboot-rehost:rehost-init 또는 실행 명령의 S0 단계가 호출. 사용자 동의 후만 실행.
 # 소요: 약 18 분 (대부분 QEMU 빌드)

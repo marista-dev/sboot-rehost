@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/wsl_bridge.sh"
 # extract_boot_assets.sh — 트랙 2 §2 부팅 자산 추출 (일반, 표준 언팩).
 # 펌웨어 tar/img 에서 Image / DTB / initrd / super 를 <workdir>/fw 로.
 #

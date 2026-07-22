@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/wsl_bridge.sh"
 # journal.sh — /rehost* 실행 기록기. 모든 시각은 실제 date (조작·추정 금지, 정직성).
 # <workdir>/JOURNAL.md 에 세션 + 시행착오(원인/분석/해결)를 시작·완료 시각과 함께 append.
 # 시작 epoch 는 <workdir>/08_docs/.journal/ 에 보관 → 완료 시 소요시간 계산.

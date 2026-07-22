@@ -63,6 +63,7 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 | `workflows/pipeline.js` | 루프 배선 + 단계 제어 | 사실 정지를 LLM 이 못 뒤집게 강제 |
 | `run_round.sh` | 한 회차 통째 수행 → **관측 문서 1개** (`observation.json`) | LLM 이 `stop` 을 조립하지 못하게 함 |
 | `run_qemu.sh` / `run_kernel.sh` | 실행 → **지문 추출 + 출처 게이트** | §7 자가주입 금지 (매 회차) |
+| `wsl_bridge.sh` | 셸이 Windows 면 WSL 로 건너뜀 (scripts 공통 가드) | 실행은 Linux, 기록은 Windows |
 | `check_env.sh` | 루프 전 실행 환경 선행 검사 | 못 도는 셸에서 회차 소모 금지 |
 | `check_change.sh` | 한 변경 검문 (diff · 우회 4항목) | 회차 = 한 변경 |
 | `stop_conditions.py` | 정지 조건 계산 | 무한 진동 차단 |
@@ -153,7 +154,7 @@ python3 scripts/record.py <wd> blocker code=BLOCKED_KO detail="…"
 | `BLOCKED_ASSET` | 부팅 자산 없음 | 파일 체크 |
 | `BLOCKED_KO` | K3 인데 **`.ko` 부재 AND 커널 빌트인도 아님** | static-analyzer 도출 |
 | `BLOCKED_BUILD` | ninja 실패 | 빌드 결과 (추측 수정 금지) |
-| `BLOCKED_ENV` | **이 셸에서 실행 자체가 불가** (Git Bash 라 Linux QEMU·`/mnt/c` 불가 등) | `check_env.sh` 선행 검사 |
+| `BLOCKED_ENV` | **실행 환경 미비** (WSL 부재 · QEMU/capstone 미설치) | `check_env.sh` 선행 검사 |
 | `BLOCKED_TEE` | vold/Keymint/TEEGRIS 시큐어월드 | 범위 밖 — 미달로 정직 기록 |
 | `EXHAUSTED` | **무브 소진** | `stop_conditions.py` |
 
@@ -329,6 +330,11 @@ WSL ext4 (대용량):
 
 **기록 위치 원칙**: 사용자가 보는 기록·해결과정은 **로컬 Windows cwd**,
 대용량 쓰기(실행 사본·전체 트레이스)는 **WSL ext4**.
+
+**세션은 어느 쪽에서 띄워도 된다.** WSL 안에서 띄우면 그대로 돌고, Windows 에서 띄우면
+`scripts/*` 의 `wsl_bridge.sh` 가드가 `wsl.exe -e` 로 건너간다 (`-e` 는 argv 를 그대로
+넘기므로 인용 계층이 늘지 않는다). 파일 배치는 두 경우 모두 같다 — 폴더·문서는 Windows,
+실행·트레이스는 WSL.
 
 ---
 

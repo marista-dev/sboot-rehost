@@ -47,16 +47,23 @@ export const meta = {
 }
 
 // --- arguments ---------------------------------------------------------------
-const workdir   = args?.workdir
+// Backslashes in a Windows path are escape characters to bash, so every path we
+// interpolate into a command is normalised to forward slashes first. Both Git
+// Bash and WSL accept that form, and wsl_bridge.sh translates C:/... to /mnt/c.
+function posix(value) {
+  return typeof value === 'string' ? value.replace(/\\/g, '/') : value
+}
+
+const workdir   = posix(args?.workdir)
 const track     = Number(args?.track ?? 1)
 const model     = args?.model
 // bl3_path is the pre-0.10 name. BL3 is ARM/Exynos wording and reads wrong for a
 // MediaTek LK image, so the slot is bootloader_path now; both are accepted.
-const bootloader_path = args?.bootloader_path ?? args?.bl3_path
+const bootloader_path = posix(args?.bootloader_path ?? args?.bl3_path)
 const target    = String(args?.target ?? (track === 1 ? 'A' : 'K2')).toUpperCase()
 const socFamily = String(args?.soc_family ?? 'generic').toLowerCase()
 const arch      = String(args?.arch ?? 'arm64').toLowerCase()
-const PLUGIN    = args?.plugin_dir ?? '${CLAUDE_PLUGIN_ROOT}'
+const PLUGIN    = posix(args?.plugin_dir) ?? '${CLAUDE_PLUGIN_ROOT}'
 const ROUND_CAP = Number(args?.runtime_round_cap ?? 120)
 
 // The bootloader's interactive surface is what track 1 actually targets. A UART
@@ -161,7 +168,7 @@ function recordRoundCmd(round, goal, fp, category, fixer, changeKey, effect, ana
     `fixer_no_new_change=${noNewChange === true}`,
     `tokens_total=${budget.spent()}`,
   ].join(' ')
-  return `python3 "${PLUGIN}/scripts/record.py" "${workdir}" round ${fields}`
+  return `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" round ${fields}`
 }
 
 function journalTryEnd(round, cause, analysis, fix, evidence) {
@@ -316,20 +323,20 @@ const env = await shell('check-env', 'Analyze',
     required: ['ok'],
   })
 
-if (env && env.ok === false) {
+if (!env || env.ok !== true) {
   const problems = (env.problems ?? []).join(' / ')
   await shell('record-env-blocker', 'Analyze',
-    `python3 "${PLUGIN}/scripts/record.py" "${workdir}" blocker code=BLOCKED_ENV ` +
+    `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=BLOCKED_ENV ` +
     `detail=${shq(problems)} 2>/dev/null || true\n` +
     `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" note ` +
     `${shq(`환경 블로커: ${problems}`)} 2>/dev/null || true`,
     OK_SCHEMA)
-  log(`★ 정지 — BLOCKED_ENV (${env.os ?? '?'}): 이 셸에서는 실행 자체가 불가능합니다.`)
+  log(`★ 정지 — BLOCKED_ENV (${env.os ?? '?'}): 실행 환경이 준비되지 않았습니다.`)
   ;(env.problems ?? []).forEach(p => log(`    · ${p}`))
   return {
     success: false, stopped: true, stop_reason: 'BLOCKED_ENV',
     os: env.os, problems: env.problems ?? [],
-    note: (env.hint || 'WSL 터미널에서 claude 를 실행하세요.') +
+    note: (env.hint || '실행 환경을 갖춘 뒤 다시 시도하세요.') +
           ' 이것은 목표 도달 판정이 아니라 실행 환경 문제이며, 환경만 갖추면 ' +
           '같은 명령으로 그대로 재개됩니다 (워크스페이스·INPUT.md 재사용).',
   }
@@ -359,7 +366,7 @@ const prior = await agent(
     : '') + `\n` +
   `First record the phase:\n` +
   `  bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Analyze (static-analyzer prior)"\n` +
-  `  python3 "${PLUGIN}/scripts/record.py" "${workdir}" start analyze\n\n` +
+  `  bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" start analyze\n\n` +
   (track === 1
     ? `Work through the track 1 checklist (carve verdict first) and write STATIC.md.`
     : `Work through the track 2 checklist (assets, DTB skeleton, security gate sites) ` +
@@ -368,7 +375,7 @@ const prior = await agent(
   `values from another device or build.\n\n` +
   `Write STATIC.md / KERNEL_STATIC.md in natural Korean - the user reads them.\n\n` +
   `When finished:\n` +
-  `  python3 "${PLUGIN}/scripts/record.py" "${workdir}" metric phase=Analyze ` +
+  `  bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" metric phase=Analyze ` +
   `event=analyze_end timer=analyze tokens_total=${budget.spent()}`,
   { agentType: 'static-analyzer', schema: ANALYST_SCHEMA, label: 'analyze', phase: 'Analyze' }
 )
@@ -408,7 +415,7 @@ if (track === 1 && SURFACES.includes(derivedSurface) && derivedSurface !== activ
 if (blockers.length) {
   const [code, detail] = blockers[0]
   await shell('record-blocker', 'Analyze',
-    `python3 "${PLUGIN}/scripts/record.py" "${workdir}" blocker code=${code} detail=${shq(detail)}\n` +
+    `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=${code} detail=${shq(detail)}\n` +
     `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" note ${shq(`하드 블로커 ${code}: ${detail}`)}`,
     OK_SCHEMA)
   log(`★ 정지 — ${code}: ${detail}`)
@@ -446,8 +453,8 @@ const built = await agent(
   `   Never invent a value that was not derived. Mark undetermined slots with a ` +
   `   comment instead of guessing.\n` +
   (track === 2
-    ? `3. python3 "${PLUGIN}/scripts/patch_qemu_core.py"  (idempotent SMC core patch)\n` +
-      `   python3 "${PLUGIN}/scripts/patch_kernel.py" ${workdir}/fw/Image ${workdir}/fw/Image.patched\n` +
+    ? `3. bash "${PLUGIN}/scripts/py.sh" patch_qemu_core.py  (idempotent SMC core patch)\n` +
+      `   bash "${PLUGIN}/scripts/py.sh" patch_kernel.py ${workdir}/fw/Image ${workdir}/fw/Image.patched\n` +
       `   patch_kernel.py refuses to apply on a pre-image mismatch - report that as is.\n`
     : '') +
   `4. Copy into hw/arm/, register in meson.build, then\n` +
@@ -456,14 +463,14 @@ const built = await agent(
   `6. Confirm registration: qemu-system-aarch64 -M help | grep ${machine}\n` +
   `7. Ensure ${workdir}/06_machine/bypasses.md exists (header only is fine).\n` +
   `   That file is user-facing: write it in natural Korean.\n` +
-  `8. python3 "${PLUGIN}/scripts/record.py" "${workdir}" metric phase=Build ` +
+  `8. bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" metric phase=Build ` +
   `event=build_end tokens_total=${budget.spent()}`,
   { schema: BUILD_SCHEMA, label: 'build', phase: 'Build' }
 )
 
 if (built && built.build_ok === false) {
   await shell('record-build-blocker', 'Build',
-    `python3 "${PLUGIN}/scripts/record.py" "${workdir}" blocker code=BLOCKED_BUILD detail=${shq('ninja 빌드 실패')}`,
+    `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=BLOCKED_BUILD detail=${shq('ninja 빌드 실패')}`,
     OK_SCHEMA)
   log(`★ 정지 — BLOCKED_BUILD: ${built.build_error ?? '빌드 실패'}`)
   return {
@@ -674,7 +681,7 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     `  ` + recordRoundCmd(round, goal, obs, cls?.category, chosen, fix?.change_key,
                           'reverted', analystNewFacts, false) + `\n` +
     `fi\n` +
-    `python3 "${PLUGIN}/scripts/record.py" "${workdir}" metric phase=Loop round=${round} ` +
+    `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" metric phase=Loop round=${round} ` +
     `event=apply_end tokens_total=${budget.spent()}\n` +
     `\n# Report gate_pass from the check_change JSON and build_ok from ninja.`,
     APPLY_SCHEMA)
@@ -684,7 +691,7 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   }
   if (applied && applied.build_ok === false) {
     await shell(`build-blocker-${round}`, 'Loop',
-      `python3 "${PLUGIN}/scripts/record.py" "${workdir}" blocker code=BLOCKED_BUILD ` +
+      `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=BLOCKED_BUILD ` +
       `detail=${shq(`회차 ${round} 재빌드 실패`)}`,
       OK_SCHEMA)
     stopped = true; stopReason = 'BLOCKED_BUILD'
@@ -704,7 +711,7 @@ if (round >= ROUND_CAP && !reachedAll && !stopped) {
 // --- structurally unreachable: honest incomplete result -----------------------
 if (stopped) {
   const summary = await shell('stop-report', 'Loop',
-    `python3 "${PLUGIN}/scripts/stop_conditions.py" "${workdir}" --ladder "${ladderArg}"\n` +
+    `bash "${PLUGIN}/scripts/py.sh" stop_conditions.py "${workdir}" --ladder "${ladderArg}"\n` +
     `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" note ` +
     `${shq(`정지: ${stopReason} — 구조상 목표 도달 불가. 재개 가능합니다.`)}`,
     {
@@ -739,7 +746,7 @@ phase('Verify')
 
 const verifyCmd =
   `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Verify"\n` +
-  `python3 "${PLUGIN}/scripts/verify.py" "${workdir}" --track ${track} --target ${target}` +
+  `bash "${PLUGIN}/scripts/py.sh" verify.py "${workdir}" --track ${track} --target ${target}` +
   (track === 1 ? ` --bl3 "${bootloader_path}" --surface ${activeSurface}` : '')
 
 const verifier = await agent(
@@ -755,7 +762,7 @@ const verifier = await agent(
   `3. Write ${workdir}/VERIFICATION.md in natural Korean - the user reads it. ` +
   `   Show both the script verdict and yours, and when they differ say which won and why.\n\n` +
   `4. Finally record:\n` +
-  `   python3 "${PLUGIN}/scripts/record.py" "${workdir}" metric phase=Verify ` +
+  `   bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" metric phase=Verify ` +
   `event=verify_end tokens_total=${budget.spent()}`,
   { agentType: 'verifier', schema: VERIFIER_SCHEMA, label: 'verify', phase: 'Verify' }
 )

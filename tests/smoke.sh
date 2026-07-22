@@ -342,25 +342,50 @@ TOPG=$(python3 -c "import json;print(json.load(open('$ROOT/obsg.json'))['milesto
 chk "등급 단(commands·autoboot) 관측" "$LISTG" "shell,commands,autoboot"
 chk "최고 단은 autoboot"              "$TOPG"  "autoboot"
 
-# 13. 실행 환경 선행 검사 (BLOCKED_ENV) — 못 도는 셸에서 회차를 태우지 않는가
-EW=$(new_ws env)
-J=$(bash "$S/check_env.sh" "$EW" 1 2>/dev/null)
-chk "정상 셸이면 Git Bash 문제 없음" \
-    "$(echo "$J" | python3 -c 'import json,sys;print(any("Git Bash" in p for p in json.load(sys.stdin)["problems"]))')" "False"
+# 13. Windows → WSL 브리지 (wsl_bridge.sh)
+printf '\n\033[1m== 13. Windows → WSL 브리지 ==\033[0m\n'
 
-# Git Bash 위장: uname 이 MINGW 를 내면 실행 불가로 판정해야 한다
-mkdir -p "$BIN/mingw"
-printf '#!/usr/bin/env bash\necho "MINGW64_NT-10.0-22631"\n' > "$BIN/mingw/uname"
-chmod +x "$BIN/mingw/uname"
-JM=$(PATH="$BIN/mingw:$PATH" bash "$S/check_env.sh" "$EW" 1 2>/dev/null)
-chk "Git Bash 면 ok=false"        "$(echo "$JM" | python3 -c 'import json,sys;print(json.load(sys.stdin)["ok"])')" "False"
-chk "Git Bash 라고 짚어준다"      "$(echo "$JM" | python3 -c 'import json,sys;print(any("Git Bash" in p for p in json.load(sys.stdin)["problems"]))')" "True"
-chk "WSL 안내가 힌트에 있다"      "$(echo "$JM" | python3 -c 'import json,sys;print("WSL" in json.load(sys.stdin)["hint"])')" "True"
+# 경로 변환 단위 검증
+sed -n '/^__to_wsl() {/,/^}/p' "$S/wsl_bridge.sh" > "$ROOT/to_wsl.sh"
+tw() { echo "$(. "$ROOT/to_wsl.sh"; __to_wsl "$1")"; }
+chk "Windows 백슬래시 경로 변환" "$(tw 'C:\Users\mawj0\x.sh')" "/mnt/c/Users/mawj0/x.sh"
+chk "Git Bash 드라이브 경로 변환" "$(tw '/c/Users/mawj0/ws')"      "/mnt/c/Users/mawj0/ws"
+chk "이미 Linux 경로면 그대로"    "$(tw '/home/marista/rehost')"   "/home/marista/rehost"
+chk "경로 아닌 인자는 그대로"    "$(tw 'code=BLOCKED_ENV')"       "code=BLOCKED_ENV"
 
-# 워크스페이스가 이 셸에서 안 보이면 그것도 실행 불가다
-JW=$(bash "$S/check_env.sh" "/no/such/workspace" 1 2>/dev/null)
-chk "보이지 않는 워크스페이스 감지" \
-    "$(echo "$JW" | python3 -c 'import json,sys;print(any("보이지 않습니다" in p for p in json.load(sys.stdin)["problems"]))')" "True"
+# 가짜 Git Bash + 가짜 wsl.exe 로 end-to-end
+WB="$ROOT/winbin"; mkdir -p "$WB"
+printf '#!/usr/bin/env bash\necho "MINGW64_NT-10.0-22631"\n' > "$WB/uname"; chmod +x "$WB/uname"
+cat > "$WB/wsl.exe" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$ROOT/argv.txt"
+a=(); for x in "\$@"; do a+=( "\${x/#\/mnt\/c\//$ROOT/c/}" ); done
+set -- "\${a[@]}"; [ "\$1" = "-e" ] && shift
+PATH="/usr/bin:/bin" exec "\$@"
+EOF
+chmod +x "$WB/wsl.exe"
+mkdir -p "$ROOT/c/plug" "$ROOT/c/My Work/ws"; cp -R "$S" "$ROOT/c/plug/scripts"
+
+PATH="$WB:$PATH" bash "$ROOT/c/plug/scripts/journal.sh" 'C:/My Work/ws' note "브리지" >/dev/null 2>&1
+chk "Git Bash 면 wsl.exe 로 건너간다" "$(head -1 "$ROOT/argv.txt")" "-e"
+chk "공백 있는 경로가 한 인자로 보존" "$(grep -c '^/mnt/c/My Work/ws$' "$ROOT/argv.txt")" "1"
+chk "건너간 뒤 실제로 파일을 쓴다"    "$([ -f "$ROOT/c/My Work/ws/JOURNAL.md" ] && echo yes)" "yes"
+
+PATH="$WB:$PATH" bash "$ROOT/c/plug/scripts/py.sh" record.py 'C:/My Work/ws' blocker code=T detail=d >/dev/null 2>&1
+chk "python 도 브리지를 탄다" "$([ -s "$ROOT/c/My Work/ws/blockers.jsonl" ] && echo yes)" "yes"
+
+# wsl.exe 가 없으면 정직하게 실패해야 한다
+NB="$ROOT/nowsl"; mkdir -p "$NB"; cp "$WB/uname" "$NB/"
+PATH="$NB:/usr/bin:/bin" bash "$ROOT/c/plug/scripts/journal.sh" 'C:/x' note y >/dev/null 2>&1
+chk "wsl.exe 없으면 EX_CONFIG(78)" "$?" "78"
+JN=$(PATH="$NB:/usr/bin:/bin" bash "$ROOT/c/plug/scripts/check_env.sh" 'C:/x' 1 2>/dev/null)
+chk "그래도 check_env 는 JSON 을 낸다" \
+    "$(echo "$JN" | python3 -c 'import json,sys;print(json.load(sys.stdin)["ok"])')" "False"
+
+# Linux 에서는 가드가 무동작
+JL=$(bash "$S/check_env.sh" "$(new_ws bridge)" 1 2>/dev/null)
+chk "Linux/macOS 에서는 가드 무동작" \
+    "$(echo "$JL" | python3 -c 'import json,sys;print(json.load(sys.stdin)["os"] in ("Linux","Darwin"))')" "True"
 
 
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"

@@ -303,6 +303,23 @@ QEMU 를 실행하고 **원시 지문을 추출**하며 **출처 게이트를 �
 실패하면 `BLOCKED_ENV` 를 `blockers.jsonl` 에 사실로 남긴 뒤 루프 이전에 정지한다.
 환경만 갖추면 같은 워크스페이스로 그대로 재개된다.
 
+### ★ Windows → WSL 브리지 (`wsl_bridge.sh`)
+
+세션을 Windows 에서 띄우면 Bash 도구가 Git Bash 라 Linux QEMU 가 돌지 않는다. 그래서 모든
+`scripts/*.sh` 는 첫 줄에서 이 가드를 source 하고, 셸이 Windows 면 `wsl.exe -e` 로 자기
+자신을 다시 실행한다.
+
+- **왜 호출부가 아니라 스크립트에 넣나** — 호출부는 `pipeline.js` + 스킬 6 + 에이전트 4 이고
+  그중 셋은 산문이다. 산문에 "명령 앞에 붙이세요" 를 쓰면 규약이지 기구가 아니고, 규약은
+  조용히 썩는다. 모든 경로가 `scripts/` 에서 끝나므로 여기 한 곳이면 전부 덮인다.
+- **왜 `-e` 인가** — argv 를 그대로 넘겨 두 번째 셸이 재파싱하지 않는다. `-lc "…"` 였다면
+  이미 `shq()` 로 인용된 문자열을 다시 펼쳐 인용 버그를 되살렸을 것이다.
+- **경로** — `C:\…` · `C:/…` · `/c/…` 를 `/mnt/c/…` 로 바꾸고, 플래그와 `key=value` 는
+  건드리지 않는다. 인자 경계를 보존하므로 공백 있는 경로도 한 인자로 남는다.
+- **python** — Windows 셸엔 `python3` 이 없어 가드가 실행될 기회조차 없다. 그래서 파이썬은
+  `scripts/py.sh` 를 거쳐 들어간다.
+- Linux·macOS 에서는 가드가 즉시 return 하는 무동작이다.
+
 ```
 journal try-start
   → check_change snapshot        (fixer 수정 전 원본 확보)

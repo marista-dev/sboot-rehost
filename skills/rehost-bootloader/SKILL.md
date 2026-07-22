@@ -116,7 +116,7 @@ Workflow({
 | stop_reason | 의미 |
 |---|---|
 | `BLOCKED_CARVE` | 부트로더 이미지가 carve (부분 추출) |
-| **`BLOCKED_ENV`** | **이 셸에서 실행 불가** — 네이티브 Windows 의 Git Bash 등. 목표 판정이 아니라 환경 문제이며 **WSL 터미널에서 claude 를 실행**하면 그대로 재개된다 |
+| **`BLOCKED_ENV`** | **실행 환경 미비** — WSL 부재 또는 QEMU·capstone 미설치. 목표 판정이 아니라 환경 문제이며, 갖추면 그대로 재개된다. (Windows 에서 띄운 세션은 `wsl_bridge.sh` 가 자동으로 WSL 로 건너간다) |
 | **`BLOCKED_NO_INPUT_PATH`** | **어느 표면에도 인터랙티브 입력 경로가 없음** — 구조적 불가 |
 | `BLOCKED_BUILD` | ninja 실패 (원문 그대로) |
 | `EXHAUSTED` | 무브 소진 |

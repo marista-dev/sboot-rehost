@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/wsl_bridge.sh"
 # check_change.sh - enforce "one round, one change" by counting the diff.
 #
 # A fixer edits sources directly and only what passes this gate gets built.

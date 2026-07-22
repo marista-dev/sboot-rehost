@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/wsl_bridge.sh"
 # run_qemu.sh - Track 1 (bootloader shell): one round of execution.
 # Extracts the raw fingerprint and enforces the provenance gate.
 # Called by workflows/pipeline.js once per round.

@@ -195,6 +195,9 @@ Claude Code 는 세션 시작 후 백그라운드에서 마켓플레이스와 �
 ## 8. 환경 / 기록 / 한계
 
 - **환경**: WSL2(Ubuntu 22.04+). 첫 `rehost-init` 이 QEMU 10.2.2(aarch64) 등을 자동 설치.
+  Claude Code 는 **WSL 안에서 띄워도 되고 Windows 에서 띄워도 된다** — Windows 세션이면
+  `scripts/wsl_bridge.sh` 가 실행을 WSL 로 넘긴다. 어느 쪽이든 폴더·문서는 Windows 에,
+  빌드·실행·트레이스는 WSL 에 남는다.
 - **기록**: 사람이 읽는 `JOURNAL.md`/`PROGRESS.md`/`VERIFICATION.md` +
   기계가 읽는 `metrics.jsonl`(시간·토큰) · `rounds.jsonl`(회차 지문·분류·효과) ·
   `blockers.jsonl`(정지 사유). 문서는 로컬 작업 폴더, 대용량(실행 사본·트레이스)은 WSL.

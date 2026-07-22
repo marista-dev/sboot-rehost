@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/wsl_bridge.sh"
 # run_kernel.sh - Track 2 (kernel + storage): one round of execution.
 # Extracts the raw fingerprint and enforces the provenance gate.
 # Called by workflows/pipeline.js once per round.
