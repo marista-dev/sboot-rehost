@@ -9,7 +9,7 @@
       "name": "sboot-rehost",
       "source": "./",
       "description": "Firmware rehosting — two tracks (bootloader shell / kernel + real UFS controller), autonomous by default. Mobile SoCs (Exynos, MediaTek, ...).",
-      "version": "0.12.0",
+      "version": "0.13.0",
       "category": "reverse-engineering",
       "tags": ["qemu", "rehosting", "firmware", "bootloader", "kernel", "ufs", "arm64", "exynos", "mediatek"],
       "homepage": "https://github.com/hyu-sslab/sboot-rehost"

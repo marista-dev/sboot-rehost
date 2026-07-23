@@ -231,6 +231,9 @@ const RUN_SCHEMA = {
     escalate_to_analyst: { type: 'boolean' },
     suspect_prior_bypass: { type: 'boolean' },
     best_milestone: { type: ['string', 'null'] },
+    tried_changes: { type: 'array' },
+    futile_changes: { type: 'integer' },
+    needs_layer_review: { type: 'boolean' },
   },
   required: ['milestone', 'stop'],
 }
@@ -239,6 +242,8 @@ const SUPERVISOR_SCHEMA = {
   type: 'object',
   properties: {
     route: { type: 'string' },
+    layer: { type: ['string', 'null'] },
+    build_change: { type: ['object', 'null'] },
     progress: { type: 'boolean' },
     stop_reason: { type: ['string', 'null'] },
     suspect_prior_bypass: { type: 'boolean' },
@@ -448,10 +453,28 @@ log(`[분석] 완료 — 새로 확정한 사실 ${prior?.new_facts_count ?? 0} 
 // =============================================================================
 phase('Build')
 
-const built = await agent(
+/* Build the machine. Called once before the loop, and again when the supervisor
+ * judges that the stop point lives in this layer rather than in the loop.
+ *
+ * A fixer may only change one place in the existing machine sources, so a wrong
+ * machine-level premise (entry EL, has_el3, load address, memory skeleton)
+ * cannot be repaired from inside the loop - the loop can only stack band-aids on
+ * the symptom. `diagnosis` is the supervisor's finding that sends us back here. */
+async function buildMachine(diagnosis) {
+  const again = diagnosis != null
+  return agent(
+  (again
+    ? `REBUILD. The loop could not fix this from inside, so the machine premise ` +
+      `itself is under review.\n` +
+      `Supervisor diagnosis: ${diagnosis.reason}\n` +
+      `Machine-level change to make: ${diagnosis.change}\n` +
+      `Apply exactly that change and rebuild. Keep every other derived value as ` +
+      `it is - this is a premise correction, not a rewrite. Append the four-field ` +
+      `bypass entry to bypasses.md if the change is a bypass.\n\n`
+    : '') +
   `Generate the machine source, integrate it into QEMU and build.\n` +
   `track=${track}, model=${model}, machine name=${machine}\n\n` +
-  `1. Record the phase: bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Build"\n` +
+  `1. Record the phase: bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase ${again ? '"Rebuild"' : '"Build"'}\n` +
   (track === 1 && arch === 'arm32'
     ? `★ This bootloader is AArch32. templates/machine.c.tmpl models an AArch64\n` +
       `   machine and would produce a wrong machine rather than a failure, so do\n` +
@@ -481,8 +504,12 @@ const built = await agent(
   `   That file is user-facing: write it in natural Korean.\n` +
   `8. bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" metric phase=Build ` +
   `event=build_end tokens_total=${budget.spent()}`,
-  { schema: BUILD_SCHEMA, label: 'build', phase: 'Build' }
-)
+  { schema: BUILD_SCHEMA, label: again ? `rebuild-${diagnosis.round}` : 'build',
+    phase: again ? 'Loop' : 'Build' }
+  )
+}
+
+const built = await buildMachine(null)
 
 if (built && built.build_ok === false) {
   await shell('record-build-blocker', 'Build',
@@ -532,6 +559,28 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
       `예외 ${obs?.exceptions ?? '?'} 건, 정체 ${obs?.stall_count ?? 0} 회` +
       (obs?.injected ? ' ★ 자가주입 감지' : ''))
 
+  // Everything derived about this firmware so far. Read before the supervisor,
+  // because judging the layer means comparing the machine's premises against the
+  // derived facts - and read again after an escalation, which may add rows.
+  let analystNewFacts = -1
+  let derived = await shell(`derived-peek-${round}`, 'Loop',
+    `bash "${PLUGIN}/scripts/py.sh" derived_facts.py "${workdir}" --track ${track} --peek`,
+    DERIVED_SCHEMA)
+  let derivedRows = (derived?.stop_points ?? [])
+  const renderDerived = rows => rows.length
+    ? rows.map(r => `- ${r.signature}: ${r.observation} → ${r.mechanism} ` +
+                    `[담당 ${r.fixer}] 시도: ${r.treatment}`).join('\n')
+    : '(아직 도출된 정지점 없음)'
+  let derivedTable = renderDerived(derivedRows)
+
+  // The mechanical routes (stop / verify / next_goal) are already decided by
+  // measurement, and the pipeline enforces them below. What is genuinely left to
+  // judgement is the LAYER question: can this stop point be fixed by one change
+  // inside the machine sources, or is a machine-level premise wrong? A script
+  // cannot answer that - it needs someone to read the sources against the
+  // derived facts. So the supervisor gets the evidence and a stronger model
+  // rather than a lookup table.
+  const recent = roundLog.slice(-6)
   const sup = await agent(
     `Round ${round}, current goal "${goal}" (ladder: ${ladderArg}).\n` +
     `Fingerprint file: ${workdir}/fingerprint.json\n` +
@@ -540,11 +589,24 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
       escalate_to_analyst: obs?.escalate_to_analyst,
       suspect_prior_bypass: obs?.suspect_prior_bypass,
       best_milestone: obs?.best_milestone,
+      futile_changes: obs?.futile_changes,
+      needs_layer_review: obs?.needs_layer_review,
     })}\n` +
-    `Observed milestone: ${obs?.milestone}, provenance gate injected: ${obs?.injected}\n\n` +
+    `Observed milestone: ${obs?.milestone}, provenance gate injected: ${obs?.injected}\n` +
+    `Recent rounds: ${JSON.stringify(recent)}\n` +
+    `Derived stop points (${staticDoc}):\n${derivedTable}\n` +
+    `Machine sources: ${workdir}/06_machine/   Bypasses: ${workdir}/06_machine/bypasses.md\n` +
+    `Machine premises in force: has_el3, entry EL, entry PC, load address, ` +
+    `memory skeleton - all set at Build time, none of them reachable by a fixer.\n\n` +
+    (obs?.needs_layer_review
+      ? `★ ${obs?.futile_changes} changes have been applied and the fingerprint did ` +
+        `not move. Treating the symptom is not working. READ the machine sources ` +
+        `and the derived facts and judge the layer before routing anywhere.\n`
+      : '') +
     `Choose a route. If stop is true you may only answer route="stop".\n` +
     `Round count and elapsed time are not stop reasons: when stop is false, keep going.`,
-    { agentType: 'supervisor', schema: SUPERVISOR_SCHEMA, label: `supervisor-${round}`, phase: 'Loop' }
+    { agentType: 'supervisor', schema: SUPERVISOR_SCHEMA, label: `supervisor-${round}`,
+      phase: 'Loop', model: 'opus', effort: obs?.needs_layer_review ? 'high' : 'medium' }
   )
 
   // Honesty backstop: a measured stop cannot be routed around.
@@ -563,6 +625,58 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     stopped = true
     stopReason = obs?.stop_reason ?? 'EXHAUSTED'
     break
+  }
+
+  // The loop's own exit for stop points it cannot reach. A fixer edits one place
+  // in an existing machine; it cannot correct a premise the machine was built on
+  // (has_el3, entry EL, entry PC, load address, memory skeleton). Without this
+  // route a wrong premise can only ever collect band-aids, which is exactly how a
+  // run spends sixty rounds on one unchanging fingerprint.
+  if (route === 'rebuild') {
+    const key = sup?.build_change?.change_key
+    const tried = (obs?.tried_changes ?? [])
+    if (!key || !sup?.build_change?.change) {
+      log(`[루프] 회차 ${round}: rebuild 를 요청했지만 구체적 변경이 없어 분류로 되돌립니다.`)
+      route = 'fault-classifier'
+    } else if (tried.includes(key)) {
+      // Same rebuild twice is not a new move. Letting it through would make
+      // "rebuild" an unlimited supply of moves and exhaustion unreachable.
+      log(`[루프] 회차 ${round}: rebuild ${key} 는 이미 시도한 변경이라 거부하고 분류로 보냅니다.`)
+      route = 'fault-classifier'
+    } else {
+      log(`[루프] 회차 ${round}: ★ 층 판정 — ${sup?.layer ?? 'build'} 층 문제로 판단, 머신 재생성`)
+      log(`         근거: ${sup?.build_change?.reason ?? sup?.decision_note ?? ''}`)
+      await shell(`rebuild-decision-${round}`, 'Loop',
+        `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" decision ` +
+        `${shq(`supervisor 회차 ${round}`)} ${shq(`머신 재생성 (${key})`)} ` +
+        `${shq(sup?.build_change?.reason ?? '')}`,
+        OK_SCHEMA)
+
+      const rebuilt = await buildMachine({
+        round, reason: sup?.build_change?.reason ?? sup?.decision_note ?? '',
+        change: sup?.build_change?.change,
+      })
+
+      if (rebuilt && rebuilt.build_ok === false) {
+        await shell(`rebuild-blocker-${round}`, 'Loop',
+          `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=BLOCKED_BUILD ` +
+          `detail=${shq(`회차 ${round} 머신 재생성 실패`)}`,
+          OK_SCHEMA)
+        stopped = true; stopReason = 'BLOCKED_BUILD'
+        break
+      }
+
+      await shell(`rebuild-record-${round}`, 'Loop',
+        journalTryEnd(round, 'build_layer',
+                      sup?.build_change?.reason ?? '',
+                      sup?.build_change?.change ?? '', obs?.summary ?? '') + `\n` +
+        recordRoundCmd(round, goal, obs, 'build_layer', 'build', key,
+                       'applied', analystNewFacts, false),
+        OK_SCHEMA)
+      roundLog.push({ round, goal, category: 'build_layer', fixer: 'build',
+                      change_key: key })
+      continue
+    }
   }
 
   // Goal advancement is decided by measurement, never by the supervisor's claim.
@@ -596,8 +710,6 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
         `"${obs?.milestone}" 이라 인정하지 않고 분류를 계속합니다.`)
   }
 
-  let analystNewFacts = -1
-  let derived = null
   if (route === 'static-analyzer' || obs?.escalate_to_analyst) {
     const esc = await agent(
       `Run in mode=escalation. Round ${round}, goal ${goal}.\n` +
@@ -625,6 +737,8 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
       `bash "${PLUGIN}/scripts/py.sh" derived_facts.py "${workdir}" --track ${track}`,
       DERIVED_SCHEMA)
     derived = measured
+    derivedRows = (measured?.stop_points ?? derivedRows)
+    derivedTable = renderDerived(derivedRows)
     analystNewFacts = measured?.new ?? 0
     log(`[루프] 도출 에스컬레이션 — 기록된 새 정지점 ${analystNewFacts} 개 ` +
         `(누적 ${measured?.total ?? 0}개)` +
@@ -637,17 +751,6 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   // round. This is the wiring that was missing: derivation used to end in a
   // counter, so the classifier saw identical input every round and answered
   // "unknown" every round.
-  if (!derived) {
-    derived = await shell(`derived-peek-${round}`, 'Loop',
-      `bash "${PLUGIN}/scripts/py.sh" derived_facts.py "${workdir}" --track ${track} --peek`,
-      DERIVED_SCHEMA)
-  }
-  const derivedRows = (derived?.stop_points ?? [])
-  const derivedTable = derivedRows.length
-    ? derivedRows.map(r => `- ${r.signature}: ${r.observation} → ${r.mechanism} ` +
-                           `[담당 ${r.fixer}] 시도: ${r.treatment}`).join('\n')
-    : '(아직 도출된 정지점 없음)'
-
   const cls = await agent(
     `Round ${round}, goal ${goal}, track ${track}.\n` +
     `Fingerprint: ${workdir}/fingerprint.json (provenance gate injected=${obs?.injected})\n` +

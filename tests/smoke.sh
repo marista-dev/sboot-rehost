@@ -174,11 +174,26 @@ J=$(python3 "$S/stop_conditions.py" "$W7")
 chk "정체 2 → 에스컬레이션 발화" "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["escalate_to_analyst"])')" "True"
 chk "정체 2 → 아직 정지 아님"   "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop"])')" "False"
 
+# Dryness is judged over a window, so two dry rounds are not yet exhaustion.
 for i in 4 5; do
   python3 "$S/record.py" "$W7" round round=$i goal=link_up fp_exc=1 fp_far=0xSAME fp_elr=0xB fp_milestone=none fp_bytes=5 analyst_new_facts=0 fixer_no_new_change=true >/dev/null
 done
 J=$(python3 "$S/stop_conditions.py" "$W7")
+chk "dry 2회차는 아직 소진 아님" "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop"])')" "False"
+
+python3 "$S/record.py" "$W7" round round=6 goal=link_up fp_exc=1 fp_far=0xSAME fp_elr=0xB fp_milestone=none fp_bytes=5 analyst_new_facts=0 fixer_no_new_change=true >/dev/null
+J=$(python3 "$S/stop_conditions.py" "$W7")
 chk "무브 소진 → EXHAUSTED" "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop_reason"])')" "EXHAUSTED"
+
+# 회귀 가드: 마지막 한 회차의 반짝임이 창 전체를 지우면 안 된다 (66회차 런어웨이)
+python3 "$S/record.py" "$W7" round round=7 goal=link_up fp_exc=1 fp_far=0xSAME fp_elr=0xB fp_milestone=none fp_bytes=5 analyst_new_facts=1 fixer_no_new_change=false >/dev/null
+J=$(python3 "$S/stop_conditions.py" "$W7")
+chk "마지막 회차 새 사실 1 → 소진 해제" "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop"])')" "False"
+for i in 8 9 10; do
+  python3 "$S/record.py" "$W7" round round=$i goal=link_up fp_exc=1 fp_far=0xSAME fp_elr=0xB fp_milestone=none fp_bytes=5 analyst_new_facts=0 fixer_no_new_change=true >/dev/null
+done
+J=$(python3 "$S/stop_conditions.py" "$W7")
+chk "다시 창이 차면 EXHAUSTED" "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop_reason"])')" "EXHAUSTED"
 
 W8="$ROOT/stopC"; mkdir -p "$W8"
 for i in 1 2 3 4; do
@@ -443,6 +458,51 @@ PY3
 SC2=$(python3 "$S/stop_conditions.py" "$DW" --ladder shell)
 chk "새 도출이 있으면 계속 진행" \
     "$(echo "$SC2" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop"])')" "False"
+
+
+# 15. 층 판정 신호 (futile_changes) — 고쳤는데 아무 변화 없음을 보는가
+printf '\n\033[1m== 15. 층 판정 신호 ==\033[0m\n'
+LW=$(new_ws layer)
+python3 - "$LW" <<'PY4'
+import json, os, sys
+w = sys.argv[1]
+with open(os.path.join(w, "rounds.jsonl"), "w") as f:
+    for i in range(1, 21):
+        # 회차 10·15 에 변경을 적용했지만 지문은 계속 0x620 그대로
+        f.write(json.dumps({"round": i, "goal": "shell", "fp_exc": "2130000",
+            "fp_far": "0x620", "fp_elr": "0x620", "fp_milestone": "none", "fp_bytes": 0,
+            "category": "unknown", "fixer": "fixer-bootflow",
+            "change_key": f"bandaid_{i}" if i in (10, 15) else None,
+            "effect": "applied" if i in (10, 15) else "stall",
+            "analyst_new_facts": 1, "fixer_no_new_change": False}) + "\n")
+PY4
+LJ=$(python3 "$S/stop_conditions.py" "$LW" --ladder shell)
+chk "무효 변경을 센다"           "$(echo "$LJ" | python3 -c 'import json,sys;print(json.load(sys.stdin)["futile_changes"])')" "2"
+chk "층 재검토 신호 발화"        "$(echo "$LJ" | python3 -c 'import json,sys;print(json.load(sys.stdin)["needs_layer_review"])')" "True"
+chk "그래도 정지는 아니다"       "$(echo "$LJ" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop"])')" "False"
+
+# 지문을 움직인 변경은 무효가 아니다
+python3 - "$LW" <<'PY5'
+import json, os, sys
+w = sys.argv[1]
+rows = [json.loads(l) for l in open(os.path.join(w, "rounds.jsonl"))]
+for r in rows[15:]:
+    r["fp_far"] = "0xC90A5028"          # 변경이 지문을 움직였다
+open(os.path.join(w, "rounds.jsonl"), "w").write(
+    "".join(json.dumps(x, ensure_ascii=False) + "\n" for x in rows))
+PY5
+LJ2=$(python3 "$S/stop_conditions.py" "$LW" --ladder shell)
+chk "지문이 움직이면 무효 아님"  "$(echo "$LJ2" | python3 -c 'import json,sys;print(json.load(sys.stdin)["needs_layer_review"])')" "False"
+
+# 관측 문서에 신호가 실려 나가는가 (supervisor 가 봐야 판단한다)
+grep -q 'needs_layer_review' "$S/run_round.sh"
+chk "run_round 가 신호를 병합"   "$?" "0"
+
+# build 층 정지점이 지식 테이블에 있는가
+grep -q "entry_el_mismatch" "$REPO/knowledge/faults_bootloader.md"
+chk "build 층 정지점 등재"       "$?" "0"
+grep -q "rebuild" "$REPO/agents/supervisor.md"
+chk "supervisor 가 rebuild 를 안다" "$?" "0"
 
 
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"

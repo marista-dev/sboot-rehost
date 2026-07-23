@@ -91,6 +91,10 @@ observation = {
     "suspect_prior_bypass": bool(stop.get("suspect_prior_bypass", False)),
     "best_milestone": stop.get("best_milestone"),
     "tried_changes": stop.get("tried_changes", []),
+    # changes applied that moved nothing - the signal that the diagnosis is at
+    # the wrong layer, which is the supervisor's judgement to make
+    "futile_changes": stop.get("futile_changes", 0),
+    "needs_layer_review": bool(stop.get("needs_layer_review", False)),
     "blockers": stop.get("blockers", []),
 }
 

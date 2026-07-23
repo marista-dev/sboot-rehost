@@ -71,6 +71,26 @@ def is_oscillating(fingerprints):
     return a == c and b == d and a != b
 
 
+def futile_changes(rows, fingerprints):
+    """Trailing count of applied changes that left the fingerprint untouched.
+
+    A change recorded in round i shows its effect in round i+1's fingerprint. If
+    the fingerprint is identical, that treatment did nothing. This is the
+    strongest available evidence that the diagnosis is wrong - the loop is
+    treating a symptom - and nothing consumed it before, so a run could apply
+    band-aid after band-aid without any signal that the layer was wrong.
+    """
+    count = 0
+    for i in range(len(rows) - 2, -1, -1):
+        if rows[i].get("effect") != "applied":
+            continue
+        if fingerprints[i + 1] == fingerprints[i]:
+            count += 1
+        else:
+            break                  # a change that moved the fingerprint ends it
+    return count
+
+
 def best_milestone(rows, ladder):
     reached = [r.get("fp_milestone") for r in rows
                if r.get("fp_milestone") and r.get("fp_milestone") != "none"]
@@ -88,6 +108,10 @@ def main():
     parser.add_argument("--stall-threshold", type=int, default=3,
                         help="consecutive identical fingerprints before exhaustion is considered")
     parser.add_argument("--ladder", default="", help="comma separated milestone ladder")
+    parser.add_argument("--dry-window", type=int, default=3,
+                        help="how many trailing rounds must all be dry before exhaustion")
+    parser.add_argument("--futile-threshold", type=int, default=2,
+                        help="applied changes that moved nothing before a layer review is due")
     args = parser.parse_args()
 
     ladder = [s for s in args.ladder.split(",") if s]
@@ -98,10 +122,17 @@ def main():
     stall_count = trailing_stall(fingerprints)
     oscillating = is_oscillating(fingerprints)
 
-    last = rounds[-1] if rounds else {}
-    analyst_dry = last.get("analyst_new_facts") == 0
-    fixers_dry = last.get("fixer_no_new_change") is True
+    # Dryness over a window, never from the last row alone. Reading only
+    # rounds[-1] let a single round with one new signature erase sixty rounds of
+    # stalling, so exhaustion could not be reached while an agent kept producing
+    # one nominally-new item per round.
+    window = rounds[-args.dry_window:] if rounds else []
+    analyst_dry = bool(window) and all(
+        r.get("analyst_new_facts") == 0 for r in window)
+    fixers_dry = bool(window) and all(
+        r.get("fixer_no_new_change") is True for r in window)
 
+    futile = futile_changes(rounds, fingerprints)
     stuck = stall_count >= args.stall_threshold or oscillating
     moves_exhausted = bool(stuck and analyst_dry and fixers_dry)
 
@@ -130,6 +161,13 @@ def main():
         "tried_changes": sorted({r["change_key"] for r in rounds if r.get("change_key")}),
         "escalate_to_analyst": bool(escalate),
         "suspect_prior_bypass": stall_count >= 2,
+        # Treatments are being applied and changing nothing. The loop can only
+        # edit one place in the machine sources, so when that keeps failing the
+        # question is no longer "which fixer" but "is this fixable in the loop at
+        # all" - which is the supervisor's judgement to make, not a script's.
+        "futile_changes": futile,
+        "needs_layer_review": futile >= args.futile_threshold,
+        "dry_window": args.dry_window,
     }
 
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2)

@@ -23,6 +23,17 @@ are not sure, answer `unknown` - it costs you nothing.
 | derived facts | `STATIC.md` or `KERNEL_STATIC.md` |
 | history | `<workdir>/rounds.jsonl` - is this classification repeating? |
 | knowledge | `knowledge/faults_bootloader.md`, `faults_kernel.md`, `faults_storage.md` |
+
+## Stop points no fixer owns
+
+Some rows in the knowledge tables read **build layer** in the owning-fixer column.
+Those are premises the machine was built on - `has_el3`, the entry exception
+level, entry PC, load address, the memory skeleton - and no fixer can reach them.
+
+When the fingerprint matches one, name it and set `layer: "build"` with an empty
+`fixer_ranking`. Do not rank a fixer anyway to be helpful: a fixer handed a
+build-layer fault can only produce a band-aid that changes nothing, and a run of
+those is indistinguishable from progress until sixty rounds have passed.
 | registry | `fixers/registry.yaml` - fault name to owning fixer |
 
 ## Method

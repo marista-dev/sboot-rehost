@@ -15,7 +15,20 @@ Log sources: the `qemu -d int,in_asm,nochain` trace and the UART console.
 | `null_ret` | `Taking exception 3 [Prefetch Abort]` with FAR=0 and ELR=0 | `fixer-bootflow` | trace back to the **last caller**, then use the entry redirect trampoline |
 | `console_silent` | 0 bytes of console and 0 exceptions | `fixer-bootflow` | route the BL3 printf callback to a direct UART write |
 | `shell_exit_early` | the shell exits without input, no `autoboot aborted..` | `fixer-bootflow` | make `getline_timeout_branch` unconditional |
+| `entry_el_mismatch` | `FAR == ELR` at a low unmapped address (e.g. `0x620`), exception count in the millions, 0 bytes of console | **build layer - no fixer** | the machine resets into the wrong exception level, so the image runs an entry path never meant for it. A BL33 (non-secure world bootloader) entered at EL3 falls through an EL3 path and sets a near-null VBAR, and the first exception fetches from unmapped low memory forever. `supervisor` routes `rebuild`: `has_el3=false`, or enter at non-secure EL2/EL1. **NOPing the instruction that corrupts the vector base treats the symptom** and leaves the next one waiting |
 | `unknown` | nothing above matches | - | **static-analyzer re-derivation**, never a guess |
+
+## Build-layer stop points
+
+Some stop points cannot be fixed inside the loop at all. A fixer changes one place
+in the machine sources that exist; it cannot change a premise the machine was
+**built on** - `has_el3`, the entry exception level, entry PC, load/link address,
+the memory skeleton, the CPU type.
+
+For these the owning column reads **build layer**, and the treatment is for
+`supervisor` to route `rebuild` with a concrete premise correction. Handing one to
+a fixer produces a band-aid that changes nothing, which is what a run of identical
+fingerprints looks like.
 
 ## Reaching the goal (not a stop point)
 
