@@ -48,10 +48,21 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 | 이름 | 한 줄 | 수정 권한 |
 |---|---|---|
 | `static-analyzer` | 바이너리·자산 → 근거 있는 사실. 근거 없으면 "미확정" | ✗ (분석 문서만) |
-| `supervisor` | 지문 + 정지 조건 → 라우팅·정지 + **층 판정** (루프 vs Build) | ✗ |
+| `supervisor` | 지문 + 정지 조건 → 라우팅·정지 + **층 판정** + **처방** (fixer 명부를 보고 지정) | ✗ |
 | `fault-classifier` | 로그 → 정지점 이름 + 담당 fixer 순위. 모르면 `unknown` | ✗ |
 | `fixer-memory` `fixer-el3` `fixer-bootflow` `fixer-kernel` `fixer-storage` | 담당 오류를 **직접 수정** (회차당 하나) | **○** |
+| `fixer-general` | **담당이 없을 때만** — 범위 무제한 (수정·빌드·실행) + 새 fixer 후보 기록 | **○** |
 | `verifier` | 5/5 스크립트 측정을 2 차 재검증 | ✗ (VERIFICATION.md 만) |
+
+**트랙 1 에는 `fixer-kernel`·`fixer-storage` 가 오르지 않는다.** 부트로더 단계는 스토리지
+컨트롤러 구현으로 가지 않으며, 이는 프롬프트 권고가 아니라 파이프라인이 후보 목록과
+지식 테이블을 트랙으로 갈라 집행한다.
+
+**`fixer-general` 은 최후수단이다.** 전문가가 전부 반려했을 때만 도달하며 순위로는 못
+오른다. 범위가 무제한이므로 "새로 시도할 변경 없음" 이 잘 안 나오는데, 이를 대비해
+`stop_conditions.py` 가 **지문을 못 움직인 변경은 수(手)로 세지 않는다** (`futile_spent`).
+그 기록은 `<workdir>/fixer_candidates.md` 에 쌓이고, 정식 fixer 승격은 사람이 커밋한다 —
+에이전트 레지스트리는 세션 시작 스냅샷이라 런타임 생성 파일은 그 회차에 로드되지 않는다.
 
 **fixer 만 코드를 고친다.** 나머지 LLM 은 읽기만 한다. 분류하는 쪽과 고치는 쪽이 같으면
 "고칠 게 있어야 하니까" 없는 병명을 지어내기 때문이다.
@@ -111,6 +122,7 @@ static-analyzer 는 **덮어쓰지 않고 append** 하며, 루프 안의 재도�
 │   ├ 목표 도달 → 검증으로 / 사다리 다음 칸                      │
 │   ├ ★ 정지 (구조상 도달 불가)                                  │
 │   ├ **Build 층 문제 → 머신 재생성 (rebuild)**                  │
+│   ├ **담당 fixer 없음 → fixer-general 직행 (처방 동반)**       │
 │   ├ 미지·정체 → [static-analyzer] 재도출                       │
 │   └ [fault-classifier] 분류 + fixer 순위                       │
 │        → [1 순위 fixer] 한 변경 → (check_change) → (ninja)     │

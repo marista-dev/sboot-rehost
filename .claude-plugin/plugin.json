@@ -1,7 +1,7 @@
 {
   "name": "sboot-rehost",
   "description": "Firmware rehosting helper for QEMU — two tracks: (1) bootloader (S-Boot/LK) BL3 shell, (2) kernel direct-boot + real vendor storage (UFS) controller model to real Android userspace. Runs autonomously by default (no mid-run prompts; decisions journaled). Drives static analysis, machine.c generation, iterative fault loop, and 5/5 honesty verification. Works across mobile SoCs (Samsung Exynos, MediaTek, ...).",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "author": {
     "name": "sboot-rehost contributors"
   },

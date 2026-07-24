@@ -76,8 +76,9 @@ where your work is.
 | # | condition | route |
 |---|---|---|
 | 4 | a machine-level premise is wrong | `rebuild` |
-| 5 | the stop point is unrecognised or a derived fact looks wrong | `static-analyzer` |
-| 6 | otherwise | `fault-classifier` |
+| 5 | the mechanism is understood but no implemented fixer covers it | `fixer-general` |
+| 6 | the stop point is unrecognised or a derived fact looks wrong | `static-analyzer` |
+| 7 | otherwise | `fault-classifier` (add `prescribed_fixer` when you know the owner) |
 
 ## The judgement: which layer is this stop point in?
 
@@ -139,6 +140,39 @@ When `stop_conditions.suspect_prior_bypass == true`, pass
 `suspect_prior_bypass: true` along with your route: it tells the next actor to
 suspect the side effects of an existing bypass before stacking a new one on top.
 
+## Prescribe, do not patch
+
+Naming the route is the minimum. When the derived facts already explain the
+mechanism, say how it should be treated - `treatment_plan`, one or two sentences:
+which fixer should act, in what order if more than one is involved, and what the
+change should accomplish.
+
+Keep it at the level of direction. Naming the exact patch takes the judgement away
+from the fixer, and the fixer is the one who answers `no_new_change` - the input
+that lets the run stop honestly. Prescribe the target, not the edit.
+
+### Read the roster before prescribing
+
+You are given the fixers implemented on this track; their domains are in
+`fixers/registry.yaml`. Read it, then decide which one owns this mechanism and put
+it in `prescribed_fixer`. That pick outranks the classifier's, because you read
+the machine sources and the derived facts this round and the classifier does not.
+
+### When no implemented fixer covers it
+
+Route `fixer-general` directly, with a `treatment_plan`. It has no domain boundary
+and may edit any machine source, rebuild and run, so a mechanism that crosses what
+the domains split apart can be treated in one round. It also records the case in
+`fixer_candidates.md`, which is how the next specialist gets written.
+
+**Do not force a fit onto a specialist whose domain does not contain the fault.**
+That produces a decline and spends the round for nothing. "No implemented fixer
+owns this" is a finding, not a failure - say it and route accordingly.
+
+This is different from `no mechanism`. If you cannot say what is failing and why,
+that is `static-analyzer`, not `fixer-general`: a fixer with unlimited scope and no
+understood mechanism is exactly the guessing the honesty rules forbid.
+
 ## Output (JSON)
 
 ```json
@@ -155,8 +189,9 @@ suspect the side effects of an existing bypass before stacking a new one on top.
 }
 ```
 
-`route` is one of `verify`, `next_goal`, `rebuild`, `static-analyzer`,
-`fault-classifier`, `stop`. Add `layer` (`loop` or `build`) and, for `rebuild`,
+`route` is one of `verify`, `next_goal`, `rebuild`, `fixer-general`,
+`static-analyzer`, `fault-classifier`, `stop`. Add `layer` (`loop` or `build`),
+`treatment_plan` and `prescribed_fixer` when you have them, and for `rebuild`,
 `build_change`. Write `decision_note` in natural Korean - it is surfaced to the
 user.
 

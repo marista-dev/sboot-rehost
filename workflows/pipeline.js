@@ -131,8 +131,26 @@ function goalsFor(surfaceName) {
 let activeSurface = surface
 let goals = goalsFor(activeSurface)
 let ladderArg = goals.join(',')
-const KNOWN_FIXERS = ['fixer-memory', 'fixer-el3', 'fixer-bootflow',
-                      'fixer-kernel', 'fixer-storage']
+// Fixers are per track. Track 1 stops at the bootloader's interactive surface;
+// a vendor storage controller is track 2's goal and has no business being
+// selected here. Without this filter the classifier could rank fixer-storage on
+// a track 1 round - the tables and the registry it reads describe both tracks -
+// and a bootloader run would drift into UFS work the grade never asked for.
+const FIXERS_BY_TRACK = {
+  1: ['fixer-memory', 'fixer-el3', 'fixer-bootflow'],
+  2: ['fixer-memory', 'fixer-el3', 'fixer-bootflow', 'fixer-kernel', 'fixer-storage'],
+}
+const KNOWN_FIXERS = FIXERS_BY_TRACK[track] ?? FIXERS_BY_TRACK[1]
+
+// Knowledge tables follow the same split, so the classifier is not offered stop
+// points that belong to the other track.
+const KNOWLEDGE = track === 2
+  ? 'knowledge/faults_kernel.md, knowledge/faults_storage.md, knowledge/kernel_gates.md'
+  : 'knowledge/faults_bootloader.md'
+
+// Last resort. Not in KNOWN_FIXERS: it is reached only after a specialist has
+// declined, never by ranking, so that the widest scope stays the exception.
+const GENERAL_FIXER = 'fixer-general'
 
 // --- helpers -----------------------------------------------------------------
 
@@ -154,6 +172,37 @@ function shell(label, phaseName, command, schema) {
     '```bash\n' + command + '\n```\n',
     { label, phase: phaseName, schema }
   )
+}
+
+/* The last-resort fixer, reached two ways: the supervisor sends a stop point here
+ * when no implemented fixer covers it, or a specialist it picked declined. Both
+ * mean the same thing - the fault has no owner - so both carry the supervisor's
+ * treatment plan, which is more useful here than anywhere else because this fixer
+ * has no table telling it where to look. */
+function runGeneralFixer(round, goal, why, plan, obs, cls, derivedTable) {
+  return agent(
+    `Round ${round}, goal ${goal}, track ${track}. You are the last resort.\n` +
+    `${why}\n` +
+    `Classification: ${cls?.category ?? 'unknown'}   ` +
+    `Evidence: ${JSON.stringify(cls?.evidence ?? {})}\n` +
+    `Fingerprint: ${JSON.stringify({ far: obs?.far, elr: obs?.elr, exceptions: obs?.exceptions })}\n` +
+    `Console: ${obs?.console}\nSummary: ${obs?.summary}\nFull trace: ${obs?.trace}\n` +
+    `Derived facts: ${staticDoc}\nStop points derived so far:\n${derivedTable}\n` +
+    (plan ? `Supervisor's treatment plan: ${plan}\n` : '') +
+    `Machine sources: ${workdir}/06_machine/   Bypasses: ${workdir}/06_machine/bypasses.md\n` +
+    `Already attempted: ${workdir}/rounds.jsonl - never repeat an existing change_key\n` +
+    `Build: cd ~/qemu-build/qemu-10.2.2/build && ninja qemu-system-aarch64\n\n` +
+    `Treat ONE mechanism. You may touch several places only if they are parts of ` +
+    `one cause, and you must say in one sentence why they are one.\n` +
+    `Then rebuild, and report build failures verbatim.\n` +
+    `Append the four-field bypass entry to bypasses.md, and record what you did ` +
+    `in ${workdir}/fixer_candidates.md so a real specialist can be written later - ` +
+    `that record is half the job, not an afterthought.\n` +
+    `If the mechanism is not understood, do not guess: answer no_new_change=true ` +
+    `and the run goes back to derivation. You have the widest scope here, so that ` +
+    `answer is what stands between an honest stop and an endless run.`,
+    { agentType: GENERAL_FIXER, schema: GENERAL_SCHEMA, model: 'opus', effort: 'high',
+      label: `general-${round}`, phase: 'Loop' })
 }
 
 function recordRoundCmd(round, goal, fp, category, fixer, changeKey, effect, analystFacts, noNewChange) {
@@ -244,6 +293,8 @@ const SUPERVISOR_SCHEMA = {
     route: { type: 'string' },
     layer: { type: ['string', 'null'] },
     build_change: { type: ['object', 'null'] },
+    treatment_plan: { type: ['string', 'null'] },
+    prescribed_fixer: { type: ['string', 'null'] },
     progress: { type: 'boolean' },
     stop_reason: { type: ['string', 'null'] },
     suspect_prior_bypass: { type: 'boolean' },
@@ -265,6 +316,24 @@ const CLASSIFIER_SCHEMA = {
     note: { type: ['string', 'null'] },
   },
   required: ['category'],
+}
+
+const GENERAL_SCHEMA = {
+  type: 'object',
+  properties: {
+    fixer: { type: 'string' },
+    no_new_change: { type: 'boolean' },
+    mechanism: { type: ['string', 'null'] },
+    change_key: { type: ['string', 'null'] },
+    changes: { type: 'array' },
+    build_ok: { type: ['boolean', 'null'] },
+    build_error: { type: ['string', 'null'] },
+    bypass_doc: { type: 'boolean' },
+    candidate_doc: { type: 'boolean' },
+    one_line_progress: { type: ['string', 'null'] },
+    rationale: { type: ['string', 'null'] },
+  },
+  required: ['no_new_change'],
 }
 
 const FIXER_SCHEMA = {
@@ -597,7 +666,13 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     `Derived stop points (${staticDoc}):\n${derivedTable}\n` +
     `Machine sources: ${workdir}/06_machine/   Bypasses: ${workdir}/06_machine/bypasses.md\n` +
     `Machine premises in force: has_el3, entry EL, entry PC, load address, ` +
-    `memory skeleton - all set at Build time, none of them reachable by a fixer.\n\n` +
+    `memory skeleton - all set at Build time, none of them reachable by a fixer.\n` +
+    `Fixers implemented on this track: ${KNOWN_FIXERS.join(', ')} ` +
+    `(domains in fixers/registry.yaml - read it before prescribing).\n` +
+    `If the mechanism is understood but no implemented fixer covers it, route ` +
+    `"${GENERAL_FIXER}" with a treatment_plan; it has no domain boundary and may ` +
+    `edit, build and run. Do not force a fit onto a specialist whose domain does ` +
+    `not contain the fault - that produces a decline and wastes the round.\n\n` +
     (obs?.needs_layer_review
       ? `★ ${obs?.futile_changes} changes have been applied and the fingerprint did ` +
         `not move. Treating the symptom is not working. READ the machine sources ` +
@@ -625,6 +700,47 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     stopped = true
     stopReason = obs?.stop_reason ?? 'EXHAUSTED'
     break
+  }
+
+  // The supervisor judged that no implemented fixer covers this mechanism, so it
+  // goes straight to the fixer with no domain boundary. Skipping classification
+  // is the point: naming a category no fixer owns only spends a round.
+  if (route === GENERAL_FIXER) {
+    log(`[루프] 회차 ${round}: supervisor 판단 — 담당 fixer 없음, fixer-general 로 직행`)
+    const gen = await runGeneralFixer(round, goal,
+      `The supervisor found no implemented fixer whose domain contains this stop point.`,
+      sup?.treatment_plan, obs, null, derivedTable)
+
+    if (!gen || gen.no_new_change || !gen.change_key) {
+      log(`[루프] 회차 ${round}: fixer-general 도 새로 시도할 변경이 없습니다.`)
+      await shell(`general-decline-${round}`, 'Loop',
+        journalTryEnd(round, 'unowned', 'fixer-general 도 시도할 변경 없음',
+                      '도출로 이관', obs?.summary ?? '') + `\n` +
+        recordRoundCmd(round, goal, obs, 'unowned', GENERAL_FIXER, null,
+                       'stall', analystNewFacts, true),
+        OK_SCHEMA)
+      continue
+    }
+    if (gen.build_ok === false) {
+      await shell(`general-build-blocker-${round}`, 'Loop',
+        `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=BLOCKED_BUILD ` +
+        `detail=${shq(`회차 ${round} fixer-general 재빌드 실패`)}`,
+        OK_SCHEMA)
+      stopped = true; stopReason = 'BLOCKED_BUILD'
+      break
+    }
+    log(`[루프] 회차 ${round}: ★ fixer-general 이 처리 — ${gen.mechanism ?? ''}`)
+    await shell(`general-record-${round}`, 'Loop',
+      `echo ${shq(gen.one_line_progress ?? '')} >> "${workdir}/PROGRESS.md"\n` +
+      journalTryEnd(round, 'unowned', gen.rationale ?? gen.mechanism ?? '',
+                    (gen.changes ?? []).map(c => `${c.file}: ${c.what}`).join(' / '),
+                    obs?.summary ?? '') + `\n` +
+      recordRoundCmd(round, goal, obs, 'unowned', GENERAL_FIXER, gen.change_key,
+                     'applied', analystNewFacts, false),
+      OK_SCHEMA)
+    roundLog.push({ round, goal, category: 'unowned', fixer: GENERAL_FIXER,
+                    change_key: gen.change_key })
+    continue
   }
 
   // The loop's own exit for stop points it cannot reach. A fixer edits one place
@@ -755,7 +871,11 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     `Round ${round}, goal ${goal}, track ${track}.\n` +
     `Fingerprint: ${workdir}/fingerprint.json (provenance gate injected=${obs?.injected})\n` +
     `Console: ${obs?.console}\nSummary: ${obs?.summary}\nFull trace if needed: ${obs?.trace}\n` +
-    `Registry: fixers/registry.yaml\n` +
+    `Registry: fixers/registry.yaml - only these fixers exist on this track: ` +
+    `${KNOWN_FIXERS.join(', ')}\n` +
+    `Knowledge tables for this track: ${KNOWLEDGE}. Do not match against the ` +
+    `other track's tables; a stop point that belongs to another track's goal is ` +
+    `not this run's fault.\n` +
     `Derived stop points for THIS firmware (accumulated in ${staticDoc}):\n` +
     `${derivedTable}\n` +
     `Match against these as well as the knowledge tables - they were derived from ` +
@@ -800,8 +920,15 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   // table. An unknown category with a derived owner still gets a real attempt -
   // the fixer can answer not_mine, and that answer is a fact we can record,
   // unlike a round where nobody was asked at all.
-  const chosen = ranked.length ? ranked[0].fixer : derivedOwner
-  if (!ranked.length) {
+  // The supervisor prescribes first: it read the machine sources and the derived
+  // facts this round, which the classifier does not do. Its pick only counts if
+  // the fixer exists on this track.
+  const prescribed = KNOWN_FIXERS.includes(sup?.prescribed_fixer)
+    ? sup.prescribed_fixer : null
+  const chosen = prescribed ?? (ranked.length ? ranked[0].fixer : derivedOwner)
+  if (prescribed) {
+    log(`[루프] 회차 ${round}: supervisor 처방 — ${prescribed}`)
+  } else if (!ranked.length) {
     log(`[루프] 회차 ${round}: 분류는 unknown 이지만 도출표가 ${chosen} 를 담당으로 지목 — 넘깁니다.`)
   }
   const fix = await agent(
@@ -812,6 +939,12 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     `Stop points derived for this firmware:\n${derivedTable}\n` +
     `If one of these matches the fingerprint, apply its "시도할 변경" - it was ` +
     `derived from this exact target with evidence attached.\n` +
+    (sup?.treatment_plan
+      ? `Supervisor's treatment plan: ${sup.treatment_plan}\n` +
+        `That is a direction, not a patch. If it does not hold up against what you ` +
+        `read, say so - you own this change, and you are the one who answers ` +
+        `no_new_change.\n`
+      : '') +
     `Current sources: ${workdir}/06_machine/\n` +
     `Already attempted: ${workdir}/rounds.jsonl - never repeat an existing change_key\n` +
     `Bypass record: ${workdir}/06_machine/bypasses.md\n` +
@@ -828,12 +961,53 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   if (fix?.not_mine || fix?.no_new_change || !fix?.change) {
     log(`[루프] 회차 ${round}: ${chosen} 반려 ` +
         `(담당아님=${fix?.not_mine === true}, 새 시도 없음=${fix?.no_new_change === true})`)
-    await shell(`decline-${round}`, 'Loop',
-      journalTryEnd(round, cls?.category ?? 'unknown', `${chosen} 가 반려함`,
-                    '다음 후보 fixer 또는 도출로 이관', obs?.summary ?? '') + `\n` +
-      recordRoundCmd(round, goal, obs, cls?.category, chosen, fix?.change_key,
-                     'stall', analystNewFacts, true),
+
+    // A declined stop point has no owner among the specialists, which used to end
+    // the round with nothing tried. The general fixer takes it instead: it has no
+    // domain boundary and may edit, build and run, so a mechanism that crosses
+    // what the domains split apart can be treated in one round.
+    //
+    // It is reached only here, never by ranking, so the widest scope stays the
+    // exception rather than the default.
+    const gen = await runGeneralFixer(round, goal,
+      `${chosen} declined this stop point ` +
+      `(not_mine=${fix?.not_mine === true}, no_new_change=${fix?.no_new_change === true}), ` +
+      `so it has no owner among the specialists.`,
+      sup?.treatment_plan, obs, cls, derivedTable)
+
+    if (!gen || gen.no_new_change || !gen.change_key) {
+      log(`[루프] 회차 ${round}: fixer-general 도 새로 시도할 변경이 없습니다.`)
+      await shell(`decline-${round}`, 'Loop',
+        journalTryEnd(round, cls?.category ?? 'unknown',
+                      `${chosen} 반려 후 fixer-general 도 시도할 변경 없음`,
+                      '도출로 이관', obs?.summary ?? '') + `\n` +
+        recordRoundCmd(round, goal, obs, cls?.category, GENERAL_FIXER, null,
+                       'stall', analystNewFacts, true),
+        OK_SCHEMA)
+      continue
+    }
+
+    if (gen.build_ok === false) {
+      await shell(`general-build-blocker-${round}`, 'Loop',
+        `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=BLOCKED_BUILD ` +
+        `detail=${shq(`회차 ${round} fixer-general 재빌드 실패`)}`,
+        OK_SCHEMA)
+      stopped = true; stopReason = 'BLOCKED_BUILD'
+      break
+    }
+
+    log(`[루프] 회차 ${round}: ★ fixer-general 이 처리 — ${gen.mechanism ?? ''}`)
+    await shell(`general-record-${round}`, 'Loop',
+      `echo ${shq(gen.one_line_progress ?? '')} >> "${workdir}/PROGRESS.md"\n` +
+      journalTryEnd(round, cls?.category ?? 'unknown',
+                    gen.rationale ?? gen.mechanism ?? '',
+                    (gen.changes ?? []).map(c => `${c.file}: ${c.what}`).join(' / '),
+                    obs?.summary ?? '') + `\n` +
+      recordRoundCmd(round, goal, obs, cls?.category, GENERAL_FIXER, gen.change_key,
+                     'applied', analystNewFacts, false),
       OK_SCHEMA)
+    roundLog.push({ round, goal, category: cls?.category, fixer: GENERAL_FIXER,
+                    change_key: gen.change_key })
     continue
   }
 

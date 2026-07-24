@@ -76,3 +76,20 @@ unmapped_policy: escalate_to_static_analyzer
 #   - the tools diverge inside one fixer       -> it is really two jobs
 #   - a fault recurs across many firmwares     -> specialising it pays off
 #   - one fault has a notably low success rate -> break it out and go deeper
+
+# Last resort - never ranked by the classifier. The pipeline reaches it only
+# after a specialist declined (not_mine or no_new_change), which means the stop
+# point has no owner yet. It has no domain boundary and may edit, build and run,
+# so a mechanism that crosses what the domains split apart can be treated in one
+# round. In exchange it records each case in <workdir>/fixer_candidates.md so a
+# real specialist can be written and committed later.
+#
+# Promotion is deliberate: the agent registry is a snapshot taken at session
+# start, so an agent file written at runtime is not loadable in that run.
+  fixer-general:
+    description: last resort, no domain boundary; edits any machine source, builds and runs
+    handles: [unowned]
+    knowledge: [knowledge/faults_bootloader.md, knowledge/faults_kernel.md, knowledge/faults_storage.md]
+    tools: [capstone, ninja, qemu]
+    edits: [any]
+    reached_by: decline_only

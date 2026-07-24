@@ -505,6 +505,69 @@ grep -q "rebuild" "$REPO/agents/supervisor.md"
 chk "supervisor 가 rebuild 를 안다" "$?" "0"
 
 
+# 16. 최후수단 fixer + 트랙 경계
+printf '\n\033[1m== 16. fixer-general · 트랙 경계 ==\033[0m\n'
+
+# 범위 무제한 fixer 가 정지를 막지 못해야 한다
+GW2=$(new_ws general)
+python3 - "$GW2" <<'PY6'
+import json, os, sys
+w = sys.argv[1]
+with open(os.path.join(w, "rounds.jsonl"), "w") as f:
+    for i in range(1, 21):
+        f.write(json.dumps({"round": i, "goal": "shell", "fp_exc": "2130000",
+            "fp_far": "0x620", "fp_elr": "0x620", "fp_milestone": "none", "fp_bytes": 0,
+            "category": "unknown", "fixer": "fixer-general",
+            "change_key": f"try_{i}" if i >= 8 else None,
+            "effect": "applied" if i >= 8 else "stall",
+            "analyst_new_facts": 0, "fixer_no_new_change": False}) + "\n")
+PY6
+GJ=$(python3 "$S/stop_conditions.py" "$GW2" --ladder shell)
+chk "무효 변경은 수로 안 센다"     "$(echo "$GJ" | python3 -c 'import json,sys;print(json.load(sys.stdin)["futile_spent"])')" "True"
+chk "general 이 시도 중이어도 소진" "$(echo "$GJ" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop_reason"])')" "EXHAUSTED"
+
+# 지문이 움직이면 소진이 아니다
+python3 - "$GW2" <<'PY7'
+import json, os, sys
+w = sys.argv[1]
+rows = [json.loads(l) for l in open(os.path.join(w, "rounds.jsonl"))]
+for n, r in enumerate(rows):
+    if n >= 9: r["fp_far"] = f"0x{0xC90A5000 + n:X}"
+open(os.path.join(w, "rounds.jsonl"), "w").write(
+    "".join(json.dumps(x, ensure_ascii=False) + "\n" for x in rows))
+PY7
+GJ2=$(python3 "$S/stop_conditions.py" "$GW2" --ladder shell)
+chk "진전 중이면 소진 아님"        "$(echo "$GJ2" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop"])')" "False"
+
+# 트랙 1 에 스토리지/커널 fixer 가 새지 않는가
+T1=$(python3 - <<'PY8'
+import re, pathlib
+s = pathlib.Path("workflows/pipeline.js").read_text()
+m = re.search(r"FIXERS_BY_TRACK = \{\s*1: \[([^\]]*)\]", s)
+print(m.group(1).replace("'", "").replace(" ", "") if m else "PARSE_FAIL")
+PY8
+)
+chk "트랙 1 fixer 목록"            "$T1" "fixer-memory,fixer-el3,fixer-bootflow"
+grep -q 'fixer-storage' <<< "$T1"
+chk "트랙 1 에 스토리지 fixer 없음" "$?" "1"
+
+# 최후수단은 순위로 오르지 않는다
+grep -q "KNOWN_FIXERS = FIXERS_BY_TRACK" "$REPO/workflows/pipeline.js"
+chk "general 은 KNOWN_FIXERS 밖"   "$?" "0"
+grep -q 'reached_by: decline_only' "$REPO/fixers/registry.yaml"
+chk "registry 에 도달 조건 명시"   "$?" "0"
+grep -q 'fixer_candidates.md' "$REPO/agents/fixer-general.md"
+chk "후보 기록 지시 있음"          "$?" "0"
+
+# supervisor 가 명부를 보고 처방하고, 담당 없으면 직행하는가
+grep -q 'prescribed_fixer' "$REPO/agents/supervisor.md"
+chk "supervisor 가 처방을 안다"    "$?" "0"
+grep -q 'route === GENERAL_FIXER' "$REPO/workflows/pipeline.js"
+chk "general 직행 경로 배선"       "$?" "0"
+grep -q 'KNOWN_FIXERS.includes(sup?.prescribed_fixer)' "$REPO/workflows/pipeline.js"
+chk "처방은 트랙 fixer 만 허용"    "$?" "0"
+
+
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
 echo "작업 폴더: $ROOT"
 [ "$FAIL" -eq 0 ]

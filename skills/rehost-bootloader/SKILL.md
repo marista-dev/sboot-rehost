@@ -141,7 +141,22 @@ bash <PLUGIN>/scripts/journal.sh <workdir> session-end "/sboot-rehost:rehost-boo
 | `supervisor` | 라우팅·정지 (정지 조건은 뒤집을 수 없음) |
 | `fault-classifier` | 정지점 분류 + fixer 순위 |
 | `fixer-memory` / `fixer-el3` / `fixer-bootflow` | 담당 오류 직접 수정 (회차당 하나) |
+| `fixer-general` | 위 셋이 전부 반려했을 때만. 범위 무제한 (수정·빌드·실행) + 후보 기록 |
 | `verifier` | 5/5 2 차 재검증 (비대칭 override) |
+
+## ★ 이 명령은 스토리지 컨트롤러 구현으로 가지 않는다
+
+트랙 1 의 목표는 **부트로더의 인터랙티브 표면**이다. 진짜 벤더 UFS 컨트롤러를 구동시키는
+것은 **트랙 2 K3 의 목표**이며 이 명령의 범위가 아니다.
+
+| | 트랙 1 등급 C | 트랙 2 K3 |
+|---|---|---|
+| 스토리지 | autoboot 이 막히지 않을 만큼 (스텁·우회 가능, 4항목 문서화) | **진짜 벤더 드라이버 구동** |
+| 판정 | autoboot 진행 토큰 | `sda: sda1…` 파티션 열거 |
+
+파이프라인이 이걸 구조로 집행한다 — 트랙 1 회차에는 `fixer-storage` · `fixer-kernel` 이
+후보에 오르지 않고, 분류기에는 `knowledge/faults_bootloader.md` 만 넘어간다.
+`verify.py` 의 UFS 항목도 K3 에서만 켜진다. **등급 A 목표라면 스토리지는 등장할 이유가 없다.**
 
 ## 정직성
 

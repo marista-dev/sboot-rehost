@@ -112,6 +112,8 @@ def main():
                         help="how many trailing rounds must all be dry before exhaustion")
     parser.add_argument("--futile-threshold", type=int, default=2,
                         help="applied changes that moved nothing before a layer review is due")
+    parser.add_argument("--futile-exhaust", type=int, default=6,
+                        help="applied changes that moved nothing before they stop counting as moves")
     args = parser.parse_args()
 
     ladder = [s for s in args.ladder.split(",") if s]
@@ -133,8 +135,16 @@ def main():
         r.get("fixer_no_new_change") is True for r in window)
 
     futile = futile_changes(rounds, fingerprints)
+
+    # A change that moves nothing is not a move. `fixer-general` has no domain
+    # boundary, so it can nearly always answer "I have another idea"; without
+    # this, fixers_dry would never become true and exhaustion would be
+    # unreachable no matter how long the run went. It requires analyst_dry too:
+    # while derivation is still producing stop points, the next change may be the
+    # one that lands.
+    futile_spent = futile >= args.futile_exhaust
     stuck = stall_count >= args.stall_threshold or oscillating
-    moves_exhausted = bool(stuck and analyst_dry and fixers_dry)
+    moves_exhausted = bool(stuck and analyst_dry and (fixers_dry or futile_spent))
 
     stop_reason = None
     if blockers:
@@ -166,6 +176,7 @@ def main():
         # question is no longer "which fixer" but "is this fixable in the loop at
         # all" - which is the supervisor's judgement to make, not a script's.
         "futile_changes": futile,
+        "futile_spent": futile_spent,
         "needs_layer_review": futile >= args.futile_threshold,
         "dry_window": args.dry_window,
     }
