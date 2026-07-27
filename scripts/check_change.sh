@@ -21,11 +21,16 @@
 #   MAX_HUNKS   allowed hunk count (default 3)
 set -u
 
-WD="${1:-}"; OP="${2:-}"
-[ -n "$WD" ] && [ -n "$OP" ] || { echo "usage: check_change.sh <workdir> snapshot|verify|restore" >&2; exit 1; }
+WD="${1:-}"; OP="${2:-}"; ROUND="${3:-}"
+[ -n "$WD" ] && [ -n "$OP" ] || { echo "usage: check_change.sh <workdir> snapshot [round]|verify|restore" >&2; exit 1; }
 
 SRC="$WD/06_machine"
 PRE="$WD/08_docs/.record/pre"
+# Per-round snapshots. Without them a bypass whose mechanism is later disproven
+# can only be argued about: there is no record of the sources as they stood
+# before it, so nothing can take it back out and the wrong model keeps
+# accumulating for the rest of the run.
+ROUNDS="$WD/08_docs/.record/rounds"
 MAX_HUNKS="${MAX_HUNKS:-3}"
 
 # Prefer the current name, still accept the legacy one in older workspaces.
@@ -42,7 +47,11 @@ case "$OP" in
     # Only machine sources are snapshotted; the bypass record is checked separately.
     find "$SRC" -maxdepth 1 -type f \( -name '*.c' -o -name '*.h' \) \
         -exec cp {} "$PRE/" \; 2>/dev/null || true
-    echo "check_change: snapshot $(find "$PRE" -type f 2>/dev/null | wc -l | tr -d ' ') files"
+    if [ -n "$ROUND" ]; then
+        rm -rf "$ROUNDS/$ROUND"; mkdir -p "$ROUNDS/$ROUND"
+        cp "$PRE"/* "$ROUNDS/$ROUND/" 2>/dev/null || true
+    fi
+    echo "check_change: snapshot $(find "$PRE" -type f 2>/dev/null | wc -l | tr -d ' ') files${ROUND:+ (round $ROUND)}"
     ;;
 
   verify)

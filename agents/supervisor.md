@@ -37,10 +37,16 @@ never edit.
 ## What counts as progress
 
 ```
-fingerprint = (exception count, FAR, ELR, milestone, console byte count)
+fingerprint = (first exception's ESR/FAR/ELR, milestone,
+               console bytes, distinct console lines, exception-count magnitude)
 progress    = the fingerprint changed, or the milestone rose
 stall       = fingerprint identical and milestone identical
 ```
+
+The **first** exception, not the last: see "Read the ORIGIN" below. The exception
+count enters as an order of magnitude because a storm runs until the clock cuts
+it, so 2.86M and 2.88M are the same observation and comparing them literally made
+every round look new.
 
 Progress is measured from **raw numbers, not classification names**. If the same
 problem were renamed each round, a stall would never be detectable.
@@ -76,9 +82,40 @@ where your work is.
 | # | condition | route |
 |---|---|---|
 | 4 | a machine-level premise is wrong | `rebuild` |
-| 5 | the mechanism is understood but no implemented fixer covers it | `fixer-general` |
-| 6 | the stop point is unrecognised or a derived fact looks wrong | `static-analyzer` |
-| 7 | otherwise | `fault-classifier` (add `prescribed_fixer` when you know the owner) |
+| 5 | an earlier bypass's mechanism has been **disproven** | `revert` |
+| 6 | the mechanism is understood but no implemented fixer covers it | `fixer-general` |
+| 7 | the stop point is unrecognised or a derived fact looks wrong | `static-analyzer` |
+| 8 | otherwise | `fault-classifier` (add `prescribed_fixer` when you know the owner) |
+
+## Read the ORIGIN, not the tail of the trace
+
+The fingerprint you are given leads with `origin` - the first exception in the
+run - and keeps the last FAR/ELR separately as `last_far_in_trace`.
+
+That separation matters. When an exception handler faults on its own context
+save, the abort nests and FAR walks by 0x20 for millions of iterations until the
+run's time budget cuts it. The last FAR is therefore wherever the recursion
+happened to be when the clock ran out: it changes every run, it belongs to the
+handler rather than to the fault, and a treatment aimed at it cannot converge -
+mapping that address only moves the sweep somewhere else.
+
+`origin` is the stop point. Judge the layer from it, and when you write a
+`treatment_plan`, write it about the origin.
+
+## Depth of boot, when the ladder has one rung
+
+Grade A's ladder is a single rung, so `best_milestone` stays null for the whole
+run even while the firmware walks from nothing through PMIC into storage init.
+`best_progress.uniq` - distinct console lines - is the measure of how far the
+boot actually gets. Distinct, not bytes: a retry loop can print hundreds of
+thousands of copies of one error, and that is not progress.
+
+Use it to tell forward motion from stagnation. "Milestone: none" across ten
+rounds whose depth keeps rising is a run that is working.
+
+When `timeout_bound: true`, a longer run produced more console than the round
+did. The wall is our own time budget, not a firmware stop point - do not send a
+fixer after it.
 
 ## The judgement: which layer is this stop point in?
 
@@ -136,6 +173,32 @@ Only with a **concrete, previously untried** change:
   `static-analyzer`. Guessing a premise sends the build down a wrong branch, which
   is worse than another round of derivation.
 
+### Routing `revert` — taking a bypass back out
+
+A bypass is a hypothesis about the hardware. Some of them are wrong, and until
+now nothing could remove one: every later change then rested on a model already
+known to be false, and the bypass list that verification item 5 reports stopped
+being an honest account of the machine.
+
+```json
+{ "route": "revert",
+  "revert": {
+    "round": 59,
+    "reason": "회차 59 는 MUIC 가 HSI2C base+0x38 로 chip_id 를 읽는다고 가정했다. 회차 60·61 콘솔이 여전히 chip_id:0x00 이고 지문이 그대로여서 그 가정이 반증됐다"
+  } }
+```
+
+- Only that round's change is removed. Everything applied after it stays -
+  rolling the sources back to that round would throw away correct work.
+- Use it when the evidence **contradicts the mechanism**, not merely when a
+  change did not help. A change that helped nothing may still be correct and
+  simply not the current wall; futility alone is a reason to review the layer.
+- If a later round edited the same lines, the reverse does not apply and the
+  revert is refused. That refusal is information: the two changes interact, and
+  the interaction is what needs treating.
+- `revert:<round>` is a change_key, so the same withdrawal cannot be replayed as
+  a fresh move.
+
 When `stop_conditions.suspect_prior_bypass == true`, pass
 `suspect_prior_bypass: true` along with your route: it tells the next actor to
 suspect the side effects of an existing bypass before stacking a new one on top.
@@ -179,21 +242,22 @@ understood mechanism is exactly the guessing the honesty rules forbid.
 {
   "round": 12,
   "goal": "link_up",
-  "fingerprint": { "exceptions": 4, "far": "0x12860010", "elr": "0xf48343a4",
-                   "milestone": "none", "console_bytes": 308 },
+  "fingerprint": { "origin": { "type": "Data Abort", "esr": "0x25/0x96000046",
+                               "far": "0x0", "elr": "0xf4865914" },
+                   "milestone": "none", "console_bytes": 308, "console_uniq": 41 },
   "progress": true,
   "route": "fault-classifier",
   "stop_reason": null,
   "suspect_prior_bypass": false,
-  "decision_note": "새 FAR 로 지문이 바뀌었고 목표는 아직 미도달이라 분류로 보냅니다"
+  "decision_note": "최초 예외가 새 주소로 바뀌었고 콘솔 깊이도 늘어 진행 중입니다 — 분류로 보냅니다"
 }
 ```
 
-`route` is one of `verify`, `next_goal`, `rebuild`, `fixer-general`,
+`route` is one of `verify`, `next_goal`, `rebuild`, `revert`, `fixer-general`,
 `static-analyzer`, `fault-classifier`, `stop`. Add `layer` (`loop` or `build`),
-`treatment_plan` and `prescribed_fixer` when you have them, and for `rebuild`,
-`build_change`. Write `decision_note` in natural Korean - it is surfaced to the
-user.
+`treatment_plan` and `prescribed_fixer` when you have them, for `rebuild`
+`build_change`, and for `revert` `revert`. Write `decision_note` in natural
+Korean - it is surfaced to the user.
 
 ## Prohibited
 

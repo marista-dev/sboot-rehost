@@ -28,6 +28,7 @@ import os
 import sys
 
 FINGERPRINT_KEYS = ("fp_exc", "fp_far", "fp_elr", "fp_milestone", "fp_bytes")
+ORIGIN_KEYS = ("fp_origin_esr", "fp_origin_far", "fp_origin_elr")
 
 
 def read_jsonl(path):
@@ -46,8 +47,43 @@ def read_jsonl(path):
     return rows
 
 
+def exc_bucket(value):
+    """Order of magnitude of the exception count, not the count itself.
+
+    A nested-abort storm runs until the wall clock cuts it, so the same stop
+    point produces 2,868,589 exceptions one round and 2,878,514 the next. Those
+    are the same observation; comparing them literally made every round look new.
+    """
+    try:
+        count = int(str(value).strip() or 0)
+    except (TypeError, ValueError):
+        return "?"
+    if count <= 0:
+        return "0"
+    return f"1e{len(str(count)) - 1}"
+
+
 def fingerprint(row):
-    return "|".join(str(row.get(k)) for k in FINGERPRINT_KEYS)
+    """The identity of a stop point, built to be stable when nothing changed.
+
+    Identity comes from the ORIGINATING exception plus how far the console got.
+    The last FAR in the trace is not identity: under a nested abort it walks
+    0x20 per iteration and lands wherever the run was killed, which made stall,
+    oscillation, exhaustion and layer review unreachable for a whole run.
+
+    Rows written before origin extraction existed fall back to the old keys, so
+    a resumed workspace still compares like with like instead of collapsing its
+    history into one identical-looking block.
+    """
+    if any(row.get(k) is not None for k in ORIGIN_KEYS):
+        parts = [str(row.get(k)) for k in ORIGIN_KEYS]
+        parts.append(str(row.get("fp_milestone")))
+        parts.append(str(row.get("fp_bytes")))
+        parts.append(str(row.get("fp_uniq")))
+        parts.append(exc_bucket(row.get("fp_exc")))
+        return "|".join(parts)
+    legacy = [str(row.get(k)) for k in FINGERPRINT_KEYS if k != "fp_exc"]
+    return "legacy|" + "|".join(legacy) + "|" + exc_bucket(row.get("fp_exc"))
 
 
 def trailing_stall(fingerprints):
@@ -89,6 +125,28 @@ def futile_changes(rows, fingerprints):
         else:
             break                  # a change that moved the fingerprint ends it
     return count
+
+
+def best_progress(rows):
+    """How far the firmware ever got, measured in distinct console lines.
+
+    A track-1 grade-A ladder has a single rung, so `best_milestone` stays null
+    for a whole run even while the boot walks from 0 to PMIC to storage init.
+    With no other measure of depth the loop could not tell progress from
+    stagnation, and the stop report had nothing honest to say about how far it
+    got. Distinct lines - not bytes - because a retry loop can print 394 KB of
+    one repeated error and that is not progress.
+    """
+    best = {"uniq": 0, "round": None, "bytes": 0}
+    for row in rows:
+        try:
+            uniq = int(row.get("fp_uniq") or 0)
+        except (TypeError, ValueError):
+            uniq = 0
+        if uniq > best["uniq"]:
+            best = {"uniq": uniq, "round": row.get("round"),
+                    "bytes": row.get("fp_bytes", 0)}
+    return best
 
 
 def best_milestone(rows, ladder):
@@ -168,6 +226,8 @@ def main():
         "stop": stop_reason is not None,
         "stop_reason": stop_reason,
         "best_milestone": best_milestone(rounds, ladder),
+        # Depth of boot, for ladders whose only rung is the goal itself.
+        "best_progress": best_progress(rounds),
         "tried_changes": sorted({r["change_key"] for r in rounds if r.get("change_key")}),
         "escalate_to_analyst": bool(escalate),
         "suspect_prior_bypass": stall_count >= 2,

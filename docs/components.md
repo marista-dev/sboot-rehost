@@ -224,7 +224,33 @@ INPUT.md, BL3 또는 fw/, profiles/*.yaml
 
 ### ★ 정지 조건과의 연결
 에스컬레이션에서 새 사실이 없으면 **`new_facts_count=0` 으로 정직하게 보고**해야 한다.
-이 값이 무브 소진 판정의 입력이므로 부풀리면 루프가 끝나지 않는다.
+이 값이 무브 소진 판정의 입력이므로 부풀리면 루프가 끝나지 않는다. 실제로 세는 것은
+자기신고가 아니라 `derived_facts.py` 가 **도출표에 늘어난 줄**이다.
+
+### ★ 기록이 닿는 조건 (`derived_facts.py` 가 읽는 형식)
+
+도출은 `## 도출된 정지점` 표의 한 줄로 남아야 분류기와 fixer 에게 닿는다. 파서가 보는
+것은 그 섹션 안의 표 행이고, 판별 기준은 **담당 fixer 칸**이다.
+
+- 섹션은 `#`·`##` 제목에서만 열리고 닫힌다. 회차마다 붙이는 `### round N 재도출` 은
+  섹션 안에 있고, 그 아래 쓴 행도 그대로 읽힌다.
+- 코드펜스 안과, 줄바꿈으로 `#` 로 시작하게 된 문장(`#179→#180 …`)은 제목이 아니다.
+- 셀 안에 인코딩 바이트열(`4ac10011|280140b9|…`)이 있어도 담당 칸을 기준으로 열을
+  잡으므로 행을 잃지 않는다.
+- 같은 시그니처를 다시 도출하면 **행이 늘지 않고 최신 내용이 그 행을 대체**한다.
+  (재도출 = 새 사실 0 이라는 소진 조건이 여기서 성립한다.)
+- 값 표(`carve` `bss_start` `entry PC` …)는 담당 fixer 칸이 없으므로 정지점이 아니다.
+
+**이 형식을 어긴 도출은 기록돼 있어도 아무에게도 닿지 않는다.** 한 실행에서는 제목
+판별이 어긋나 20 건 중 3 건만 전달됐고, 분류기는 이미 해소된 정지점 한 줄만 보면서
+`unknown` 을 반복했다.
+
+### ★ 기록이 커질 때 (`static_rotate.py`)
+
+에스컬레이션마다 근거 산문이 쌓여 기록이 300KB 를 넘으면, 매 회차 그걸 다시 읽는
+분석이 회차마다 비싸진다(한 실행에서 회차 6분 → 20분). 회전은 **오래된 근거 산문만**
+`08_docs/static_archive.md` 로 옮기고, 그 안에 있던 표 행은 먼저 본문 표로 승격한다.
+승격 없이 보관하면 사실을 조용히 지우는 것이므로, 승격이 회전의 전제다.
 
 ### 하드 블로커
 `carve_is_full=false`(트랙 1) · `assets_ok=false`(트랙 2) → 즉시 정지.
@@ -285,7 +311,8 @@ QEMU 를 실행하고 **원시 지문을 추출**하며 **출처 게이트를 �
 ```
 머신 + 펌웨어 자산
   → 07_logs/console_N.txt      콘솔        (로컬)
-  → 07_logs/run_N.summary.txt  핵심 정지점 (로컬)
+  → 07_logs/run_N.summary.txt  핵심 정지점 (최초 예외 → 마지막 60줄 순)
+  → 07_logs/origin_N.txt       최초 예외 블록 (원인)
   → ~/rehost/_traces/run_N.log 전체 트레이스 (WSL ext4)
   → fingerprint.json           원시 지문
   → observation.json           지문 + 정지조건 병합 문서
@@ -322,23 +349,60 @@ QEMU 를 실행하고 **원시 지문을 추출**하며 **출처 게이트를 �
 
 ```
 journal try-start
-  → check_change snapshot        (fixer 수정 전 원본 확보)
+  → check_change snapshot N      (fixer 수정 전 원본 확보 + 회차별 스냅샷)
   → run_qemu.sh | run_kernel.sh
-       ① timeout 으로 QEMU 실행
-       ② 요약 로그 생성
-       ③ 지문 추출
-       ④ 마일스톤 판정 + 출처 게이트
-       ⑤ fingerprint.json + record.py metric
+       ① timeout 으로 QEMU 실행 (종료코드 보존)
+       ② 실행 성공 판정 (run_failed)
+       ③ 최초 예외 블록 추출 → origin_N.txt
+       ④ 요약 로그 생성 (최초 예외 먼저, 마지막 60줄 뒤)
+       ⑤ 지문 추출 (+ 콘솔 고유 줄 수)
+       ⑥ 마일스톤 판정 + 출처 게이트
+       ⑦ 타임아웃 프로브 (정체된 hang 일 때만 1회)
+       ⑧ fingerprint.json + record.py metric
   → stop_conditions.py           (정지 조건)
   → python3 병합 → observation.json
 ```
 
 ### 지문
 ```
-(예외 개수, FAR, ELR, 마일스톤, 콘솔 바이트 수)
+(최초 예외의 ESR/FAR/ELR, 마일스톤, 콘솔 바이트, 콘솔 고유 줄, 예외 수 자릿수)
 ```
 **원시 관측값이며 분류 결과가 아니다.** 16진 주소는 문자열로 보존한다 — 정수로 바꾸면
 로그 표기와 어긋나고 대소문자 차이가 뭉개져 지문 비교가 깨진다.
+
+#### 왜 최초 예외인가 (`fingerprint_lib.sh`)
+
+핸들러가 자기 컨텍스트 세이브에서 다시 폴트하면 abort 가 중첩된다. FAR 은 매 반복
+0x20 씩 걷고, 실행은 타임아웃이 끊은 자리에서 멈춘다. 그래서 트레이스의 **마지막
+FAR 은 재귀가 도달한 위치**이지 원인이 아니며, 같은 정지점인데도 회차마다 다르다.
+
+`grep FAR | tail -1` 이 지문이던 동안 두 가지가 동시에 죽어 있었다.
+
+- 분류기는 스택 sweep 주소에 `data_abort_unmapped` 를 붙였고, 그 처방(그 FAR 를 덮는
+  MemoryRegion 추가)은 sweep 이 옮겨갈 뿐이라 **구조상 수렴하지 않는다.**
+- 지문이 매 회차 달라지니 `stall_count` 는 항상 0 이고 `futile_changes` 는 리셋된다.
+  **소진·에스컬레이션·층 재검토가 한 번도 발화하지 않는다.**
+
+그래서 첫 `Taking exception` 블록을 따로 뽑아 `origin` 으로 싣고, 마지막 FAR/ELR 은
+기록으로만 남긴다. 예외 수는 자릿수로 비교한다 — 2.86M 과 2.88M 은 같은 관측이다.
+
+#### 콘솔 고유 줄 — 사다리가 한 칸일 때의 전진 신호
+
+등급 A 사다리는 한 칸이라 부팅이 아무리 깊어져도 마일스톤은 `none` 이다. 콘솔 **고유**
+줄 수가 깊이를 센다. 바이트가 아닌 이유는 재시도 루프가 한 줄로 394KB 를 찍기 때문이다.
+
+#### 실행 실패 판정
+
+QEMU 종료코드를 `tail` 로 흘려버리면 시작조차 못 한 실행이 성공으로 보이고, 전부 0 인
+지문은 완벽히 안정되어 **정체 → `EXHAUSTED`(구조상 도달 불가)** 로 이어진다. 실행된 적
+없는 펌웨어에 대한 판정이다. 종료코드(124·137 은 정상 타임아웃)와 트레이스·콘솔 0바이트
+조합을 검사해 `run_failed` 를 세우고, 파이프라인은 `BLOCKED_ENV` 로 정지한다.
+
+#### 타임아웃 프로브
+
+`TIMEOUT` 은 고정 예산이라 "펌웨어가 멈췄다" 와 "돌고 있는데 우리가 껐다" 가 같은 관측이
+된다. 예외 0 · 마일스톤 없음 · **직전 회차와 콘솔 크기가 같을 때만** 4배 길게 한 번 더
+돌려 콘솔이 더 나오면 `timeout_bound=true` 로 보고한다. 지문은 건드리지 않는다.
 
 ### ★ 출처 게이트 (자가주입 금지 집행)
 도달 문구를 콘솔에서 찾으면 **그 문자열이 머신 소스(`06_machine/*.c`)에 있는지** 검사한다.
@@ -410,6 +474,7 @@ observation.json (지문 + 정지 조건)
 | `BLOCKED_KO` | K3 인데 벤더 `.ko` 부재 | 파일 체크 |
 | `BLOCKED_BUILD` | ninja 실패 | 빌드 결과 |
 | `BLOCKED_TEE` | 시큐어월드 (vold·Keymint·TEEGRIS) | 범위 밖 |
+| `BLOCKED_ENV` | 실행 환경 미비 · **회차 중 QEMU 실행 실패** | `check_env.sh` · `run_failed` |
 | `EXHAUSTED` | 무브 소진 | 계산 |
 
 **무브 소진**은 회차 카운트가 아니라 가능한 수의 소진이며, 셋이 **동시** 성립할 때만이다:
@@ -430,8 +495,12 @@ AND 담당 fixer 전원이 "새로 시도할 변경 없음"
   예산이 그냥 탄다(되돌릴 수 없다).**
 
 ### 정지 산출물
-최고 마일스톤 · 마지막 지문 · 시도한 변경 목록 · **재개 안내**.
+최고 마일스톤 · **최고 부팅 깊이**(`best_progress`, 콘솔 고유 줄) · 마지막 지문 ·
+시도한 변경 목록 · **재개 안내**.
 `success=false`, **REAL 표기 금지.** 정지는 포기가 아니라 정직한 인계다.
+
+등급 A 사다리는 한 칸이라 부팅이 아무리 깊어져도 `best_milestone` 은 null 이다.
+깊이를 함께 보고하지 않으면 "최고 마일스톤: 없음" 이 **사실이면서 오해를 만든다.**
 
 `runtime_round_cap`(기본 120)은 **런타임 한계이지 목표 판정이 아니다.**
 
@@ -487,8 +556,12 @@ STATIC.md/KERNEL_STATIC.md · rounds.jsonl · knowledge/*.md · fixers/registry.
 2. `rounds.jsonl` 기준 **아직 시도 안 한 변경**을 가진 쪽
 3. 최근 연속 실패한 fixer 는 순위를 낮춤
 
-**실제로 실행되는 것은 1 순위 하나뿐**이고 나머지는 다음 회차 후보로 남는다
-(회차 = 한 변경).
+**한 회차 안에서 순위 3위까지 실제로 물어본다.** 반려는 답이지 변경이 아니므로 회차를
+소모하지 않고 다음 후보로 넘어가고, 전문가가 전부 반려하면 `fixer-general` 이 받는다.
+그래도 적용되는 변경은 **한 회차 하나**다.
+
+1 순위만 묻던 동안 순위 2·3 은 장식이었고, 한 번의 반려가 회차를 그대로 끝냈다. S921N
+로그의 120 회차 중 86 회차가 그렇게 아무 변경 없이 소모됐다.
 
 ### ★ "unknown" 이 정상 답인 이유
 새 SoC 의 처음 보는 fault 를 기존 이름에 억지로 끼우면 신규성이 묻히고, 엉뚱한 fixer 가
@@ -514,8 +587,36 @@ LLM 5종(`agents/fixer-*.md`) + 스크립트 검문(`check_change.sh`)
 ```
 분류 결과 · 지문 · 도출된 사실 · 06_machine/ · rounds.jsonl · bypasses.md
   → 소스 편집 (한 군데) + bypasses.md 4항목 + change JSON
-  → check_change verify → 통과하면 ninja, 위반이면 되돌림
+  → check_change verify → 통과하면 sync_machine → ninja, 위반이면 되돌림
 ```
+
+### ★ 반영 (`sync_machine.sh`) — 고친 소스가 실제로 빌드되는가
+
+fixer 가 고치는 것은 `06_machine/machine.c` 다(한 변경 검문이 diff 를 뜨는 파일도 여기다).
+ninja 가 컴파일하는 것은 QEMU 트리 `hw/arm/<machine>.c` 의 **사본**이다. 둘을 잇는 단계가
+없으면 회차는 검문을 통과하고 빌드도 성공한 채 **이전 바이너리를 측정**한다. 지문은 당연히
+안 움직이고, 그 회차는 "무효 변경(futile)" 으로 기록되며, 그런 회차가 쌓이면 넣은 적 없는
+수정에 대해 소진이 성립한다.
+
+- 대상 찾는 순서: `06_machine/qemu_targets.txt` 매핑 → `hw/arm/<machine 이름 _>.c`
+  → 같은 basename. 처음 성공한 매핑은 파일에 적어 다음 회차부터 재탐색하지 않는다.
+- 못 찾으면 exit 3 이고 파이프라인은 `BLOCKED_BUILD` 로 정지한다. 이 상태로 회차를 더
+  도는 것은 측정이 아니기 때문이다.
+- 회차 적용 · `rebuild` · `fixer-general` · `revert` 네 경로 모두 ninja 앞에 이걸 부른다.
+
+### ★ 철회 (`revert_change.sh`) — 반증된 우회를 빼낸다
+
+우회는 하드웨어에 대한 가설이고, 틀릴 수 있다. 지금까지 루프는 **더하기만** 가능했다.
+`suspect_prior_bypass` 는 분류기에게 의심하라고 알릴 뿐이라, 틀린 모델은 머신에 남고 이후
+모든 변경이 그 위에 쌓였다. 검증 항목 5 가 보고하는 우회 목록도 그만큼 부정확해진다.
+
+- `check_change.sh snapshot <N>` 이 회차별 소스 스냅샷을 `08_docs/.record/rounds/N/` 에 남긴다.
+- 철회는 **그 회차의 diff 를 역패치**한다. 그 회차로 롤백하는 것이 아니다 — 롤백하면
+  이후의 옳은 변경까지 버린다.
+- 이후 회차가 같은 자리를 고쳤으면 역패치가 안 되고 **거부**한다. 그 거부는 정보다:
+  두 변경이 상호작용하고 있고, 그 상호작용이 처치 대상이다.
+- 철회도 우회 4항목으로 `bypasses.md` 에 기록되고, `revert:<round>` 는 change_key 라
+  같은 철회를 새 수(手)로 반복할 수 없다.
 
 ### fixer 분화
 
@@ -765,7 +866,9 @@ SoC별 **"어디를 볼지" 힌트**. `generic.yaml` · `exynos.yaml` · `mediat
 
 ```json
 {"ts":"2026-07-21T13:50:36+0900","epoch":1784609436,"elapsed_s":8,
- "round":12,"goal":"link_up","fp_far":"0x12860010","fp_milestone":"none",
+ "round":12,"goal":"link_up","fp_far":"0x12860010","fp_elr":"0xf4801204",
+ "fp_origin_esr":"0x25/0x96000046","fp_origin_far":"0x0","fp_origin_elr":"0xf4865914",
+ "fp_milestone":"none","fp_bytes":7734,"fp_uniq":118,
  "category":"pwrmode_timeout","fixer":"fixer-storage",
  "change_key":"storage:uiccmd:dme_set_opcode","effect":"applied",
  "analyst_new_facts":0,"fixer_no_new_change":false,"tokens_total":124300}
@@ -773,12 +876,15 @@ SoC별 **"어디를 볼지" 힌트**. `generic.yaml` · `exynos.yaml` · `mediat
 
 `effect` = `progress` / `stall` / `applied` / `reverted`.
 **16진 주소는 문자열로 보존한다** — 정수 변환은 지문 비교를 깨뜨린다.
+`fp_origin_*` 이 지문의 정체이고 `fp_far`/`fp_elr` 은 기록이다. `fp_uniq` 는 부팅 깊이다.
 
 ### 회차 상태 파일
 | 파일 | 내용 |
 |---|---|
-| `fingerprint.json` | 원시 지문 + `milestones_reached[]` + 출처 게이트 결과 |
+| `fingerprint.json` | 원시 지문 + `origin` + `milestones_reached[]` + 출처 게이트 + 실행 판정 |
 | `observation.json` | 지문 + 정지 조건을 병합한 문서 (Manage 가 읽는 유일한 입력) |
+| `07_logs/origin_N.txt` | 최초 예외 블록 (분류·도출의 출발점) |
+| `08_docs/.record/rounds/N/` | 회차 N 변경 **직전** 소스 스냅샷 (철회의 근거) |
 | `verdict_script.json` | 검증 5/5 1차 측정 |
 
 ### 위치 원칙

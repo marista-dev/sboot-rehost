@@ -48,7 +48,7 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 | 이름 | 한 줄 | 수정 권한 |
 |---|---|---|
 | `static-analyzer` | 바이너리·자산 → 근거 있는 사실. 근거 없으면 "미확정" | ✗ (분석 문서만) |
-| `supervisor` | 지문 + 정지 조건 → 라우팅·정지 + **층 판정** + **처방** (fixer 명부를 보고 지정) | ✗ |
+| `supervisor` | 지문 + 정지 조건 → 라우팅·정지 + **층 판정** + **처방** + **우회 철회** | ✗ |
 | `fault-classifier` | 로그 → 정지점 이름 + 담당 fixer 순위. 모르면 `unknown` | ✗ |
 | `fixer-memory` `fixer-el3` `fixer-bootflow` `fixer-kernel` `fixer-storage` | 담당 오류를 **직접 수정** (회차당 하나) | **○** |
 | `fixer-general` | **담당이 없을 때만** — 범위 무제한 (수정·빌드·실행) + 새 fixer 후보 기록 | **○** |
@@ -73,10 +73,14 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 |---|---|---|
 | `workflows/pipeline.js` | 루프 배선 + 단계 제어 | 사실 정지를 LLM 이 못 뒤집게 강제 |
 | `run_round.sh` | 한 회차 통째 수행 → **관측 문서 1개** (`observation.json`) | LLM 이 `stop` 을 조립하지 못하게 함 |
-| `run_qemu.sh` / `run_kernel.sh` | 실행 → **지문 추출 + 출처 게이트** | §7 자가주입 금지 (매 회차) |
+| `run_qemu.sh` / `run_kernel.sh` | 실행 → **지문 추출 + 출처 게이트 + 실행실패 판정** | §7 자가주입 금지 (매 회차) |
+| `fingerprint_lib.sh` | **최초 예외 추출** · 콘솔 고유줄 · 실행실패 판정 (두 run 스크립트 공용) | 재귀 말미가 아니라 원인을 지문으로 |
+| `sync_machine.sh` | 06_machine 소스를 QEMU 트리로 반영 | **고친 소스가 실제로 빌드된다** |
+| `revert_change.sh` | 반증된 우회를 **그 회차 변경만** 역패치로 제거 | 틀린 모델 위에 쌓지 않기 |
+| `static_rotate.py` | 도출 기록이 커지면 근거는 보관, **표는 유지** | 회차 비용 상승 차단 |
 | `wsl_bridge.sh` | 셸이 Windows 면 WSL 로 건너뜀 (scripts 공통 가드) | 실행은 Linux, 기록은 Windows |
 | `check_env.sh` | 루프 전 실행 환경 선행 검사 | 못 도는 셸에서 회차 소모 금지 |
-| `check_change.sh` | 한 변경 검문 (diff · 우회 4항목) | 회차 = 한 변경 |
+| `check_change.sh` | 한 변경 검문 (diff · 우회 4항목) + 회차별 스냅샷 | 회차 = 한 변경 · 되돌릴 수 있음 |
 | `derived_facts.py` | 도출표의 **새 정지점 수 측정** (시그니처 dedup) | 도출 자기신고 금지 |
 | `stop_conditions.py` | 정지 조건 계산 | 무한 진동 차단 |
 | `verify.py` | 5/5 **측정** | §6 실증거 |
@@ -122,10 +126,12 @@ static-analyzer 는 **덮어쓰지 않고 append** 하며, 루프 안의 재도�
 │   ├ 목표 도달 → 검증으로 / 사다리 다음 칸                      │
 │   ├ ★ 정지 (구조상 도달 불가)                                  │
 │   ├ **Build 층 문제 → 머신 재생성 (rebuild)**                  │
+│   ├ **우회가 반증됨 → 그 회차 변경만 철회 (revert)**           │
 │   ├ **담당 fixer 없음 → fixer-general 직행 (처방 동반)**       │
 │   ├ 미지·정체 → [static-analyzer] 재도출                       │
 │   └ [fault-classifier] 분류 + fixer 순위                       │
-│        → [1 순위 fixer] 한 변경 → (check_change) → (ninja)     │
+│        → [1→2→3 순위 fixer] 한 변경 (전원 반려 시 general)     │
+│        → (check_change) → (sync_machine) → (ninja)             │
 └──────────────────────────────────────────────────────────────┘
    ↓
 (verify.py 측정) → [verifier 재검증] → REAL | FORCED → 재현 키트
@@ -210,11 +216,57 @@ AND 담당 fixer 전원이 "새로 시도할 변경 없음"
 pipeline 이 강제 정지하고 모순을 JOURNAL 에 기록한다. 매몰비용("한 번만 더")이
 정직성을 이기지 못하게 하는 장치다.
 
-정지 산출물: 최고 마일스톤 · 마지막 지문 · 시도한 변경 목록 · **재개 안내**.
-`success=false`, **REAL 표기 금지.** 정지는 포기가 아니라 정직한 인계이며 재개 가능하다.
+정지 산출물: 최고 마일스톤 · **최고 부팅 깊이** · 마지막 지문 · 시도한 변경 목록 ·
+**재개 안내**. `success=false`, **REAL 표기 금지.** 정지는 포기가 아니라 정직한
+인계이며 재개 가능하다.
 
 `runtime_round_cap`(기본 120)은 **목표 판정이 아니라 런타임 한계**다. 도달하면
 "런타임 한계 — 재개 가능" 으로 보고하지, "도달 불가" 라고 하지 않는다.
+
+---
+
+## 지문은 최초 예외로 잡는다 — 정지·에스컬레이션·층판정의 입력값
+
+```
+지문 = (최초 예외의 ESR/FAR/ELR, 마일스톤, 콘솔 바이트, 콘솔 고유줄, 예외 수 자릿수)
+```
+
+핸들러가 자기 컨텍스트 세이브에서 다시 폴트하면 abort 가 중첩되어 FAR 이 매 반복
+0x20 씩 걷다가 **타임아웃이 끊은 자리**에서 멈춘다. 그래서 트레이스의 **마지막 FAR
+은 재귀의 위치이지 원인이 아니고, 같은 정지점인데도 회차마다 다르다.**
+
+그 값을 지문에 쓰면 두 가지가 동시에 죽는다 — 분류기는 실재하지 않는 정지점을
+이름 붙이고(그 처방은 매핑을 늘려도 sweep 이 옮겨갈 뿐 수렴 불가), `stall_count`
+는 영원히 0 이라 소진·에스컬레이션·층 재검토가 **한 번도 발화하지 않는다.**
+
+- 원인은 `fingerprint.json` 의 `origin` (블록 전문은 `07_logs/origin_N.txt`).
+- 마지막 FAR/ELR 은 `far`/`elr` 로 따로 보존한다 — 기록이지 진단 입력이 아니다.
+- 예외 수는 **자릿수**로 비교한다 (2.86M 과 2.88M 은 같은 관측).
+
+### 부팅 깊이 — 사다리가 한 칸일 때의 유일한 전진 신호
+
+등급 A 사다리는 `[표면]` 한 칸이라, 부팅이 PMIC 를 지나 스토리지 초기화까지 걸어가도
+`best_milestone` 은 계속 null 이다. `best_progress.uniq`(**콘솔 고유 줄 수**)가 그
+깊이를 센다. 바이트가 아니라 고유 줄인 이유는 재시도 루프가 같은 에러 한 줄로 394KB
+를 찍기 때문이다 — 그건 전진이 아니다.
+
+`timeout_bound=true` 는 **더 오래 돌리니 콘솔이 더 나왔다**는 뜻이다. 그 벽은 펌웨어가
+아니라 우리 실행 시간이므로 fixer 를 보내지 않는다.
+
+### 실행되지 않은 회차는 회차가 아니다
+
+QEMU 가 시작조차 못 하면 지문은 전부 0 으로 완벽히 안정되고, 그건 정체로 읽혀
+`EXHAUSTED`(구조상 도달 불가)가 된다 — 실행된 적 없는 펌웨어에 대해서. 그래서
+`run_qemu.sh`/`run_kernel.sh` 는 종료코드와 트레이스·콘솔 0바이트를 검사해
+`run_failed` 를 세우고, 파이프라인은 그 회차에 `BLOCKED_ENV` 로 **정지**한다.
+하네스 문제를 펌웨어 판정으로 바꾸지 않기 위해서다.
+
+### 고친 소스가 실제로 빌드되는가
+
+fixer 는 `06_machine/machine.c` 를 고치고 ninja 는 QEMU 트리의 `hw/arm/` 사본을
+빌드한다. 둘을 잇는 것이 `sync_machine.sh` 이며 **회차 적용·rebuild·general fixer
+모두 ninja 앞에 이것을 부른다.** 없으면 검문을 통과하고 빌드도 성공하는데 이전
+바이너리를 측정하게 되고, 그 회차는 "무효 변경" 으로 기록된다.
 
 ---
 
@@ -375,8 +427,9 @@ success·REAL 금지.
     ├── verdict_script.json        5/5 스크립트 1차 측정
     ├── VERIFICATION.md            verifier 2차 최종 판정
     ├── 06_machine/                machine 소스 + bypasses.md
-    ├── 07_logs/                   회차별 콘솔 + 요약 (로컬)
-    ├── 08_docs/                   분석 메모 (+ .record/ 타이머·스냅샷)
+    ├── 07_logs/                   회차별 콘솔 + 요약 + origin_N.txt (최초 예외)
+    ├── 08_docs/                   분석 메모 · static_archive.md (이관된 도출 근거)
+    │                              (+ .record/ 타이머 · rounds/N/ 회차별 소스 스냅샷)
     ├── 10_reproduce/              재현 키트
     ├── (트랙 1) STATIC.md · milestone_tokens.txt · 01_firmware/ 02_unpacked/
     │            03_bootloader/ 04_static-analysis/

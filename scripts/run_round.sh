@@ -32,7 +32,9 @@ SURFACE="${9:-shell}"   # track 1 interactive surface
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 bash "$HERE/journal.sh" "$WD" try-start "$RUN_N" "목표 $GOAL" >/dev/null 2>&1 || true
-bash "$HERE/check_change.sh" "$WD" snapshot >/dev/null 2>&1 || true
+# The round number keeps the snapshot: a change proved wrong three rounds later
+# can then actually be taken back out (revert_change.sh).
+bash "$HERE/check_change.sh" "$WD" snapshot "$RUN_N" >/dev/null 2>&1 || true
 
 RUN_RC=0
 if [ "$TRACK" = "1" ]; then
@@ -60,12 +62,17 @@ fp = load(os.path.join(wd, "fingerprint.json"), {})
 stop = load(stop_path, {})
 
 gate = fp.get("source_gate") or {}
+origin = fp.get("origin") or {}
 observation = {
     "round": int(run_n),
     "track": int(track),
     "goal": goal,
     "run_exit_code": int(run_rc),
-    "run_ok": bool(fp),
+    # A run that produced no fingerprint, or one the run script judged failed,
+    # is not a round about the firmware. Reporting it as ok let eight rounds of
+    # a QEMU that never started read as a stall and then as EXHAUSTED.
+    "run_ok": bool(fp) and not fp.get("run_failed", False),
+    "run_error": fp.get("run_error", ""),
 
     # raw observation from the run script
     "milestone": fp.get("milestone", "none"),
@@ -75,8 +82,23 @@ observation = {
     "injected_token": gate.get("token", ""),
     "exceptions": fp.get("exceptions", 0),
     "console_bytes": fp.get("console_bytes", 0),
+    # Distinct console lines: depth of boot, which console bytes cannot show
+    # because a retry loop prints the same line hundreds of thousands of times.
+    "console_uniq": fp.get("console_uniq", 0),
+    # The ORIGINATING exception - the stop point that actually needs a fix.
+    # far/elr below are the last ones in the trace and under a nested abort they
+    # are only where the recursion ran out of time.
+    "origin_type": origin.get("type", "none"),
+    "origin_esr": origin.get("esr", "none"),
+    "origin_far": origin.get("far", "none"),
+    "origin_elr": origin.get("elr", "none"),
+    "origin_block": origin.get("block", ""),
     "far": fp.get("far", "none"),
     "elr": fp.get("elr", "none"),
+    # True when a longer run produced more console: the wall is our time budget,
+    # not the firmware.
+    "timeout_bound": bool(fp.get("timeout_bound", False)),
+    "probe_console_bytes": fp.get("probe_console_bytes", -1),
     "console": fp.get("console", ""),
     "summary": fp.get("summary", ""),
     "trace": fp.get("trace", ""),
@@ -90,6 +112,7 @@ observation = {
     "escalate_to_analyst": bool(stop.get("escalate_to_analyst", False)),
     "suspect_prior_bypass": bool(stop.get("suspect_prior_bypass", False)),
     "best_milestone": stop.get("best_milestone"),
+    "best_progress": stop.get("best_progress", {}),
     "tried_changes": stop.get("tried_changes", []),
     # changes applied that moved nothing - the signal that the diagnosis is at
     # the wrong layer, which is the supervisor's judgement to make
@@ -101,7 +124,10 @@ observation = {
 # A run that produced no fingerprint must not look like a clean round.
 if not fp:
     observation["note"] = ("fingerprint.json 이 생성되지 않았습니다 — "
-                           "QEMU 실행 자체가 실패했을 수 있습니다")
+                           "QEMU 실행 자체가 실패했습니다")
+elif fp.get("run_failed"):
+    observation["note"] = ("실행이 실패했습니다 — " + str(fp.get("run_error", "")) +
+                           " · 이것은 펌웨어 정지점이 아니라 하네스/환경 문제입니다")
 
 out = os.path.join(wd, "observation.json")
 with open(out, "w", encoding="utf-8") as fh:

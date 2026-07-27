@@ -38,11 +38,29 @@ those is indistinguishable from progress until sixty rounds have passed.
 
 ## Method
 
-1. **Read the log from the end.** The last error sits closest to the real failure.
+1. **Start from the originating exception.** `fingerprint.json` gives it as
+   `origin` (type / ESR / FAR / ELR) and the block is written to
+   `07_logs/origin_N.txt`; the summary leads with it.
 2. Match the signature against the knowledge tables and pick a name.
 3. **Always quote the evidence line** (file:line plus the raw text).
 4. Look the name up in the registry and rank the fixers that own it.
 5. If nothing matches, answer `unknown` with an `escalation_request`.
+
+### The end of the log is usually not the fault
+
+When a handler faults on its own context save, the abort nests: FAR walks by 0x20
+per iteration for millions of iterations, and the run is cut wherever the clock
+ran out. So the *last* FAR belongs to the recursion, not to the fault, and it is
+different in every run of the same stop point.
+
+Classifying it produces two failures at once. `data_abort_unmapped` gets named
+for an address that is only a stack sweep, and its treatment - map that region -
+cannot converge because the sweep simply moves. Rounds 41 to 48 of the S921N run
+were all this one mistake.
+
+`origin` is the fault. `last_far_in_trace` is context. When they disagree, the
+origin wins, and if the origin block is empty there was no exception at all -
+that is a polling hang, not an abort.
 
 ## Names (the registry and knowledge tables are authoritative)
 

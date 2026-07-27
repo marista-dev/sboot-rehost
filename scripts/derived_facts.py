@@ -27,19 +27,45 @@ import sys
 
 SECTION = "도출된 정지점"
 ROW = re.compile(r"^\|\s*`?([A-Za-z0-9_]+)`?\s*\|(.*)$")
+# A markdown heading starts at column 0 and is followed by a space. Matching a
+# bare leading '#' also matched wrapped prose ("#179→#180 증가...") and code
+# comments, and each false heading silently closed the section.
+HEADING = re.compile(r"^(#{1,6})(?:\s|$)")
+FENCE = re.compile(r"^(```|~~~)")
+# A derived stop point names the fixer that owns it - that is what the table is
+# for. Tables of derived VALUES (carve, bss_start, entry PC ...) live in the same
+# document and must not be handed to the classifier as stop points.
+OWNER = re.compile(r"^(fixer-[a-z0-9-]+|build|rebuild)$")
 
 
 def parse_table(path):
-    """Rows of the derived-stop-point table, in file order."""
+    """Rows of the derived-stop-point table, in file order.
+
+    Only a top-level (`#`/`##`) heading opens or closes the section. The analyst
+    writes one `### round N 재도출` subsection per escalation INSIDE the section
+    and appends its row there, so treating a subsection heading as a section
+    boundary closed the table after the first escalation: every row written from
+    then on was invisible to the classifier and the fixers. On the S921N run that
+    hid 17 of 20 derived stop points - the derivation was recorded exactly as
+    asked and still reached nobody.
+    """
     if not os.path.exists(path):
         return []
-    rows, inside = [], False
+    rows, inside, fenced = [], False, False
     with open(path, encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            stripped = line.strip()
-            if stripped.startswith("#"):
-                inside = SECTION in stripped
+        for raw in fh:
+            line = raw.rstrip("\n")
+            if FENCE.match(line):
+                fenced = not fenced
                 continue
+            if fenced:
+                continue
+            heading = HEADING.match(line)
+            if heading:
+                if len(heading.group(1)) <= 2:
+                    inside = SECTION in line
+                continue
+            stripped = line.strip()
             if not inside or not stripped.startswith("|"):
                 continue
             match = ROW.match(stripped)
@@ -49,15 +75,31 @@ def parse_table(path):
             # skip the header and its |---|---| separator
             if signature.lower() in ("시그니처", "signature", "name"):
                 continue
+            # Columns cannot be taken positionally. A derived mechanism quotes
+            # instruction bytes (`4ac10011|280140b9|...`) and unescaped pipes in
+            # those cells shifted every column right, so the owner landed in the
+            # middle of a sentence and the row was dropped. Anchor on the owner
+            # cell instead: it is the one cell with a closed vocabulary.
             cells = [c.strip() for c in stripped.strip("|").split("|")]
+            owner_at = next((i for i, c in enumerate(cells)
+                             if i > 0 and OWNER.match(c.strip("` "))), -1)
+            if owner_at < 0:
+                continue
             rows.append({
                 "signature": signature,
                 "observation": cells[1] if len(cells) > 1 else "",
-                "mechanism": cells[2] if len(cells) > 2 else "",
-                "fixer": cells[3].strip("`") if len(cells) > 3 else "",
-                "treatment": cells[4] if len(cells) > 4 else "",
+                "mechanism": "|".join(cells[2:owner_at]),
+                "fixer": cells[owner_at].strip("` "),
+                "treatment": "|".join(cells[owner_at + 1:]),
             })
-    return rows
+
+    # One row per signature. Re-derivation of the same stop point corrects the
+    # earlier row rather than adding a second one, so the newest wins while the
+    # position stays where the signature first appeared.
+    merged = {}
+    for row in rows:
+        merged[row["signature"]] = row
+    return list(merged.values())
 
 
 def read_seen(path):

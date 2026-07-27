@@ -185,13 +185,16 @@ function runGeneralFixer(round, goal, why, plan, obs, cls, derivedTable) {
     `${why}\n` +
     `Classification: ${cls?.category ?? 'unknown'}   ` +
     `Evidence: ${JSON.stringify(cls?.evidence ?? {})}\n` +
-    `Fingerprint: ${JSON.stringify({ far: obs?.far, elr: obs?.elr, exceptions: obs?.exceptions })}\n` +
+    `Fingerprint: ${fingerprintText(obs)}\n` +
     `Console: ${obs?.console}\nSummary: ${obs?.summary}\nFull trace: ${obs?.trace}\n` +
     `Derived facts: ${staticDoc}\nStop points derived so far:\n${derivedTable}\n` +
     (plan ? `Supervisor's treatment plan: ${plan}\n` : '') +
     `Machine sources: ${workdir}/06_machine/   Bypasses: ${workdir}/06_machine/bypasses.md\n` +
     `Already attempted: ${workdir}/rounds.jsonl - never repeat an existing change_key\n` +
-    `Build: cd ~/qemu-build/qemu-10.2.2/build && ninja qemu-system-aarch64\n\n` +
+    `Build (BOTH commands, in this order - editing the workspace source alone ` +
+    `leaves the QEMU tree compiling the previous version):\n` +
+    `  bash "${PLUGIN}/scripts/sync_machine.sh" "${workdir}" ${machine}\n` +
+    `  cd ~/qemu-build/qemu-10.2.2/build && ninja qemu-system-aarch64\n\n` +
     `Treat ONE mechanism. You may touch several places only if they are parts of ` +
     `one cause, and you must say in one sentence why they are one.\n` +
     `Then rebuild, and report build failures verbatim.\n` +
@@ -205,6 +208,22 @@ function runGeneralFixer(round, goal, why, plan, obs, cls, derivedTable) {
       label: `general-${round}`, phase: 'Loop' })
 }
 
+/* The fingerprint as the classifier and the fixers should see it.
+ * The originating exception comes first because it is the stop point; the last
+ * FAR in the trace is only where a nested abort ran out of time, and leading
+ * with it sent round after round chasing an address that was a symptom of the
+ * recursion rather than its cause. */
+function fingerprintText(obs) {
+  return JSON.stringify({
+    origin: { type: obs?.origin_type, esr: obs?.origin_esr,
+              far: obs?.origin_far, elr: obs?.origin_elr },
+    exceptions: obs?.exceptions,
+    console_bytes: obs?.console_bytes, console_uniq: obs?.console_uniq,
+    last_far_in_trace: obs?.far, last_elr_in_trace: obs?.elr,
+  }) + (obs?.origin_block ? `\n최초 예외 블록: ${obs.origin_block}` : '') +
+  `\n(last_far/last_elr 는 storm 의 마지막 지점입니다. 진단은 origin 으로 하세요.)`
+}
+
 function recordRoundCmd(round, goal, fp, category, fixer, changeKey, effect, analystFacts, noNewChange) {
   const fields = [
     `round=${round}`,
@@ -212,8 +231,14 @@ function recordRoundCmd(round, goal, fp, category, fixer, changeKey, effect, ana
     `fp_exc=${Number(fp?.exceptions ?? 0)}`,
     `fp_far=${shq(fp?.far ?? 'none')}`,
     `fp_elr=${shq(fp?.elr ?? 'none')}`,
+    // Identity of the stop point. Recorded separately from the trailing FAR so
+    // the stop conditions can compare rounds by what actually happened.
+    `fp_origin_esr=${shq(fp?.origin_esr ?? 'none')}`,
+    `fp_origin_far=${shq(fp?.origin_far ?? 'none')}`,
+    `fp_origin_elr=${shq(fp?.origin_elr ?? 'none')}`,
     `fp_milestone=${shq(fp?.milestone ?? 'none')}`,
     `fp_bytes=${Number(fp?.console_bytes ?? 0)}`,
+    `fp_uniq=${Number(fp?.console_uniq ?? 0)}`,
     `category=${shq(category ?? 'none')}`,
     `fixer=${shq(fixer ?? 'none')}`,
     `change_key=${shq(changeKey ?? 'none')}`,
@@ -264,11 +289,20 @@ const RUN_SCHEMA = {
   type: 'object',
   properties: {
     run_ok: { type: 'boolean' },
+    run_error: { type: 'string' },
     milestone: { type: 'string' },
     milestones_reached: { type: 'array' },
     injected: { type: 'boolean' },
     exceptions: { type: 'integer' },
     console_bytes: { type: 'integer' },
+    console_uniq: { type: 'integer' },
+    origin_type: { type: 'string' },
+    origin_esr: { type: 'string' },
+    origin_far: { type: 'string' },
+    origin_elr: { type: 'string' },
+    origin_block: { type: 'string' },
+    timeout_bound: { type: 'boolean' },
+    probe_console_bytes: { type: 'integer' },
     far: { type: 'string' },
     elr: { type: 'string' },
     console: { type: 'string' },
@@ -280,6 +314,7 @@ const RUN_SCHEMA = {
     escalate_to_analyst: { type: 'boolean' },
     suspect_prior_bypass: { type: 'boolean' },
     best_milestone: { type: ['string', 'null'] },
+    best_progress: { type: 'object' },
     tried_changes: { type: 'array' },
     futile_changes: { type: 'integer' },
     needs_layer_review: { type: 'boolean' },
@@ -293,6 +328,8 @@ const SUPERVISOR_SCHEMA = {
     route: { type: 'string' },
     layer: { type: ['string', 'null'] },
     build_change: { type: ['object', 'null'] },
+    // { round, reason } - withdraw a bypass whose mechanism has been disproven
+    revert: { type: ['object', 'null'] },
     treatment_plan: { type: ['string', 'null'] },
     prescribed_fixer: { type: ['string', 'null'] },
     progress: { type: 'boolean' },
@@ -368,6 +405,9 @@ const APPLY_SCHEMA = {
   properties: {
     gate_pass: { type: 'boolean' },
     gate_reason: { type: 'string' },
+    // Did the edited source actually reach the tree ninja compiles?
+    sync_ok: { type: 'boolean' },
+    sync_reason: { type: ['string', 'null'] },
     build_ok: { type: 'boolean' },
     build_error: { type: ['string', 'null'] },
   },
@@ -565,7 +605,11 @@ async function buildMachine(diagnosis) {
       `   bash "${PLUGIN}/scripts/py.sh" patch_kernel.py ${workdir}/fw/Image ${workdir}/fw/Image.patched\n` +
       `   patch_kernel.py refuses to apply on a pre-image mismatch - report that as is.\n`
     : '') +
-  `4. Copy into hw/arm/, register in meson.build, then\n` +
+  `4. Copy it into the QEMU tree as hw/arm/${machine.replace(/-/g, '_')}.c and register\n` +
+  `   it in hw/arm/meson.build. That exact name matters: every later round syncs\n` +
+  `   the workspace source to the tree with scripts/sync_machine.sh, which finds\n` +
+  `   the target by that name. Then\n` +
+  `   bash "${PLUGIN}/scripts/sync_machine.sh" "${workdir}" ${machine}\n` +
   `   cd ~/qemu-build/qemu-10.2.2/build && ninja qemu-system-aarch64\n` +
   `5. A build error must be reported verbatim with build_ok=false. Never guess a fix.\n` +
   `6. Confirm registration: qemu-system-aarch64 -M help | grep ${machine}\n` +
@@ -620,13 +664,29 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     `# stop and stop_reason, which the pipeline enforces against your route.`,
     RUN_SCHEMA)
 
+  // A round that did not actually run is not evidence about the firmware. Left
+  // as an ordinary round it produces a perfectly stable all-zero fingerprint,
+  // which the stop conditions correctly read as a stall and then as EXHAUSTED -
+  // "structurally unreachable" - about a QEMU that never started. Eight rounds
+  // of the S921N log died exactly this way, so this is a stop, not a log line.
   if (obs?.run_ok === false) {
-    log(`[루프] 회차 ${round}: ★ fingerprint.json 이 생성되지 않았습니다 — QEMU 실행 자체가 실패했을 수 있습니다.`)
+    log(`[루프] 회차 ${round}: ★ 실행 자체가 실패했습니다 — ${obs?.run_error ?? 'fingerprint.json 없음'}`)
+    await shell(`run-blocker-${round}`, 'Loop',
+      `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=BLOCKED_ENV ` +
+      `detail=${shq(`회차 ${round} QEMU 실행 실패: ${obs?.run_error ?? 'fingerprint.json 미생성'}`)}\n` +
+      `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" note ` +
+      `${shq(`실행 실패로 정지 (회차 ${round}) — 펌웨어 판정이 아니라 하네스/환경 문제입니다`)}`,
+      OK_SCHEMA)
+    stopped = true; stopReason = 'BLOCKED_ENV'
+    break
   }
 
   log(`[루프] 회차 ${round} (목표 ${goal}) — 마일스톤 ${obs?.milestone ?? '?'}, ` +
-      `예외 ${obs?.exceptions ?? '?'} 건, 정체 ${obs?.stall_count ?? 0} 회` +
-      (obs?.injected ? ' ★ 자가주입 감지' : ''))
+      `콘솔 고유 ${obs?.console_uniq ?? 0} 줄, 예외 ${obs?.exceptions ?? '?'} 건, ` +
+      `최초 ${obs?.origin_type ?? 'none'}@${obs?.origin_elr ?? 'none'}, ` +
+      `정체 ${obs?.stall_count ?? 0} 회` +
+      (obs?.injected ? ' ★ 자가주입 감지' : '') +
+      (obs?.timeout_bound ? ' ★ 타임아웃 한계 (더 돌리면 더 나옴)' : ''))
 
   // Everything derived about this firmware so far. Read before the supervisor,
   // because judging the layer means comparing the machine's premises against the
@@ -653,15 +713,26 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   const sup = await agent(
     `Round ${round}, current goal "${goal}" (ladder: ${ladderArg}).\n` +
     `Fingerprint file: ${workdir}/fingerprint.json\n` +
+    `Fingerprint: ${fingerprintText(obs)}\n` +
     `Stop conditions: ${JSON.stringify({
       stop: obs?.stop, stop_reason: obs?.stop_reason, stall_count: obs?.stall_count,
       escalate_to_analyst: obs?.escalate_to_analyst,
       suspect_prior_bypass: obs?.suspect_prior_bypass,
       best_milestone: obs?.best_milestone,
+      best_progress: obs?.best_progress,
       futile_changes: obs?.futile_changes,
       needs_layer_review: obs?.needs_layer_review,
     })}\n` +
     `Observed milestone: ${obs?.milestone}, provenance gate injected: ${obs?.injected}\n` +
+    `Boot depth this round: ${obs?.console_uniq ?? 0} distinct console lines ` +
+    `(best so far ${obs?.best_progress?.uniq ?? 0} in round ${obs?.best_progress?.round ?? '-'}). ` +
+    `On a one-rung ladder this is the only measure of forward motion - a milestone ` +
+    `of "none" does not mean the boot went nowhere.\n` +
+    (obs?.timeout_bound
+      ? `★ A longer run produced MORE console (${obs?.console_bytes}B → ` +
+        `${obs?.probe_console_bytes}B). This wall is the run timeout, not the ` +
+        `firmware. Do not send a fixer after a stop point that is our own clock.\n`
+      : '') +
     `Recent rounds: ${JSON.stringify(recent)}\n` +
     `Derived stop points (${staticDoc}):\n${derivedTable}\n` +
     `Machine sources: ${workdir}/06_machine/   Bypasses: ${workdir}/06_machine/bypasses.md\n` +
@@ -678,6 +749,13 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
         `not move. Treating the symptom is not working. READ the machine sources ` +
         `and the derived facts and judge the layer before routing anywhere.\n`
       : '') +
+    `A bypass is a hypothesis about the hardware, and some of them turn out to be ` +
+    `wrong. When a round's evidence CONTRADICTS the mechanism an earlier bypass ` +
+    `assumed - not merely "it did not help" - route "revert" with ` +
+    `revert={round, reason}. Everything after that round stays; only that change ` +
+    `comes out. Leaving a disproven bypass in place makes every later change rest ` +
+    `on a model you know is false, and it corrupts the bypass list that ` +
+    `verification reports.\n` +
     `Choose a route. If stop is true you may only answer route="stop".\n` +
     `Round count and elapsed time are not stop reasons: when stop is false, keep going.`,
     { agentType: 'supervisor', schema: SUPERVISOR_SCHEMA, label: `supervisor-${round}`,
@@ -741,6 +819,69 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     roundLog.push({ round, goal, category: 'unowned', fixer: GENERAL_FIXER,
                     change_key: gen.change_key })
     continue
+  }
+
+  // Withdraw a bypass whose mechanism this round disproved. Until now the loop
+  // could only add: `suspect_prior_bypass` asked the classifier to be
+  // suspicious, but nothing could take the wrong model back out, so later
+  // changes kept stacking on top of it and the bypass list stopped being an
+  // honest account of the machine.
+  if (route === 'revert') {
+    const target = Number(sup?.revert?.round ?? 0)
+    const key = `revert:${target}`
+    if (!target || (obs?.tried_changes ?? []).includes(key)) {
+      log(`[루프] 회차 ${round}: 되돌리기 대상이 없거나 이미 되돌린 회차라 분류로 보냅니다.`)
+      route = 'fault-classifier'
+    } else {
+      log(`[루프] 회차 ${round}: ★ 회차 ${target} 우회 철회 — ${sup?.revert?.reason ?? ''}`)
+      const rev = await shell(`revert-${round}`, 'Loop',
+        `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" decision ` +
+        `${shq(`supervisor 회차 ${round}`)} ${shq(`회차 ${target} 우회 철회`)} ` +
+        `${shq(sup?.revert?.reason ?? '')}\n` +
+        `bash "${PLUGIN}/scripts/revert_change.sh" "${workdir}" ${target} ` +
+        `${shq(sup?.revert?.reason ?? '')}; REV=$?\n` +
+        `if [ $REV -eq 0 ]; then\n` +
+        `  bash "${PLUGIN}/scripts/sync_machine.sh" "${workdir}" ${machine} && ` +
+        `(cd ~/qemu-build/qemu-10.2.2/build && ninja qemu-system-aarch64)\n` +
+        `fi\n` +
+        `# Report reverted/reason from the revert_change.sh JSON, build_ok from ninja.`,
+        {
+          type: 'object',
+          properties: {
+            reverted: { type: 'boolean' },
+            reason: { type: ['string', 'null'] },
+            build_ok: { type: ['boolean', 'null'] },
+          },
+          required: ['reverted'],
+        })
+
+      if (!rev || rev.reverted !== true) {
+        // A refusal is a real answer: a later round edited the same place, so
+        // the two changes interact and the interaction is what needs treating.
+        log(`[루프] 회차 ${round}: 되돌리기 불가 — ${rev?.reason ?? ''} · 분류를 계속합니다.`)
+        route = 'fault-classifier'
+      } else {
+        if (rev.build_ok === false) {
+          await shell(`revert-build-blocker-${round}`, 'Loop',
+            `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=BLOCKED_BUILD ` +
+            `detail=${shq(`회차 ${round} 우회 철회 후 재빌드 실패`)}`,
+            OK_SCHEMA)
+          stopped = true; stopReason = 'BLOCKED_BUILD'
+          break
+        }
+        await shell(`revert-record-${round}`, 'Loop',
+          `echo ${shq(`| run ${round} | 회차 ${target} 우회 철회 | ${sup?.revert?.reason ?? ''} |`)} ` +
+          `>> "${workdir}/PROGRESS.md"\n` +
+          journalTryEnd(round, 'bypass_revert', sup?.revert?.reason ?? '',
+                        `회차 ${target} 변경 제거`, obs?.summary ?? '') + `\n` +
+          recordRoundCmd(round, goal, obs, 'bypass_revert', 'supervisor', key,
+                         'applied', analystNewFacts, false),
+          OK_SCHEMA)
+        roundLog.push({ round, goal, category: 'bypass_revert', fixer: 'supervisor',
+                        change_key: key })
+        continue
+      }
+    }
   }
 
   // The loop's own exit for stop points it cannot reach. A fixer edits one place
@@ -830,9 +971,14 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     const esc = await agent(
       `Run in mode=escalation. Round ${round}, goal ${goal}.\n` +
       `The run is stalled or the stop point is unrecognised.\n` +
-      `Fingerprint: ${JSON.stringify({
-        far: obs?.far, elr: obs?.elr, exceptions: obs?.exceptions })}\n` +
+      `Fingerprint: ${fingerprintText(obs)}\n` +
+      `Originating exception block: ${obs?.origin_block}\n` +
       `Summary log: ${obs?.summary}\nFull trace: ${obs?.trace}\n\n` +
+      `Start from the ORIGINATING exception, not from the last FAR in the trace. ` +
+      `Under a nested abort the handler faults on its own context save and FAR ` +
+      `walks for millions of iterations; that address is a consequence of the ` +
+      `recursion, and deriving a mechanism for it produces a stop point that ` +
+      `cannot be fixed because it was never the cause.\n` +
       `Derive what is actually executing at that address, who called it, or where ` +
       `the value comes from. Disassemble; do not guess.\n\n` +
       `THEN WRITE WHAT YOU FOUND DOWN. Append a row to the "## 도출된 정지점" table ` +
@@ -850,7 +996,11 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     // A self-reported number cannot be contradicted, so re-deriving the same
     // address would count as "new" every round and exhaustion never arrives.
     const measured = await shell(`derived-${round}`, 'Loop',
-      `bash "${PLUGIN}/scripts/py.sh" derived_facts.py "${workdir}" --track ${track}`,
+      `bash "${PLUGIN}/scripts/py.sh" derived_facts.py "${workdir}" --track ${track}\n` +
+      `# Move old evidence prose to 08_docs/ once the record gets large, keeping\n` +
+      `# every derived ROW in the table. The analyst re-reads this file each\n` +
+      `# escalation, so unbounded growth makes every later round cost more.\n` +
+      `bash "${PLUGIN}/scripts/py.sh" static_rotate.py "${workdir}" --track ${track} >/dev/null 2>&1 || true`,
       DERIVED_SCHEMA)
     derived = measured
     derivedRows = (measured?.stop_points ?? derivedRows)
@@ -869,7 +1019,11 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   // "unknown" every round.
   const cls = await agent(
     `Round ${round}, goal ${goal}, track ${track}.\n` +
-    `Fingerprint: ${workdir}/fingerprint.json (provenance gate injected=${obs?.injected})\n` +
+    `Fingerprint: ${fingerprintText(obs)}\n` +
+    `(full file: ${workdir}/fingerprint.json, provenance gate injected=${obs?.injected})\n` +
+    `Originating exception block: ${obs?.origin_block}\n` +
+    `Match on the ORIGIN. A storm's trailing FAR walks with every run and is not ` +
+    `the stop point; naming it produces a category no fixer can act on.\n` +
     `Console: ${obs?.console}\nSummary: ${obs?.summary}\nFull trace if needed: ${obs?.trace}\n` +
     `Registry: fixers/registry.yaml - only these fixers exist on this track: ` +
     `${KNOWN_FIXERS.join(', ')}\n` +
@@ -925,53 +1079,83 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   // the fixer exists on this track.
   const prescribed = KNOWN_FIXERS.includes(sup?.prescribed_fixer)
     ? sup.prescribed_fixer : null
-  const chosen = prescribed ?? (ranked.length ? ranked[0].fixer : derivedOwner)
+
+  // The whole candidate list, in order of authority: the supervisor's
+  // prescription (it read the sources and the derived facts this round), then
+  // the classifier's ranking, then the owner named in the derived table.
+  // Only rank 1 used to be asked, so a ranking of three was decoration and one
+  // decline ended the round. Ranks 2 and 3 exist precisely because the first
+  // guess about ownership can be wrong.
+  const candidates = []
+  const addCandidate = f => {
+    if (f && KNOWN_FIXERS.includes(f) && !candidates.includes(f)) candidates.push(f)
+  }
+  addCandidate(prescribed)
+  ranked.forEach(r => addCandidate(r?.fixer))
+  addCandidate(derivedOwner)
+
   if (prescribed) {
     log(`[루프] 회차 ${round}: supervisor 처방 — ${prescribed}`)
   } else if (!ranked.length) {
-    log(`[루프] 회차 ${round}: 분류는 unknown 이지만 도출표가 ${chosen} 를 담당으로 지목 — 넘깁니다.`)
+    log(`[루프] 회차 ${round}: 분류는 unknown 이지만 도출표가 ${candidates[0]} 를 담당으로 지목 — 넘깁니다.`)
   }
-  const fix = await agent(
-    `Round ${round}, goal ${goal}. Classification: ${cls?.category}\n` +
-    `Evidence: ${JSON.stringify(cls?.evidence ?? {})}\n` +
-    `Fingerprint: ${JSON.stringify({ far: obs?.far, elr: obs?.elr, exceptions: obs?.exceptions })}\n` +
-    `Derived facts: ${staticDoc}  (read it - the analyst appends there every round)\n` +
-    `Stop points derived for this firmware:\n${derivedTable}\n` +
-    `If one of these matches the fingerprint, apply its "시도할 변경" - it was ` +
-    `derived from this exact target with evidence attached.\n` +
-    (sup?.treatment_plan
-      ? `Supervisor's treatment plan: ${sup.treatment_plan}\n` +
-        `That is a direction, not a patch. If it does not hold up against what you ` +
-        `read, say so - you own this change, and you are the one who answers ` +
-        `no_new_change.\n`
-      : '') +
-    `Current sources: ${workdir}/06_machine/\n` +
-    `Already attempted: ${workdir}/rounds.jsonl - never repeat an existing change_key\n` +
-    `Bypass record: ${workdir}/06_machine/bypasses.md\n` +
-    (sup?.suspect_prior_bypass
-      ? `The run is stalling. Suspect the side effects of an earlier bypass before adding a new one.\n`
-      : '') +
-    `\nChange exactly ONE place and append the four-field bypass entry to bypasses.md.\n` +
-    `bypasses.md and the PROGRESS.md line are user-facing: write them in natural Korean.\n` +
-    `If this is not your area answer not_mine=true. If you have no untried change ` +
-    `left, answer no_new_change=true honestly - that feeds the stop condition.`,
-    { agentType: chosen, schema: FIXER_SCHEMA, label: `${chosen}-${round}`, phase: 'Loop' }
-  )
 
-  if (fix?.not_mine || fix?.no_new_change || !fix?.change) {
-    log(`[루프] 회차 ${round}: ${chosen} 반려 ` +
-        `(담당아님=${fix?.not_mine === true}, 새 시도 없음=${fix?.no_new_change === true})`)
+  let fix = null
+  let chosen = candidates[0]
+  const declined = []
+  for (const candidate of candidates.slice(0, 3)) {
+    chosen = candidate
+    const attempt = await agent(
+      `Round ${round}, goal ${goal}. Classification: ${cls?.category}\n` +
+      `Evidence: ${JSON.stringify(cls?.evidence ?? {})}\n` +
+      `Fingerprint: ${fingerprintText(obs)}\n` +
+      `Originating exception block: ${obs?.origin_block}\n` +
+      `Derived facts: ${staticDoc}  (read it - the analyst appends there every round)\n` +
+      `Stop points derived for this firmware:\n${derivedTable}\n` +
+      `If one of these matches the fingerprint, apply its "시도할 변경" - it was ` +
+      `derived from this exact target with evidence attached.\n` +
+      (declined.length
+        ? `Already declined this round: ${declined.join('; ')}. You are next in the ` +
+          `ranking, so read the mechanism yourself before assuming it is not yours.\n`
+        : '') +
+      (sup?.treatment_plan
+        ? `Supervisor's treatment plan: ${sup.treatment_plan}\n` +
+          `That is a direction, not a patch. If it does not hold up against what you ` +
+          `read, say so - you own this change, and you are the one who answers ` +
+          `no_new_change.\n`
+        : '') +
+      `Current sources: ${workdir}/06_machine/\n` +
+      `Already attempted: ${workdir}/rounds.jsonl - never repeat an existing change_key\n` +
+      `Bypass record: ${workdir}/06_machine/bypasses.md\n` +
+      (sup?.suspect_prior_bypass
+        ? `The run is stalling. Suspect the side effects of an earlier bypass before adding a new one.\n`
+        : '') +
+      `\nChange exactly ONE place and append the four-field bypass entry to bypasses.md.\n` +
+      `bypasses.md and the PROGRESS.md line are user-facing: write them in natural Korean.\n` +
+      `If this is not your area answer not_mine=true. If you have no untried change ` +
+      `left, answer no_new_change=true honestly - that feeds the stop condition.`,
+      { agentType: candidate, schema: FIXER_SCHEMA, label: `${candidate}-${round}`, phase: 'Loop' }
+    )
+    if (attempt && !attempt.not_mine && !attempt.no_new_change && attempt.change) {
+      fix = attempt
+      break
+    }
+    declined.push(`${candidate}(not_mine=${attempt?.not_mine === true}, ` +
+                  `no_new_change=${attempt?.no_new_change === true})`)
+    log(`[루프] 회차 ${round}: ${candidate} 반려 ` +
+        `(담당아님=${attempt?.not_mine === true}, 새 시도 없음=${attempt?.no_new_change === true})`)
+  }
 
-    // A declined stop point has no owner among the specialists, which used to end
-    // the round with nothing tried. The general fixer takes it instead: it has no
-    // domain boundary and may edit, build and run, so a mechanism that crosses
-    // what the domains split apart can be treated in one round.
+  if (!fix) {
+    // Every ranked specialist declined, so the fault has no owner among the
+    // domains. The general fixer takes it instead: it has no domain boundary and
+    // may edit, build and run, so a mechanism that crosses what the domains
+    // split apart can be treated in one round.
     //
     // It is reached only here, never by ranking, so the widest scope stays the
     // exception rather than the default.
     const gen = await runGeneralFixer(round, goal,
-      `${chosen} declined this stop point ` +
-      `(not_mine=${fix?.not_mine === true}, no_new_change=${fix?.no_new_change === true}), ` +
+      `Every ranked specialist declined this stop point (${declined.join('; ')}), ` +
       `so it has no owner among the specialists.`,
       sup?.treatment_plan, obs, cls, derivedTable)
 
@@ -979,7 +1163,7 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
       log(`[루프] 회차 ${round}: fixer-general 도 새로 시도할 변경이 없습니다.`)
       await shell(`decline-${round}`, 'Loop',
         journalTryEnd(round, cls?.category ?? 'unknown',
-                      `${chosen} 반려 후 fixer-general 도 시도할 변경 없음`,
+                      `전문가 전원 반려(${declined.join('; ')}) 후 fixer-general 도 시도할 변경 없음`,
                       '도출로 이관', obs?.summary ?? '') + `\n` +
         recordRoundCmd(round, goal, obs, cls?.category, GENERAL_FIXER, null,
                        'stall', analystNewFacts, true),
@@ -1015,14 +1199,21 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     `# 1) One-change gate. On violation the edit is rolled back and the round is void.\n` +
     `bash "${PLUGIN}/scripts/check_change.sh" "${workdir}" verify; GATE=$?\n` +
     `if [ $GATE -ne 0 ]; then bash "${PLUGIN}/scripts/check_change.sh" "${workdir}" restore; fi\n` +
-    `# 2) Rebuild. Report build errors verbatim; never guess a fix.\n` +
-    `cd ~/qemu-build/qemu-10.2.2/build && ninja qemu-system-aarch64\n` +
-    `# 3) Human-readable one-line history\n` +
+    `# 2) Carry the edit into the tree ninja compiles. The fixer edits\n` +
+    `#    06_machine/machine.c; hw/arm/ holds the copy that is actually built.\n` +
+    `#    Without this the round rebuilds and runs the PREVIOUS binary, the\n` +
+    `#    fingerprint does not move, and a fix that was never in the image is\n` +
+    `#    recorded as futile.\n` +
+    `bash "${PLUGIN}/scripts/sync_machine.sh" "${workdir}" ${machine}; SYNC=$?\n` +
+    `# 3) Rebuild. Report build errors verbatim; never guess a fix.\n` +
+    `if [ $SYNC -eq 0 ]; then cd ~/qemu-build/qemu-10.2.2/build && ninja qemu-system-aarch64; ` +
+    `else echo "SYNC FAILED - 빌드를 건너뜁니다 (sync_ok=false 로 보고하세요)"; fi\n` +
+    `# 4) Human-readable one-line history\n` +
     `echo ${shq(fix?.one_line_progress ?? '')} >> "${workdir}/PROGRESS.md"\n` +
-    `# 4) Journal entry\n` +
+    `# 5) Journal entry\n` +
     journalTryEnd(round, cls?.category ?? '', fix?.rationale ?? '',
                   fix?.change?.description ?? '', obs?.summary ?? '') + `\n` +
-    `# 5) Machine-readable round record - exactly one line per round.\n` +
+    `# 6) Machine-readable round record - exactly one line per round.\n` +
     `#    The branch is bash, not a judgement call: recording both would put two\n` +
     `#    identical fingerprints in rounds.jsonl and fake a stall.\n` +
     `if [ $GATE -eq 0 ]; then\n` +
@@ -1034,11 +1225,25 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     `fi\n` +
     `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" metric phase=Loop round=${round} ` +
     `event=apply_end tokens_total=${budget.spent()}\n` +
-    `\n# Report gate_pass from the check_change JSON and build_ok from ninja.`,
+    `\n# Report gate_pass from the check_change JSON, sync_ok from the ` +
+    `sync_machine.sh JSON (synced/unmapped), and build_ok from ninja.`,
     APPLY_SCHEMA)
 
   if (applied && applied.gate_pass === false) {
     log(`[루프] 회차 ${round}: ★ 한 변경 검문 불통과 — ${applied.gate_reason ?? ''} (되돌렸습니다)`)
+  }
+  if (applied && applied.sync_ok === false) {
+    // The edit never reached the tree that gets compiled, so the next round
+    // would measure the previous binary and read the fix as futile. That is a
+    // setup fault, not a firmware verdict - stop and say so.
+    await shell(`sync-blocker-${round}`, 'Loop',
+      `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=BLOCKED_BUILD ` +
+      `detail=${shq(`회차 ${round} 머신 소스를 QEMU 트리로 반영하지 못했습니다: ${applied.sync_reason ?? ''}`)}`,
+      OK_SCHEMA)
+    log(`★ 정지 — 머신 소스가 QEMU 트리에 반영되지 않았습니다 (${applied.sync_reason ?? ''}). ` +
+        `이 상태로 계속하면 고쳐도 이전 바이너리를 측정합니다.`)
+    stopped = true; stopReason = 'BLOCKED_BUILD'
+    break
   }
   if (applied && applied.build_ok === false) {
     await shell(`build-blocker-${round}`, 'Loop',
@@ -1069,14 +1274,22 @@ if (stopped) {
       type: 'object',
       properties: {
         best_milestone: { type: ['string', 'null'] },
+        best_progress: { type: 'object' },
         tried_changes: { type: 'array' },
       },
     })
-  log(`★ 정지 — ${stopReason}. 도달한 최고 마일스톤: ${summary?.best_milestone ?? '없음'}`)
+  // A one-rung ladder leaves best_milestone null even after the boot walked a
+  // long way, so the depth measure is reported alongside it. Saying only "최고
+  // 마일스톤: 없음" about a run that got the firmware through PMIC and into
+  // storage init is accurate and still misleading.
+  const depth = summary?.best_progress ?? {}
+  log(`★ 정지 — ${stopReason}. 도달한 최고 마일스톤: ${summary?.best_milestone ?? '없음'}` +
+      (depth?.uniq ? ` · 최고 부팅 깊이: 콘솔 고유 ${depth.uniq} 줄 (회차 ${depth.round ?? '-'})` : ''))
   return {
     success: false, stopped: true, stop_reason: stopReason,
     rounds_run: round, goals, reached_goals: goals.slice(0, goalIndex),
     best_milestone: summary?.best_milestone ?? null,
+    best_progress: depth,
     tried_changes: summary?.tried_changes ?? [],
     note: 'REAL 로 표기하지 마세요. 정직한 미완이며 같은 명령으로 재실행하면 이어서 진행됩니다.',
   }

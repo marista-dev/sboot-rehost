@@ -568,6 +568,153 @@ grep -q 'KNOWN_FIXERS.includes(sup?.prescribed_fixer)' "$REPO/workflows/pipeline
 chk "처방은 트랙 fixer 만 허용"    "$?" "0"
 
 
+# 17. 최초 예외 · 지문 안정성 · 반영 · 철회 (S921N 25시간 로그 회귀)
+printf '\n\033[1m== 17. 최초 예외 · 지문 안정성 ==\033[0m\n'
+
+# 17a. storm 의 지문은 첫 예외여야 한다 (마지막 FAR 는 재귀가 멈춘 자리일 뿐)
+OW=$(new_ws origin); printf 'int o;\n' > "$OW/06_machine/machine.c"
+printf '' > "$ROOT/cono.txt"
+{
+  printf 'Taking exception 4 [Data Abort] on CPU 0\n'
+  printf '...from EL1 to EL1\n...with ESR 0x25/0x96000046\n'
+  printf '...with FAR 0xf4865914\n...with ELR 0xf4801204\n'
+  for f in f4444810 f44447f0 f4444770; do
+    printf 'Taking exception 4 [Data Abort] on CPU 0\n...with FAR 0x%s\n...with ELR 0xf4801204\n' "$f"
+  done
+} > "$ROOT/trco.txt"
+make_qemu "$ROOT/cono.txt" "$ROOT/trco.txt"
+printf 'x' > "$OW/bl.bin"
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$OW" 1 sboot-test 1 shell "shell" "$OW/bl.bin" help > "$ROOT/obso.json" 2>/dev/null
+gj() { python3 -c "import json;print(json.load(open('$1'))['$2'])" 2>/dev/null; }
+chk "최초 FAR 를 뽑는다"        "$(gj "$ROOT/obso.json" origin_far)" "0xf4865914"
+chk "최초 ESR 도 뽑는다"        "$(gj "$ROOT/obso.json" origin_esr)" "0x25/0x96000046"
+chk "마지막 FAR 는 따로 보존"     "$(gj "$ROOT/obso.json" far)"        "0xf4444770"
+grep -q '최초 예외' "$OW/07_logs/run_1.summary.txt"
+chk "요약이 최초 예외부터 보여준다"  "$?" "0"
+
+# 17b. 마지막 FAR 만 움직이는 storm 은 정체로 잡혀야 한다 (19회차 런어웨이 회귀)
+FW17="$ROOT/fp17"; mkdir -p "$FW17"
+for i in 1 2 3; do
+  python3 "$S/record.py" "$FW17" round round=$i goal=shell \
+    fp_exc=$((2860000 + i * 7000)) fp_far=0xf444${i}770 fp_elr=0xf4801204 \
+    fp_origin_esr=0x25/0x96000046 fp_origin_far=0x0 fp_origin_elr=0xf4865914 \
+    fp_milestone=none fp_bytes=7734 fp_uniq=118 \
+    analyst_new_facts=2 fixer_no_new_change=false >/dev/null
+done
+J17=$(python3 "$S/stop_conditions.py" "$FW17" --ladder shell)
+chk "마지막 FAR 가 걸어도 정체 인식" \
+    "$(echo "$J17" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stall_count"])')" "2"
+chk "예외 수 요동은 지문을 바꾸지 않음" \
+    "$(echo "$J17" | python3 -c 'import json,sys;print(json.load(sys.stdin)["escalate_to_analyst"])')" "True"
+chk "부팅 깊이를 기록"  \
+    "$(echo "$J17" | python3 -c 'import json,sys;print(json.load(sys.stdin)["best_progress"]["uniq"])')" "118"
+
+# 17c. 실행이 안 됐는데 깨끗한 회차로 보이면 안 된다 (거짓 EXHAUSTED 회귀)
+NW=$(new_ws norun); printf 'int n;\n' > "$NW/06_machine/machine.c"
+cat > "$BIN/fake-qemu-dead" <<'EOF'
+#!/usr/bin/env bash
+echo "qemu: could not open kernel file '~/rehost/x.bin'" >&2
+exit 1
+EOF
+chmod +x "$BIN/fake-qemu-dead"
+printf 'x' > "$NW/bl.bin"
+QEMU="$BIN/fake-qemu-dead" bash "$S/run_round.sh" "$NW" 1 m 1 shell "shell" "$NW/bl.bin" help > "$ROOT/obsn.json" 2>/dev/null
+chk "실행 실패를 run_ok=false 로"  "$(gj "$ROOT/obsn.json" run_ok)" "False"
+RE=$(python3 -c "import json;print('종료코드' in json.load(open('$ROOT/obsn.json'))['run_error'])" 2>/dev/null)
+chk "실패 사유를 문장으로 남김"    "$RE" "True"
+grep -q 'BLOCKED_ENV' "$REPO/workflows/pipeline.js"
+chk "파이프라인이 실행실패를 정지로" "$?" "0"
+
+# 17d. 고친 소스가 실제로 빌드되는 트리에 들어가는가 (stale binary 회귀)
+SW=$(new_ws sync); printf 'int v1;\n' > "$SW/06_machine/machine.c"
+QROOT="$ROOT/qemu_fake"; mkdir -p "$QROOT/hw/arm"
+printf 'int old;\n' > "$QROOT/hw/arm/sboot_test.c"
+bash "$S/sync_machine.sh" "$SW" sboot-test "$QROOT" >/dev/null 2>&1
+chk "머신 소스를 트리로 복사"      "$(cat "$QROOT/hw/arm/sboot_test.c")" "int v1;"
+printf 'int v2;\n' > "$SW/06_machine/machine.c"
+bash "$S/sync_machine.sh" "$SW" sboot-test "$QROOT" >/dev/null 2>&1
+chk "다음 회차 수정도 전파"        "$(cat "$QROOT/hw/arm/sboot_test.c")" "int v2;"
+UW=$(new_ws sync_bad); printf 'int z;\n' > "$UW/06_machine/machine.c"
+bash "$S/sync_machine.sh" "$UW" no-such-machine "$QROOT" >/dev/null 2>&1
+chk "대상이 없으면 정직하게 실패"  "$?" "3"
+grep -q 'sync_machine.sh' "$REPO/workflows/pipeline.js"
+chk "회차 적용 단계에 배선"        "$?" "0"
+
+# 17e. 반증된 우회를 되돌릴 수 있는가
+RW17=$(new_ws revert)
+printf 'int keep;\nint target;\nint tail;\n' > "$RW17/06_machine/machine.c"
+bash "$S/check_change.sh" "$RW17" snapshot 5 >/dev/null 2>&1
+printf 'int keep;\nint target_BYPASS;\nint tail;\n' > "$RW17/06_machine/machine.c"
+bash "$S/check_change.sh" "$RW17" snapshot 6 >/dev/null 2>&1
+printf 'int keep_LATER;\nint target_BYPASS;\nint tail;\n' > "$RW17/06_machine/machine.c"
+bash "$S/revert_change.sh" "$RW17" 5 "메커니즘이 반증됨" >/dev/null 2>&1
+chk "회차 5 변경만 제거"      "$(grep -c 'target_BYPASS' "$RW17/06_machine/machine.c")" "0"
+chk "이후 회차 변경은 유지"   "$(grep -c 'keep_LATER'   "$RW17/06_machine/machine.c")" "1"
+chk "철회도 우회 4항목으로 기록" \
+    "$(grep -c '우회 철회' "$RW17/06_machine/bypasses.md")" "1"
+bash "$S/revert_change.sh" "$RW17" 99 "없는 회차" >/dev/null 2>&1
+chk "스냅샷 없으면 거부"      "$?" "4"
+grep -q "route === 'revert'" "$REPO/workflows/pipeline.js"
+chk "supervisor 철회 경로 배선" "$?" "0"
+
+# 17f. 도출표 파서 — 하위 절의 행과 줄바꿈된 '#' 문장 (17/20 유실 회귀)
+DW17=$(new_ws derived17)
+cat > "$DW17/STATIC.md" <<'EOF'
+# 정적 도출
+
+## 12) 머신 빌드용 값
+| carve | full | derived | carve_check |
+
+## 도출된 정지점
+
+| 시그니처 | 관측 | 메커니즘 (근거) | 담당 fixer | 시도할 변경 |
+|---|---|---|---|---|
+| `first_row` | 관측 | 근거 | `fixer-bootflow` | 변경 |
+
+### round 5 재도출 (escalation) — 새 정지점 1건
+
+에러 카운터가
+#179→#180 증가하며 무한 루프.
+
+| `after_subsection` | 관측 | 바이트 `4ac10011|280140b9` 근거 | `fixer-memory` | 변경 |
+
+### round 9 재도출 (escalation)
+
+| `after_false_heading` | 관측 | 근거 | `fixer-el3` | 변경 |
+EOF
+D17=$(python3 "$S/derived_facts.py" "$DW17" --track 1 --peek)
+chk "하위 절의 행도 읽는다"       "$(echo "$D17" | python3 -c 'import json,sys;print(json.load(sys.stdin)["total"])')" "3"
+chk "줄바꿈된 #문장이 표를 안 닫음" \
+    "$(echo "$D17" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop_points"][2]["signature"])')" "after_false_heading"
+chk "셀 안의 파이프에도 담당 인식" \
+    "$(echo "$D17" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop_points"][1]["fixer"])')" "fixer-memory"
+chk "값 표는 정지점이 아니다" \
+    "$(echo "$D17" | python3 -c 'import json,sys;print(any(r["signature"]=="carve" for r in json.load(sys.stdin)["stop_points"]))')" "False"
+
+# 17g. 기록이 커지면 근거는 보관하고 표는 남긴다
+python3 - "$DW17" <<'PY9'
+import sys, os
+w = sys.argv[1]
+p = os.path.join(w, "STATIC.md")
+text = open(p, encoding="utf-8").read()
+filler = "\n".join("근거 문장 %d" % i for i in range(4000))
+open(p, "a", encoding="utf-8").write("\n### round 12 재도출\n" + filler + "\n")
+PY9
+R17=$(python3 "$S/static_rotate.py" "$DW17" --track 1 --keep 1 --max-bytes 20000)
+chk "회전 수행"          "$(echo "$R17" | python3 -c 'import json,sys;print(json.load(sys.stdin)["rotated"])')" "True"
+rm -f "$DW17/derived_facts.jsonl"
+D17B=$(python3 "$S/derived_facts.py" "$DW17" --track 1 --peek)
+chk "회전 후에도 행은 전부 남음" \
+    "$(echo "$D17B" | python3 -c 'import json,sys;print(json.load(sys.stdin)["total"])')" "3"
+[ -s "$DW17/08_docs/static_archive.md" ] && ok "근거는 08_docs 로 보관" || bad "보관 파일 없음"
+
+# 17h. 반려한 fixer 다음에 2·3순위를 실제로 물어보는가
+grep -q 'candidates.slice(0, 3)' "$REPO/workflows/pipeline.js"
+chk "2·3순위까지 후보로 시도"  "$?" "0"
+grep -q 'best_progress' "$REPO/scripts/stop_conditions.py"
+chk "정지 보고에 부팅 깊이"    "$?" "0"
+
+
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
 echo "작업 폴더: $ROOT"
 [ "$FAIL" -eq 0 ]
