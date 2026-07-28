@@ -99,7 +99,7 @@ USB dispatcher 를 도출해 확정한다.
   |---|---|
   | **K1** | 유저스페이스 (`Run /init`) |
   | **K2** | rootfs 마운트 (EROFS 또는 ext4) |
-  | **K3** (권장) | 진짜 벤더 컨트롤러로 `partitions_up` — super 이미지가 있으면 캡스톤까지 |
+  | **K3** (권장) | 진짜 벤더 컨트롤러로 `partitions_up` — super 이미지가 있으면 최종 단계까지 |
 - `model` 이 안 나오면 함께 묻기.
 
 ## Step 4 — 언팩 (선택 트랙 기준, WSL)
@@ -114,7 +114,7 @@ USB dispatcher 를 도출해 확정한다.
 - `WSDIR=$HOME/rehost/<id>` 로 실행 입력 복사 (문서·07_logs 는 Windows `WS`).
 - 검증(실제 명령): md5·크기, 트랙 2 는 DTB 매직 `0xd00dfeed`.
 - **트랙 2 토폴로지**: `super.img` 존재 여부 → `has_super`.
-  분리형 `system`/`vendor` raw 면 `has_super: false` (캡스톤 없음).
+  분리형 `system`/`vendor` raw 면 `has_super: false` (최종 단계 없음).
 - **`.ko` 부재는 하드 블로커가 아니다.** 커널 빌트인(`=y`)이면 `.ko` 는 설계상 없다
   (K3\*). 판정은 static-analyzer 가 커널 이미지 심볼로 한다 — 여기서는 경로만 적는다.
 

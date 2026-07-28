@@ -115,7 +115,7 @@ Analysis 가 이걸 도출하며, 어느 표면에도 입력 경로가 없으면
 
 트랙 2 를 "커널을 부팅시켜 rootfs 를 마운트하는 것" 으로 읽으면 목표를 놓친다.
 
-> **K3 는 트랙 2 의 본령이다 — "컨트롤러를 구현하면서 리호스팅".**
+> **K3 는 트랙 2 의 핵심이다 — "컨트롤러를 구현하면서 리호스팅".**
 > 목표는 **진짜 벤더 UFS 컨트롤러를 실제로 구동시키는 것**이고,
 > 마일스톤은 별개의 목표가 아니라 **그 컨트롤러의 완성도를 재는 눈금**이다.
 
@@ -136,7 +136,7 @@ rootfs 를 마운트하면 K2 는 되지만 **컨트롤러는 한 줄도 구현�
 | | `power_mode` | `Power mode change(0): M(1)G(3)…` | 전원모드 협상 |
 | | `scsi_attach` | `[sda] Attached SCSI disk` | 디바이스 인식 |
 | **K3a** | **`partitions_up`** | `sda: sda1 sda2 sda3 sda4` | **최소 완료 — 커널이 파티션 열거** |
-| **K3b** | `super_mounted` | `erofs: (device dm-N): mounted` + `supermount: SUCCESS` | **캡스톤 = 완전한 UFS 컨트롤러** |
+| **K3b** | `super_mounted` | `erofs: (device dm-N): mounted` + `supermount: SUCCESS` | **최종 단계 = 완전한 UFS 컨트롤러** |
 
 **`partitions_up` 미도달 = UFS 컨트롤러 미완성.** 최고 마일스톤을 "미완" 으로 정직 보고하고
 success·REAL 을 쓰지 않는다. 중간에서 멈춘 것은 완료가 아니다.
@@ -156,14 +156,14 @@ success·REAL 을 쓰지 않는다. 중간에서 멈춘 것은 완료가 아니�
 
 `.ko` 부재만 보고 블로커를 내면 **도달 가능한 실행을 거부**하는 것이다.
 
-### ② 이미지 토폴로지 — 캡스톤이 존재하는가
+### ② 이미지 토폴로지 — 최종 단계가 존재하는가
 
-| 토폴로지 | 캡스톤 |
+| 토폴로지 | 최종 단계 |
 |---|---|
 | `super.img` (dm-linear, 보통 EROFS) | `super_mounted` 적용 → K3b 까지 |
-| `system`/`vendor` 분리 raw (보통 ext4) | **캡스톤 없음 — K3a 가 완료** |
+| `system`/`vendor` 분리 raw (보통 ext4) | **최종 단계 없음 — K3a 가 완료** |
 
-분리형 펌웨어는 `supermount: SUCCESS` 를 **구조적으로 찍을 수 없다.** 사다리에 캡스톤을
+분리형 펌웨어는 `supermount: SUCCESS` 를 **구조적으로 찍을 수 없다.** 사다리에 최종 단계를
 남겨두면 존재할 수 없는 목표를 요구하게 되므로, `has_super` 로 사다리에서 뺀다.
 
 ## 어느 컴포넌트가 무엇을 맡나
@@ -197,7 +197,7 @@ INPUT.md, BL3 또는 fw/, profiles/*.yaml
 
 ### 동작 과정 — `mode=prior` (루프 전 1회)
 
-| 트랙 1 (12 도출) | 트랙 2 |
+| 트랙 1 (14 도출) | 트랙 2 |
 |---|---|
 | ① **carve 판정** (가장 먼저) | ① 부팅 자산 타입 확인 |
 | ② entry 오프셋 (부팅 패턴 점수) | ② DTB → cpu/DRAM/GIC/UART/HCI base/cmdline |
@@ -211,6 +211,10 @@ INPUT.md, BL3 또는 fw/, profiles/*.yaml
 | ⑩ heap allocator | |
 | ⑪ BL2 핸드오프 매직 | |
 | ⑫ getline timeout 분기 | |
+| ⑬ **인터랙티브 표면** (가장 먼저 판정) | |
+| ⑭ **마일스톤 토큰** (등급 B·C 필수) | |
+| + **컨테이너 TOC → BL33 진입점** | |
+| + **autoboot 게이트 입력 패턴** (`input_plan.json`) | |
 
 ### 동작 과정 — `mode=escalation` (루프 중)
 받은 질문 하나에 집중한다. 넓게 다시 훑지 않는다.
@@ -227,7 +231,7 @@ INPUT.md, BL3 또는 fw/, profiles/*.yaml
 
 ### ★ 정지 조건과의 연결
 에스컬레이션에서 새 사실이 없으면 **`new_facts_count=0` 으로 정직하게 보고**해야 한다.
-이 값이 무브 소진 판정의 입력이므로 부풀리면 루프가 끝나지 않는다. 실제로 세는 것은
+이 값이 시도 소진 판정의 입력이므로 부풀리면 루프가 끝나지 않는다. 실제로 세는 것은
 자기신고가 아니라 `derived_facts.py` 가 **도출표에 늘어난 줄**이다.
 
 ### ★ 기록이 닿는 조건 (`derived_facts.py` 가 읽는 형식)
@@ -499,11 +503,11 @@ observation.json (지문 + 정지 조건)
 | `BLOCKED_ASSET` | 부팅 자산 없음 | 파일 체크 |
 | `BLOCKED_KO` | K3 인데 벤더 `.ko` 부재 | 파일 체크 |
 | `BLOCKED_BUILD` | ninja 실패 | 빌드 결과 |
-| `BLOCKED_TEE` | 시큐어월드 (vold·Keymint·TEEGRIS) | 범위 밖 |
+| `BLOCKED_TEE` | 시큐어월드 (vold·Keymint·TEEGRIS) | 범위 밖 — **수동 기록** (자동 감지 없음) |
 | `BLOCKED_ENV` | 실행 환경 미비 · **회차 중 QEMU 실행 실패** | `check_env.sh` · `run_failed` |
-| `EXHAUSTED` | 무브 소진 | 계산 |
+| `EXHAUSTED` | 시도 소진 | 계산 |
 
-**무브 소진**은 회차 카운트가 아니라 가능한 수의 소진이며, 셋이 **동시** 성립할 때만이다:
+**시도 소진**은 회차 카운트가 아니라 가능한 시도의 소진이며, 셋이 **동시** 성립할 때만이다:
 ```
 (지문 정체 또는 A↔B 진동)
 AND Analysis 에스컬레이션이 새 사실 0
@@ -642,7 +646,7 @@ ninja 가 컴파일하는 것은 QEMU 트리 `hw/arm/<machine>.c` 의 **사본**
 - 이후 회차가 같은 자리를 고쳤으면 역패치가 안 되고 **거부**한다. 그 거부는 정보다:
   두 변경이 상호작용하고 있고, 그 상호작용이 처치 대상이다.
 - 철회도 우회 4항목으로 `bypasses.md` 에 기록되고, `revert:<round>` 는 change_key 라
-  같은 철회를 새 수(手)로 반복할 수 없다.
+  같은 철회를 새 시도로 반복할 수 없다.
 
 ### fixer 분화
 
@@ -968,7 +972,7 @@ SoC별 **"어디를 볼지" 힌트**. `generic.yaml` · `exynos.yaml` · `mediat
 | `null_ret` 을 NOP 으로 덮기 | 증상만 이동 | 호출자를 역추적해 entry redirect |
 | pre-image 없이 커널 패치 | 주소가 틀렸다는 신호를 놓친다 | `expected_word` 확인 후에만 |
 | K3 를 제네릭 스토리지로 통과 | 목표 자체를 우회 | 등급을 K2 로 낮추거나 HCI 를 모델링 |
-| 회차가 많아서 그만두기 | 정지 사유가 아니다 | 무브가 남아 있으면 계속 |
+| 회차가 많아서 그만두기 | 정지 사유가 아니다 | 시도가 남아 있으면 계속 |
 | 4/5 를 "거의 완료"로 보고 | FORCED 는 FORCED | 실패 항목을 그대로 보고 |
 
 ---

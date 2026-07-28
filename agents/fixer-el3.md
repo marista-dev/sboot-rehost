@@ -88,7 +88,7 @@ match the expected pre-image**.
     "방법": "machine 의 smc_handler 에서 arm_handle_psci_call 로 위임하고 psci_conduit=SMC 로 둡니다",
     "부작용": "TF-A 고유의 보안 서비스 동작은 재현되지 않습니다. eFuse·TEE 호출은 별도로 미달입니다"
   },
-  "one_line_progress": "| kboot 12 | smc undef ELR=0xffff8000081c034 | PSCI CPU_ON 셤 처리 |",
+  "one_line_progress": "| kboot 12 | smc undef ELR=0xffff8000081c034 | PSCI CPU_ON shim 처리 |",
   "suspect_prior_bypass": { "bypass_id": null, "why": null },
   "escalate": { "needed": false, "question": null }
 }

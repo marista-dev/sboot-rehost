@@ -42,8 +42,10 @@ import threading
 import time
 
 DEFAULT_CR_COUNT = 3        # honest fallback, reported as a default
-DEFAULT_INTERVAL = 0.25     # seconds between attempts while the gate may be open
+DEFAULT_INTERVAL = 0.1      # polling step; small so the prompt is noticed quickly
 GATE_WINDOW = 0.65          # fraction of the budget spent trying to interrupt
+MIN_RESEND   = 0.3          # gap between two attempts; polling is faster than typing
+MAX_SEND_GAP = 0.9          # never let a chatty boot log starve the gate of input
 
 
 def load_plan(path):
@@ -138,26 +140,49 @@ def main():
         with lock:
             return args.prompt_token.encode() in seen
 
+    def console_len():
+        with lock:
+            return len(seen)
+
     started = time.time()
     deadline = started + args.timeout
     gate_until = started + args.timeout * GATE_WINDOW
     sent_cmd = False
     rc = None
+    prev_len = 0
+    last_send = 0.0
 
     # Phase 1 - keep offering the interrupt pattern while the gate may be open.
     # Repeating matters: the gate opens at a point in the boot we cannot predict,
     # and a single shot at reset is a guess about timing.
+    #
+    # But stop typing while it is answering. Once the gate is satisfied the
+    # firmware moves on to reading a command line, and further pattern bytes are
+    # consumed there as an empty line - the run then looks like the gate was
+    # never passed. So a resend only happens when the console has produced
+    # nothing since the last one.
     while time.time() < deadline:
         rc = proc.poll()
         if rc is not None:
             break
+        now = time.time()
+        cur_len = console_len()
+        answering = cur_len > prev_len
+        prev_len = cur_len
+
         if args.surface == "shell" and not sent_cmd:
             if surface_up():
                 send(args.cmd.encode() + b"\r", "명령")
                 sent_cmd = True
-            elif time.time() < gate_until:
-                if not send(pattern, "autoboot 중단 시도"):
-                    break
+            elif now < gate_until:
+                # Quiet means the last attempt did nothing, so try again. If the
+                # console keeps printing (a chatty boot log) MAX_SEND_GAP makes
+                # sure the gate still gets offered the pattern.
+                due = (not answering) or (now - last_send >= MAX_SEND_GAP)
+                if due and now - last_send >= MIN_RESEND:
+                    last_send = now
+                    if not send(pattern, "autoboot 중단 시도"):
+                        break
             else:
                 # The window closed without a prompt. Send the command once
                 # anyway: if the surface did come up without printing a token we

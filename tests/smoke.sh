@@ -737,14 +737,21 @@ while True:
     else:
         cnt = 0
 sys.stdout.write("S-BOOT # \n"); sys.stdout.flush()
+# 실제 셸처럼: 빈 줄(CR 연타 잔여)은 프롬프트만 다시 찍고 계속 기다린다
 line = b""
 while True:
     b = sys.stdin.buffer.read(1)
-    if not b or b == b"\r":
-        break
-    line += b
-sys.stdout.write("Following commands are supported\n" if line == b"help" else "?\n")
-sys.stdout.flush()
+    if not b:
+        sys.exit(0)
+    if b != b"\r":
+        line += b
+        continue
+    if not line:
+        sys.stdout.write("S-BOOT # \n"); sys.stdout.flush()
+        continue
+    sys.stdout.write("Following commands are supported\n" if line == b"help" else "?\n")
+    sys.stdout.flush()
+    break
 PYEOF
 chmod +x "$BIN/fake-qemu-gate"
 

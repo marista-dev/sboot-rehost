@@ -45,7 +45,8 @@ active: <id>
 
 - **검증 열**: `P/5` (5/5=REAL, 그 외 FORCED). **부분 통과를 "완료" 로 쓰지 말 것.**
 - **정지 열**: `blockers.jsonl` 또는 마지막 결과의 stop_reason
-  (`BLOCKED_CARVE` / `BLOCKED_ASSET` / `BLOCKED_KO` / `BLOCKED_BUILD` / `BLOCKED_TEE` / `EXHAUSTED`).
+  (`BLOCKED_CARVE` / `BLOCKED_ASSET` / `BLOCKED_NO_INPUT_PATH` / `BLOCKED_KO` /
+  `BLOCKED_BUILD` / `BLOCKED_ENV` / `BLOCKED_TEE` / `EXHAUSTED`).
   없으면 `—`. **정지는 실패가 아니라 정직한 미완이며 재개 가능**이라고 안내한다.
 
 ## 출력 — 단일 워크스페이스 상세 (`workdir=<id>`)

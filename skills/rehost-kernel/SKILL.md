@@ -1,6 +1,6 @@
 ---
 name: rehost-kernel
-description: 트랙 2 (kernel + storage) 실행. 목표는 진짜 벤더 UFS 컨트롤러를 실제로 구동시키는 것이며, 마일스톤은 그 완성도의 눈금이다. active(또는 workdir=<id>) 워크스페이스의 INPUT.md(track 2) 로 workflows/pipeline.js 를 track=2 로 호출 → static-analyzer 자산·DTB 골격·드라이버 형태(모듈/빌트인) 도출 → machine_kernel.c + 코어/커널 패치 + ninja → 목표 사다리(userspace → link_up → power_mode → scsi_attach → partitions_up = K3a 완료, super 이미지가 있으면 super_mounted 캡스톤) 루프 → 검증 5/5 → 재현 키트.
+description: 트랙 2 (kernel + storage) 실행. 목표는 진짜 벤더 UFS 컨트롤러를 실제로 구동시키는 것이며, 마일스톤은 그 완성도의 눈금이다. active(또는 workdir=<id>) 워크스페이스의 INPUT.md(track 2) 로 workflows/pipeline.js 를 track=2 로 호출 → static-analyzer 자산·DTB 골격·드라이버 형태(모듈/빌트인) 도출 → machine_kernel.c + 코어/커널 패치 + ninja → 목표 사다리(userspace → link_up → power_mode → scsi_attach → partitions_up = K3a 완료, super 이미지가 있으면 super_mounted 최종 단계) 루프 → 검증 5/5 → 재현 키트.
 disable-model-invocation: true
 ---
 
@@ -32,7 +32,7 @@ disable-model-invocation: true
 
      커널이 UFS 를 빌트인(`=y`)으로 컴파일하면 `.ko` 는 설계상 없다. 이때 블로커를 내면
      **도달 가능한 실행을 거부**하는 것이다.
-   - **rootfs 토폴로지**도 사실로 도출한다 — `super.img` 가 있으면 캡스톤
+   - **rootfs 토폴로지**도 사실로 도출한다 — `super.img` 가 있으면 최종 단계
      `super_mounted` 가 적용되고, system/vendor 분리 raw 면 **K3a(`partitions_up`)가 완료**다.
 4. 의존성은 setup 에서 설치됨. 진행 중이면 자동 대기 — 안 묻는다.
 
@@ -66,9 +66,9 @@ Workflow({
 | K1 | `userspace` |
 | K2 | `userspace` → `rootfs` |
 | K3 | `userspace` → `link_up` → `power_mode` → `scsi_attach` → **`partitions_up`**(K3a 완료) |
-| K3 + `has_super` | 위 + `super_mounted` (K3b 캡스톤) |
+| K3 + `has_super` | 위 + `super_mounted` (K3b 최종 단계) |
 
-**K3 는 트랙 2 의 본령이다** — 목표는 rootfs 마운트가 아니라 **진짜 벤더 UFS 컨트롤러를
+**K3 는 트랙 2 의 핵심이다** — 목표는 rootfs 마운트가 아니라 **진짜 벤더 UFS 컨트롤러를
 실제로 구동시키는 것**이고, 마일스톤은 그 완성도의 눈금이다.
 `partitions_up` 미도달 = 컨트롤러 미완성.
 
@@ -114,8 +114,8 @@ pipeline 의 log 를 그대로 전달 (`[Loop] 회차 18 (목표 power_mode) —
 | **`BLOCKED_ENV`** | **실행 환경 미비** — WSL 부재 또는 QEMU·capstone 미설치. 목표 판정이 아니라 환경 문제이며, 갖추면 그대로 재개된다. (Windows 에서 띄운 세션은 `wsl_bridge.sh` 가 자동으로 WSL 로 건너간다) |
 | `BLOCKED_KO` | K3 인데 `.ko` 부재 **그리고** 커널 빌트인도 아님 → K2 로 낮출지 검토 안내. **빌트인이면 K3\* 로 계속 진행하지 블로커가 아니다** |
 | `BLOCKED_BUILD` | ninja 실패 (원문 그대로) |
-| `BLOCKED_TEE` | vold/Keymint/TEEGRIS 시큐어월드 — **범위 밖**, 미달로 정직 기록 |
-| `EXHAUSTED` | 무브 소진 — 최고 마일스톤과 함께 정직한 미완 |
+| `BLOCKED_TEE` | vold/Keymint/TEEGRIS 시큐어월드 — **범위 밖**. 자동 감지가 없으므로 사람이 판단해 기록한다 |
+| `EXHAUSTED` | 시도 소진 — 최고 마일스톤과 함께 정직한 미완 |
 
 전부 `success=false`. **REAL·완료 표기 금지.** 재실행하면 이어서 진행된다.
 

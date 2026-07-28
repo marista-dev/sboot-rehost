@@ -109,7 +109,7 @@
 | PC 트레이스 | shell_func + exec_command PC 가 `-d in_asm` 에 등장 | `grep "^0xSHELL_PC:"` | 셸 도달 안 함 |
 | 출력 byte-match | 콘솔 모든 토큰이 BL3 안에 file offset 으로 존재 | `data.find(token)` for all | 텍스트 주입됨 |
 | 소스 negative | 머신 C 에 동일 출력 문자열 0 개 | `grep -F "TOKEN" *.c` | 머신이 직접 텍스트 |
-| UART 단일 경로 | `qemu_chr_fe_write_all` 호출 1 자리, "BL3 가 UTXH 에 쓸 때만" | `grep -n chr_fe_write` | 머신이 주입 가능 |
+| UART 단일 출력 + 외부 입력 | 출력은 `qemu_chr_fe_write_all` 1 자리, 입력은 머신이 RX 를 스스로 채우지 않음 | `grep -n chr_fe_write` · `grep -n rx_seed` | 머신이 출력·입력을 지어냄 |
 | 우회 목록 | `[대상/이유/방법/부작용]` 4 항 × N 개 | `06_machine/bypasses.md` 존재 | 우회를 모델로 위장 |
 
 5/5 = REAL. 4/5 = FORCED. 3/5 이하 = 가짜.
@@ -127,8 +127,8 @@
 | `BLOCKED_ASSET` | 부팅 자산(Image/DTB) 없음 | 파일 체크 |
 | `BLOCKED_KO` | target=K3 인데 벤더 `.ko` 부재 | 파일 체크 |
 | `BLOCKED_BUILD` | ninja 실패 | 빌드 결과 (추측 수정 금지) |
-| `BLOCKED_TEE` | vold/Keymint/TEEGRIS 시큐어월드 | 범위 밖 — 미달로 기록 |
-| `EXHAUSTED` | **무브 소진**: (지문 정체 or 진동) AND 새 사실 0 AND 새 시도 0 | `stop_conditions.py` |
+| `BLOCKED_TEE` | vold/Keymint/TEEGRIS 시큐어월드 | **수동 기록** (자동 감지 없음) — 범위 밖으로 기록 |
+| `EXHAUSTED` | **시도 소진**: (지문 정체 or 진동) AND 새 사실 0 AND 새 시도 0 | `stop_conditions.py` |
 
 정체·미지 상황은 정지가 아니라 **라우팅**으로 처리된다:
 `unknown`/정체 → `static-analyzer` 재도출, 정체 2회 → 기존 우회의 부작용을 먼저 의심.
@@ -212,7 +212,7 @@
 | 3 | GICv3 + arch-timer PPI | DTB gic | ★ PPI 풀 INTID (상대번호 금지) |
 | 4 | UART | DTB uart | accept_input 필수 |
 | 5 | catch-all MMIO | overlap 낮은 prio | fail-loud 1 회 보고 |
-| 6 | EL3 SMC 셤 | PSCI/eFuse/SiP | psci_conduit=SMC (DISABLED 금지) |
+| 6 | EL3 SMC shim | PSCI/eFuse/SiP | psci_conduit=SMC (DISABLED 금지) |
 | 7 | QEMU 코어 3 패치 | SMC→EXCP_SMC | interrupt_handler 게이트 |
 | 8 | DT 주입 (fstab/pcie) | libfdt | 셀 수 (reg/ranges/interrupt-map) |
 | 9 | 스토리지 HCI (K3) | storage_hci.c.tmpl | §7.3 함정표 |
@@ -222,11 +222,11 @@
 | 신호 | 처치 |
 |---|---|
 | kernel_oops / security_gate | patch_kernel.py 사이트 (pre-image 검증) |
-| smc_undef / psci_suspend | SMC 셤 + 코어 패치, psci_conduit=SMC |
+| smc_undef / psci_suspend | SMC shim + 코어 패치, psci_conduit=SMC |
 | gic_ppi (assert) | arch-timer PPI 풀 INTID 배선 |
 | unmapped_mmio | DTB 로 페리페럴/RAM 추가 |
 | rootfs_mount | 제네릭+DT fstab (§6.1) 또는 dm-linear (§6.2) |
-| hvc_pkvm | 셤에서 HVC 가로채기 제거 (커널 내장) |
+| hvc_pkvm | shim에서 HVC 가로채기 제거 (커널 내장) |
 
 ## Table M — 트랙 2 스토리지 HCI 함정 (K3, 관찰 루프)
 

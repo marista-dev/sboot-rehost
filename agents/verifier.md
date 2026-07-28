@@ -42,7 +42,7 @@ evidence, and an override without it is void.
 | 1 | PC trace | the shell function or `exec_command` PC appears in the `-d in_asm` trace | did that PC really execute, or is it a nearby address? |
 | 2 | output byte-match | every console token exists in the BL3 at a file offset | is a short token matching by coincidence? |
 | 3 | source negative | the machine `.c` contains none of the output strings | is it hidden by string splitting or a macro? |
-| 4 | single UART path | `qemu_chr_fe_write` appears once, inside a conditional | is there an unconditional write hiding somewhere? |
+| 4 | single UART output path **and external input** | `qemu_chr_fe_write` appears once, inside a conditional, **and** no machine source fills the RX buffer itself (`rx_seed`-style helper, or the injected command as a literal) | is there an unconditional write hiding somewhere? does the machine type its own command? |
 | 5 | bypass record | every bypass has all four fields | is any entry filled in shape but empty in substance? |
 
 The script derives the item 1 PCs from `STATIC.md`. If it reports it could not

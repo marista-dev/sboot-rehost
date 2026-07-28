@@ -29,7 +29,7 @@ ARM TF-A 용어의 **BL33(non-secure world bootloader)** 자리다. **벤더 구
 | 단계 | 우리가 하는 것 |
 |---|---|
 | BROM · BL1(EPBL) · BL2 | **실행 안 함.** 이들이 남겼을 상태(부트정보 SFR 등)는 모델로 성립 |
-| EL3 monitor (TF-A/TEEGRIS) | **실행 안 함.** 최소 EL3 셤이 `smc` 를 SMCCC_SUCCESS 로 받고 EL1 로 내려줌 |
+| EL3 monitor (TF-A/TEEGRIS) | **실행 안 함.** 최소 EL3 shim이 `smc` 를 SMCCC_SUCCESS 로 받고 EL1 로 내려줌 |
 | **BL33** | **진짜로 실행.** 리셋 스텁 → main → 디바이스 init → 셸 루프 전부 원본 바이너리 |
 | 커널 | 범위 밖 (`/sboot-rehost:rehost-kernel`) |
 
@@ -40,7 +40,7 @@ ARM TF-A 용어의 **BL33(non-secure world bootloader)** 자리다. **벤더 구
 우리가 만드는 것은 **그 코드가 접근하는 환경**뿐이며 두 종류를 구분한다:
 
 - **모델링**(정상 모델): UART, GIC, DRAM 골격, 부트정보 SFR, PMIC/I2C 폴 레지스터 등
-- **셤·우회**(FORCED 요소): EL3 monitor 셤, 셸과 무관한 서브시스템 중화, 게이트 플래그 우회
+- **shim·우회**(FORCED 요소): EL3 monitor shim, 셸과 무관한 서브시스템 중화, 게이트 플래그 우회
   → 전부 `bypasses.md` 4항목 기재
 
 **★ 실행은 자율이다.** `AskUserQuestion` 호출 금지.
@@ -140,12 +140,13 @@ Workflow({
 | **`BLOCKED_ENV`** | **실행 환경 미비** — WSL 부재 또는 QEMU·capstone 미설치. 목표 판정이 아니라 환경 문제이며, 갖추면 그대로 재개된다. (Windows 에서 띄운 세션은 `wsl_bridge.sh` 가 자동으로 WSL 로 건너간다) |
 | **`BLOCKED_NO_INPUT_PATH`** | **어느 표면에도 인터랙티브 입력 경로가 없음** — 구조적 불가 |
 | `BLOCKED_BUILD` | ninja 실패 (원문 그대로) |
-| `EXHAUSTED` | 무브 소진 |
+| `EXHAUSTED` | 시도 소진 |
 
 전부 `success=false`, **REAL 표기 금지**, 재실행하면 이어서 진행.
 
-검증은 **5/5 = REAL, 4/5 이하 = FORCED**. 표면별로 항목 4 가 다르다
-(`shell` = UART 단일 경로 / `fastboot` = 입력이 외부에서 옴).
+검증은 **5/5 = REAL, 4/5 이하 = FORCED**. 항목 4 는 표면별로 검사 대상이 다르다 —
+`shell` 은 **UART 단일 출력 경로 + 입력이 외부에서 옴**, `fastboot` 은 **입력이 외부에서 옴**.
+어느 쪽이든 머신이 자기 콘솔에 입력을 넣으면 불통과다.
 
 마지막에 반드시:
 ```

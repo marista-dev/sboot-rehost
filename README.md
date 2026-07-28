@@ -138,18 +138,38 @@ Claude Code 는 세션 시작 후 백그라운드에서 마켓플레이스와 �
 ```
 [static-analyzer] 도출 → (Build) machine 소스 + ninja
    → { (run_round) 실행·지문·출처게이트·정지조건 → [supervisor] 라우팅
-        → [fault-classifier] 분류 → [fixer] 한 변경 → (check_change) → ninja }*
+        ├ Build 층 전제 오류 → 머신 재생성 (rebuild)
+        ├ 우회가 반증됨      → 그 회차 변경만 철회 (revert)
+        └ [fault-classifier] 분류 → [fixer 1→2→3 순위] 한 변경
+                                    (전원 반려 시 fixer-general)
+        → (check_change) → (sync_machine) → ninja }*
    → (verify.py 측정) → [verifier 재검증] → REAL | FORCED → 재현 키트
 ```
 
 | 구분 | 컴포넌트 |
 |---|---|
-| **LLM** | `static-analyzer`(도출) · `supervisor`(라우팅·정지) · `fault-classifier`(분류) · `fixer-memory`/`el3`/`bootflow`/`kernel`/`storage`(수정) · `verifier`(재검증) |
-| **결정론** | `pipeline.js` · `run_round.sh` · `check_change.sh` · `stop_conditions.py` · `verify.py` · `record.py` |
+| **LLM** | `static-analyzer`(도출) · `supervisor`(라우팅·정지·층 판정) · `fault-classifier`(분류) · `fixer-memory`/`el3`/`bootflow`/`kernel`/`storage`(수정) · `fixer-general`(담당 없을 때 최후수단) · `verifier`(재검증) |
+| **결정론** | `pipeline.js`(루프 배선) · `run_round.sh`·`run_qemu.sh`·`run_kernel.sh`(실행) · `uart_harness.py`(외부 입력) · `fingerprint_lib.sh`(지문 추출) · `sync_machine.sh`(빌드 반영) · `check_change.sh`(한 변경 검문) · `revert_change.sh`(우회 철회) · `derived_facts.py`·`static_rotate.py`(도출 기록) · `stop_conditions.py`(정지 조건) · `verify.py`(5/5 측정) · `record.py`(기록) · `check_env.sh`·`wsl_bridge.sh`(환경) |
 | **데이터** | `fixers/registry.yaml` · `knowledge/*.md` · `profiles/*.yaml` |
 
 **LLM 중 코드를 고치는 것은 `fixer-*` 뿐이다.** 분류하는 쪽에 수리 권한이 없어야
 없는 병명을 지어내지 않는다.
+
+### 용어
+
+문서와 코드가 같은 뜻으로 쓰는 용어다. 괄호 안은 코드에서 쓰는 식별자.
+
+| 용어 | 뜻 |
+|---|---|
+| **회차** (round) | 실행 1회 + 그 결과에 대한 변경 1건. 회차 = 한 변경 |
+| **지문** (fingerprint) | 회차를 식별하는 관측값 묶음 — 최초 예외의 ESR/FAR/ELR, 마일스톤, 콘솔 바이트·고유 줄 수, 예외 수 자릿수 |
+| **최초 예외** (origin) | 트레이스의 첫 예외. 중첩 abort 에서 마지막 예외는 재귀 위치일 뿐이므로 진단은 이쪽으로 한다 |
+| **정지점** (stop point) | 펌웨어 실행이 더 나아가지 못하는 지점과 그 원인. 디버거의 중단점(breakpoint)과 무관하다 |
+| **표면** (`bl_surface`) | 부트로더가 사용자 명령을 받는 경로 — UART 셸 또는 fastboot |
+| **목표 사다리** (`ladder`) | 등급이 요구하는 마일스톤 순서. 등급 A 는 한 칸 |
+| **우회** (bypass) | 정상 모델이 아닌 강제 통과. `[대상/이유/방법/부작용]` 4항목 기록 의무 |
+| **출처 게이트** (`source_gate`) | 도달 문구를 우리 머신이 찍은 것인지 검사하는 매 회차 검증 |
+| **시도 소진** (`moves_exhausted`) | 지문 정체·진동 + 새 사실 0 + 남은 수정 0 이 동시에 성립한 상태 |
 
 **새 정지점 = 테이블 한 줄. 새 fixer = 파일 하나 + 등록부 몇 줄.**
 프롬프트도 오케스트레이션 코드도 건드리지 않는다.
@@ -180,11 +200,19 @@ Claude Code 는 세션 시작 후 백그라운드에서 마켓플레이스와 �
 
 ## 7. 멈추는 조건
 
-**회차 수·소요 시간은 멈출 이유가 아니다.** 시도할 수(手)가 남아 있는 한 계속한다.
+**회차 수·소요 시간은 멈출 이유가 아니다.** 시도할 수단이 남아 있는 한 계속한다.
 멈추는 경우는 **구조상 목표에 도달할 수 없을 때뿐**이다:
 
-`BLOCKED_CARVE` · `BLOCKED_ASSET` · `BLOCKED_KO` · `BLOCKED_BUILD` · `BLOCKED_TEE` ·
-`EXHAUSTED`(**무브 소진** — 지문 정체·진동 + 새 사실 0 + 새 시도 0)
+| 코드 | 뜻 | 판정 근거 |
+|---|---|---|
+| `BLOCKED_CARVE` | 부트로더 이미지가 부분 추출(carve) | 정적 분석 |
+| `BLOCKED_ASSET` | 부팅 자산 없음 | 파일 검사 |
+| `BLOCKED_NO_INPUT_PATH` | 어느 표면에도 인터랙티브 입력 경로 없음 | 정적 분석 |
+| `BLOCKED_KO` | K3 인데 벤더 드라이버가 모듈·커널 어디에도 없음 | 정적 분석 |
+| `BLOCKED_BUILD` | ninja 실패, 또는 머신 소스가 빌드 트리에 반영 불가 | 빌드 결과 |
+| `BLOCKED_ENV` | 실행 환경 미비, 또는 회차 중 QEMU 실행 실패 | 환경 검사·종료 코드 |
+| `BLOCKED_TEE` | 시큐어월드(TEEGRIS·Keymint) — 범위 밖 | **수동 기록** (자동 감지 없음) |
+| `EXHAUSTED` | 시도 소진 — 지문 정체·진동 + 새 사실 0 + 새 시도 0 | 계산 |
 
 정지는 `success=false` 인 **정직한 미완**이며 재실행하면 이어서 진행된다.
 이 판정은 스크립트가 소유하며 **LLM 이 뒤집을 수 없다** — 뒤집으려 하면 파이프라인이

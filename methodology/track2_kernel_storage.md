@@ -28,7 +28,7 @@ BootROM ─ BL1/2 ─ 부트로더 ─ EL3mon ─ EL2 hyp ─ [커널 EL1] ─ i
 | **K2** | 진짜 rootfs 마운트 (system/vendor) | 제네릭 + DT fstab **또는** dm-linear |
 | **K3** | 진짜 벤더 스토리지 HCI 모델 → **진짜 벤더 드라이버**가 블록디바이스+파티션 구동 | 실모델 (관찰 루프) |
 
-K3 = 트랙 2 의 본령 ("컨트롤러 구현하면서 리호스팅"). K1→K2→K3 순으로 확장.
+K3 = 트랙 2 의 핵심 ("컨트롤러 구현하면서 리호스팅"). K1→K2→K3 순으로 확장.
 
 ---
 
@@ -124,7 +124,7 @@ fail-loud). 각 사이트는 커널 심볼/문자열 xref 로 **도출**한다 (
 커널은 PSCI (CPU on/off/suspend) 를 SMC 로 EL3 펌웨어에 요청한다. EL3 모니터 미실행 →
 그 SMC 를 **보드에서 모델** (faithful) 하거나 QEMU PSCI 컨듀잇으로 처리.
 
-- **faithful (권장)**: EL3 SMC 셤 = `smc_handler`. PSCI (`0x84xxxxxx`/`0xC4xxxxxx`)
+- **faithful (권장)**: EL3 SMC shim = `smc_handler`. PSCI (`0x84xxxxxx`/`0xC4xxxxxx`)
   → `arm_handle_psci_call`, eFuse/칩ID read → 모델값, 그 외 SiP/벤더 → SMCCC SUCCESS.
 - `psci_conduit=SMC` 로 셋업. **DISABLED 금지** (cpuidle 깨져 부팅 정체).
 - **has_el3=false 인데 SMC 를 트랩하려면 QEMU 코어 3 패치 필요** (§5.3).
@@ -140,7 +140,7 @@ fail-loud). 각 사이트는 커널 심볼/문자열 xref 로 **도출**한다 (
 ### 5.4 HVC 주의 (핵심 발견)
 
 cmdline 에 **`kvm-arm.mode=protected`** 면 EL2 하이퍼바이저 (pKVM/RKP) 가 **커널 내장**.
-호스트 HVC (hyp-stub, RKP) 는 **커널 자기 EL2 가 처리**해야 한다. 셤이 HVC 를 가로채면
+호스트 HVC (hyp-stub, RKP) 는 **커널 자기 EL2 가 처리**해야 한다. shim이 HVC 를 가로채면
 멈춘다 (실측). ⇒ 별도 `uh.bin@EL2` 는 N/A, HVC 는 커널에 맡긴다.
 
 K1 통과 = 콘솔에 `Run /init` (또는 첫 유저스페이스 프로세스).
@@ -240,13 +240,13 @@ IRQ 는 `qemu_irq` (DTB 스토리지 `interrupts` SPI 번호).
 | 2 | power_mode | `Power mode change(0): M(1)G(3)L(2)HS-series(2)` |
 | 3 | scsi_attach | `[sda] Attached SCSI disk` |
 | 4 | **partitions_up** (K3 최소 완료) | `sda: sda1 sda2 sda3 sda4` |
-| 5 | **super_mounted** (캡스톤 = 완전) | `erofs: (device dm-0/dm-4): mounted` + `supermount: SUCCESS` |
+| 5 | **super_mounted** (최종 단계 = 완전) | `erofs: (device dm-0/dm-4): mounted` + `supermount: SUCCESS` |
 
 - **partitions_up 미도달** = UFS 컨트롤러 미완성. `partitions_up` 을 목표로 루프를 계속
   (max 소진 시 최고 마일스톤을 "미완" 으로 보고, "완료"·REAL 금지).
-- **캡스톤(super_mounted)** = 진짜 컨트롤러가 실제 파일시스템까지 구동 (dm-linear super 마운트,
+- **최종 단계(super_mounted)** = 진짜 컨트롤러가 실제 파일시스템까지 구동 (dm-linear super 마운트,
   `storage/run_path2_supermount.sh`·`supermount.c` 상당). 여기까지가 "완전한 UFS 컨트롤러".
-- 파이프라인은 K3a(파티션) → K3b(캡스톤 마운트) 두 단계로 진행. K3a 미도달이면 K3b·완료로 넘어가지 말 것.
+- 파이프라인은 K3a(파티션) → K3b(최종 단계 마운트) 두 단계로 진행. K3a 미도달이면 K3b·완료로 넘어가지 말 것.
 
 ---
 
@@ -258,7 +258,7 @@ IRQ 는 `qemu_irq` (DTB 스토리지 `interrupts` SPI 번호).
    커널이 찍은 줄**.
 3. **소스 negative**: 머신 C 에 그 마운트/파티션 문자열 0 개.
 4. **드라이버 진짜 구동 (K3)**: 트랜잭션 로그에 UTRD/Query/SCSI, `.ko` 는 원본+문서화된 우회만.
-5. **우회 목록**: 커널 패치 + `.ko` 패치 + SMC 셤 전부 `[대상/이유/방법/부작용]`.
+5. **우회 목록**: 커널 패치 + `.ko` 패치 + SMC shim 전부 `[대상/이유/방법/부작용]`.
 
 ---
 

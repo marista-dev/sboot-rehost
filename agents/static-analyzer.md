@@ -142,6 +142,43 @@ Inside the shell function, find `mrs x?, cntpct_el0` followed by `cmp` and
 `b.ls`/`b.gt`, and report that branch address. If absent, undetermined with
 `confirm_plan: "confirmed in round N when the shell exits immediately"`.
 
+### 12a) Autoboot gate input pattern — write `input_plan.json`
+
+The shell function's **first `bl`** is the autoboot gate. It polls the console
+and counts a run of one byte - usually CR (`0x0d`) - before it hands over to the
+shell; without that run it returns and the firmware boots on. The gate is
+normally one-shot, so if the pattern never arrives the surface is unreachable no
+matter how correct everything else is.
+
+Disassemble the gate and report the byte and the count (`cmp w?, #N` against the
+run counter, plus the byte compared in the loop). Write
+`<workdir>/input_plan.json`:
+
+```json
+{ "autoboot_interrupt": { "bytes": "\r", "count": 3,
+                          "gate_addr": "0xf48a0af0",
+                          "evidence": "0xf48a0b10 cmp w8, #3 (bytes 1f0c0071), byte compared at 0xf48a0b04 cmp w9, #0xd" } }
+```
+
+`scripts/uart_harness.py` reads this and types that pattern from outside QEMU.
+**If you cannot derive N, write no file** - the harness then uses a documented
+default (CR x3) and records that it was a default. A guessed count in the file
+would look derived and stop anyone from questioning it.
+
+### 12b) Entry PC for a multi-stage container
+
+`LOAD_BASE` is where the image is placed; it is **not** where the CPU starts.
+Vendor images are commonly a container - a TOC header followed by EPBL / BL2 /
+BL33 segments - loaded whole. File offset 0 is then the header, and entering
+there executes header bytes as instructions (an Exynos `head` TOC begins with
+`b0 00 00 00`, which decodes as `udf #0xb0`).
+
+Parse the header, report the BL33 segment's load address and entry, and mark
+which one Build must use as the reset PC. If the container format cannot be
+parsed, say `entry_pc: 미확정` with a confirm plan - Build will report a build
+failure rather than fall back to the load address, which costs several rounds
+and two rebuilds to undo.
+
 ### 13) Interactive surface (do this before anything else)
 
 A command table existing in the binary does **not** mean it is reachable.
