@@ -74,6 +74,7 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 | `workflows/pipeline.js` | 루프 배선 + 단계 제어 | 사실 정지를 LLM 이 못 뒤집게 강제 |
 | `run_round.sh` | 한 회차 통째 수행 → **관측 문서 1개** (`observation.json`) | LLM 이 `stop` 을 조립하지 못하게 함 |
 | `run_qemu.sh` / `run_kernel.sh` | 실행 → **지문 추출 + 출처 게이트 + 실행실패 판정** | §7 자가주입 금지 (매 회차) |
+| `uart_harness.py` | **QEMU 밖에서** 콘솔 입력 주입 (autoboot 중단 패턴 → 명령) | 입력은 외부에서 — 머신이 자기에게 명령 금지 |
 | `fingerprint_lib.sh` | **최초 예외 추출** · 콘솔 고유줄 · 실행실패 판정 (두 run 스크립트 공용) | 재귀 말미가 아니라 원인을 지문으로 |
 | `sync_machine.sh` | 06_machine 소스를 QEMU 트리로 반영 | **고친 소스가 실제로 빌드된다** |
 | `revert_change.sh` | 반증된 우회를 **그 회차 변경만** 역패치로 제거 | 틀린 모델 위에 쌓지 않기 |
@@ -261,6 +262,22 @@ QEMU 가 시작조차 못 하면 지문은 전부 0 으로 완벽히 안정되�
 `run_failed` 를 세우고, 파이프라인은 그 회차에 `BLOCKED_ENV` 로 **정지**한다.
 하네스 문제를 펌웨어 판정으로 바꾸지 않기 위해서다.
 
+### 셸 도달은 autoboot 게이트를 넘는 문제다
+
+부트로더는 부팅 중 콘솔을 잠깐 폴링해 **특정 바이트 연속 입력**(대개 CR `0x0d` N회)이
+있으면 셸로, 없으면 autoboot 으로 간다. 게이트는 보통 **one-shot** 이라 그 창이 열린 동안
+그 패턴이 도착해야 하고, 못 넘기면 다른 게 다 맞아도 표면은 도달 불가다.
+
+- **연타 수 N 과 게이트 주소는 도출값**이다 — static-analyzer 가 셸 함수의 첫 `bl`(게이트)을
+  디스어셈블해 `<workdir>/input_plan.json` 에 쓴다. 벤더별 하드코딩이 아니다.
+- 입력은 `uart_harness.py` 가 **QEMU 밖에서** 넣는다 (`-serial stdio`). 게이트가 열릴 시점을
+  알 수 없으므로 창 동안 반복 시도하고, 프롬프트가 관측되면 명령을 보낸다.
+- 보낸 바이트는 전부 `07_logs/input_N.txt` 에 남는다 — 우리가 친 것과 펌웨어가 찍은 것이
+  구분돼야 한다.
+- **머신은 입력을 만들지 않는다.** RX 버퍼를 채우는 것은 chardev 콜백뿐이며, 머신이 스스로
+  채우면 `verify.py` 항목 4 가 두 표면 모두에서 불통과시킨다 (순환검증).
+- 도출 실패 시 하니스는 **문서화된 기본값(CR×3)** 을 쓰고 기본값이었다고 기록한다.
+
 ### 고친 소스가 실제로 빌드되는가
 
 fixer 는 `06_machine/machine.c` 를 고치고 ninja 는 QEMU 트리의 `hw/arm/` 사본을
@@ -338,7 +355,7 @@ supervisor 는 **라우팅 전에 머신 소스를 읽고 층을 판정**한다.
 | 1 | PC 트레이스 | shell 함수 + exec_command 진입 PC 가 `-d in_asm` 로그에 등장 |
 | 2 | 출력 byte-match | 콘솔 출력 모든 토큰이 BL3 binary 에 file offset 으로 존재 |
 | 3 | 소스 negative | 머신 C 소스에 동일 출력 문자열 0 개 |
-| 4 | UART 단일 경로 | `qemu_chr_fe_write_all` 호출 단 1 자리 |
+| 4 | UART 단일 경로 + 외부 입력 | 출력 호출 1 자리 **AND** 머신이 RX 를 스스로 채우지 않음 |
 | 5 | 우회 목록 | `[대상/이유/방법/부작용]` 4 항으로 N 개 우회 기재 |
 
 ### 트랙 2
@@ -427,7 +444,8 @@ success·REAL 금지.
     ├── verdict_script.json        5/5 스크립트 1차 측정
     ├── VERIFICATION.md            verifier 2차 최종 판정
     ├── 06_machine/                machine 소스 + bypasses.md
-    ├── 07_logs/                   회차별 콘솔 + 요약 + origin_N.txt (최초 예외)
+    ├── input_plan.json            autoboot 게이트 입력 패턴 (도출, 없으면 기본값)
+    ├── 07_logs/                   회차별 콘솔 + 요약 + origin_N.txt + input_N.txt
     ├── 08_docs/                   분석 메모 · static_archive.md (이관된 도출 근거)
     │                              (+ .record/ 타이머 · rounds/N/ 회차별 소스 스냅샷)
     ├── 10_reproduce/              재현 키트

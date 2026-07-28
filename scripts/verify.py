@@ -39,6 +39,10 @@ import sys
 
 # The four bypass fields, written with optional markdown emphasis and, for the
 # side-effect field, the longer "알려진 부작용" wording that real workspaces use.
+# The machine may only receive input through the chardev callback. Anything that
+# fills the RX buffer from inside the machine is the machine typing to itself.
+RX_SEED = re.compile(r"\b(rx_seed|seed_rx|rx_inject|inject_rx|feed_rx)\s*\(")
+
 BYPASS_FIELDS = {
     "대상": r"대상",
     "이유": r"이유",
@@ -232,10 +236,26 @@ def verify_track1(workdir, args):
                          f"머신이 명령을 지어낸 순환검증입니다"),
         })
     else:
+        # A UART shell has BOTH risks, and only the output one was checked. A
+        # machine that seeds its own RX buffer reaches the prompt by talking to
+        # itself, which is the same circular verification the fastboot item
+        # refuses - it just was not being looked for on this surface.
         calls = sum(read_text(p).count("qemu_chr_fe_write") for p in sources)
-        items.append({"n": 4, "name": "UART 단일 경로 (qemu_chr_fe_write 1 자리)",
-                      "pass": calls == 1,
-                      "evidence": f"qemu_chr_fe_write 호출이 {calls} 곳입니다"})
+        seeded = [os.path.basename(p) for p in sources if RX_SEED.search(read_text(p))]
+        token = args.input_token or ""
+        planted = [os.path.basename(p) for p in sources
+                   if token and token in code_literals(p)]
+        offenders = sorted(set(seeded + planted))
+        items.append({
+            "n": 4,
+            "name": "UART 단일 출력 경로 + 입력은 외부에서",
+            "pass": calls == 1 and not offenders,
+            "evidence": (f"qemu_chr_fe_write 호출 {calls} 곳" +
+                         ("; 머신이 RX 를 스스로 채우지 않습니다"
+                          if not offenders else
+                          f"; {offenders} 가 입력을 만들어 넣습니다 — "
+                          f"머신이 자기에게 명령을 준 순환검증입니다")),
+        })
 
     ok, detail = check_bypass(workdir)
     items.append({"n": 5, "name": "우회 기록 4 항목", "pass": ok, "evidence": detail})
@@ -368,7 +388,8 @@ def main():
     parser.add_argument("--surface", default="shell", choices=("shell", "fastboot"),
                         help="track 1 interactive surface; selects item 4")
     parser.add_argument("--input-token", default=None,
-                        help="fastboot surface: the command the host injects (default getvar:)")
+                        help="the command the host injects; must not appear in the "
+                             "machine sources (fastboot default: getvar:)")
     args = parser.parse_args()
 
     if args.track == 1:

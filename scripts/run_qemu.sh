@@ -54,9 +54,23 @@ TRACE_DIR="${TRACE_DIR:-$HOME/rehost/_traces}"; mkdir -p "$TRACE_DIR"
 OUT="$WORKDIR/07_logs/console_${RUN_N}.txt"
 SUM="$WORKDIR/07_logs/run_${RUN_N}.summary.txt"
 ORIGIN="$WORKDIR/07_logs/origin_${RUN_N}.txt"
+INLOG="$WORKDIR/07_logs/input_${RUN_N}.txt"
 ERRF="$WORKDIR/07_logs/qemu_${RUN_N}.stderr.txt"
 LOG="$TRACE_DIR/run_${RUN_N}.log"
-rm -f "$OUT" "$SUM" "$LOG" "$ORIGIN" "$ERRF"
+rm -f "$OUT" "$SUM" "$LOG" "$ORIGIN" "$ERRF" "$INLOG"
+
+# The console token that means the surface is up. static-analyzer derives it into
+# milestone_tokens.txt; the harness stops trying to interrupt autoboot once it
+# appears and sends the command instead.
+PROMPT_TOKEN=""
+if [ -s "$WORKDIR/milestone_tokens.txt" ]; then
+    PROMPT_TOKEN=$(awk -F'\t' -v s="$SURFACE" 'NF>1 && $1==s {print $2; exit}' \
+                   "$WORKDIR/milestone_tokens.txt")
+fi
+# An array, not ${VAR:+...}: a prompt token contains spaces ("S-BOOT # ") and the
+# unquoted form word-splits it, so the harness would look for the wrong string.
+PROMPT_ARGS=()
+[ -n "$PROMPT_TOKEN" ] && PROMPT_ARGS=(--prompt-token "$PROMPT_TOKEN")
 
 # Keep the previous round's fingerprint: the timeout probe below needs to know
 # whether the console has stopped growing across rounds.
@@ -65,15 +79,25 @@ PREV="$WORKDIR/fingerprint.prev.json"
 
 python3 "$HERE/record.py" "$WORKDIR" start "run_${RUN_N}" >/dev/null 2>&1 || true
 
+# Input comes from OUTSIDE the machine (honesty rule 7). uart_harness.py owns the
+# guest console: it repeats the derived autoboot-interrupt pattern while the gate
+# may be open, sends the command once the surface answers, and logs every byte it
+# typed. `-serial stdio` hands the console to its pipes; the machine is not given
+# a command line to seed itself from.
+#
 # The exit code matters: piping it into `tail` threw it away, so a QEMU that
 # never started reported success and the round looked clean.
 RUN_RC=0
-timeout "$TIMEOUT" "$QEMU" \
-    -M "$MACHINE" -m 512M -nographic \
-    -kernel "$BL3" -append "$CMD" \
-    -serial "file:$OUT" \
+python3 "$HERE/uart_harness.py" \
+    --console "$OUT" --input-log "$INLOG" \
+    --plan "$WORKDIR/input_plan.json" \
+    --timeout "$TIMEOUT" --cmd "$CMD" --surface "$SURFACE" \
+    ${PROMPT_ARGS[@]+"${PROMPT_ARGS[@]}"} \
+    -- "$QEMU" \
+    -M "$MACHINE" -m 512M -display none -serial stdio \
+    -kernel "$BL3" \
     -d int,in_asm,nochain -D "$LOG" \
-    > "$ERRF" 2>&1 || RUN_RC=$?
+    2> "$ERRF" || RUN_RC=$?
 tail -3 "$ERRF" 2>/dev/null || true
 
 # --- Fingerprint: raw observations only, never a classification ---
@@ -184,10 +208,14 @@ if [ "$TIMEOUT_PROBE" != "0" ] && [ "$MILESTONE" = "none" ] && [ "$EXC" -eq 0 ] 
         PROBE_OUT="$WORKDIR/07_logs/probe_${RUN_N}.txt"
         PROBE_LOG="$TRACE_DIR/probe_${RUN_N}.log"
         rm -f "$PROBE_OUT" "$PROBE_LOG"
-        timeout $((TIMEOUT * PROBE_MULT)) "$QEMU" \
-            -M "$MACHINE" -m 512M -nographic \
-            -kernel "$BL3" -append "$CMD" \
-            -serial "file:$PROBE_OUT" \
+        python3 "$HERE/uart_harness.py" \
+            --console "$PROBE_OUT" --input-log "${INLOG}.probe" \
+            --plan "$WORKDIR/input_plan.json" \
+            --timeout $((TIMEOUT * PROBE_MULT)) --cmd "$CMD" --surface "$SURFACE" \
+            ${PROMPT_ARGS[@]+"${PROMPT_ARGS[@]}"} \
+            -- "$QEMU" \
+            -M "$MACHINE" -m 512M -display none -serial stdio \
+            -kernel "$BL3" \
             -d int,nochain -D "$PROBE_LOG" \
             >/dev/null 2>&1 || true
         if [ -f "$PROBE_OUT" ]; then PROBE_BYTES=$(wc -c < "$PROBE_OUT" | tr -d ' '); else PROBE_BYTES=0; fi

@@ -492,7 +492,20 @@ const prior = await agent(
       `  - USB: which dispatchers exist (fastboot, download/DA, vendor), and do any of them ` +
       `reference the console command table?\n` +
       `Report bl_surface as "shell", "fastboot", or "none" when no surface has an input path. ` +
-      `"none" is a hard blocker - say so rather than inventing a route.\n`
+      `"none" is a hard blocker - say so rather than inventing a route.\n\n` +
+      `DERIVE TWO MORE THINGS BEFORE THE BUILD - both cost rounds if left to the loop:\n` +
+      `  1. ENTRY PC. If the image is a container (TOC header + EPBL/BL2/BL33\n` +
+      `     segments), parse the header and give the BL33 segment's load and entry.\n` +
+      `     File offset 0 is the header, not code.\n` +
+      `  2. THE AUTOBOOT GATE'S INPUT PATTERN. The gate polls the console and\n` +
+      `     counts a run of one byte (usually CR, 0x0d) before it hands over to\n` +
+      `     the shell; miss it and the surface is unreachable no matter what else\n` +
+      `     is right. Disassemble the gate (the shell function's first bl) and\n` +
+      `     write ${workdir}/input_plan.json:\n` +
+      `       {"autoboot_interrupt": {"bytes": "\\r", "count": <N>,\n` +
+      `        "gate_addr": "0x...", "evidence": "<disassembly line + bytes>"}}\n` +
+      `     If you cannot derive N, write no file - the harness then uses a\n` +
+      `     documented default and says it was a default.\n`
     : '') + `\n` +
   `First record the phase:\n` +
   `  bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Analyze (static-analyzer prior)"\n` +
@@ -592,6 +605,17 @@ async function buildMachine(diagnosis) {
       `   derived base, DRAM covering the load address). If you cannot do that\n` +
       `   from derived facts alone, report build_ok=false saying an AArch32\n` +
       `   machine template is missing - do not guess.\n`
+    : '') +
+  (track === 1
+    ? `★ ENTRY_PC is not LOAD_BASE. A vendor image is usually a container (TOC\n` +
+      `   header + EPBL/BL2/BL33 segments) that is loaded whole, so file offset 0\n` +
+      `   is the header: entering there executes the header as data and traps on\n` +
+      `   the first word. Use the BL33 reset entry derived in STATIC.md. If it is\n` +
+      `   undetermined, report build_ok=false and say so - do NOT fall back to the\n` +
+      `   load address, which costs several rounds and two rebuilds to undo.\n` +
+      `★ The machine must not create console input. No function may fill the RX\n` +
+      `   buffer except the chardev receive callback; the interrupt pattern and\n` +
+      `   the command come from scripts/uart_harness.py outside QEMU.\n`
     : '') +
   `2. Fill the template ` +
   `${track === 1 ? (arch === 'arm32' ? '(no AArch32 template yet - see above)' : 'templates/machine.c.tmpl')
@@ -1311,7 +1335,13 @@ phase('Verify')
 const verifyCmd =
   `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Verify"\n` +
   `bash "${PLUGIN}/scripts/py.sh" verify.py "${workdir}" --track ${track} --target ${target}` +
-  (track === 1 ? ` --bl3 "${bootloader_path}" --surface ${activeSurface}` : '')
+  // The command the harness types. Item 4 fails if the machine sources contain
+  // it, on either surface: a machine that supplies its own input is verifying
+  // itself, whether the surface is a UART shell or a USB dispatcher.
+  (track === 1
+    ? ` --bl3 "${bootloader_path}" --surface ${activeSurface} ` +
+      `--input-token ${shq(activeSurface === 'fastboot' ? 'getvar:' : 'help')}`
+    : '')
 
 const verifier = await agent(
   `This is stage 2 of the 5/5 verification.\n\n` +

@@ -31,14 +31,15 @@ make_qemu() {   # $1 = console payload file, $2 = trace payload file
 OUT=""; LOG=""
 while [ \$# -gt 0 ]; do
   case "\$1" in
-    -serial) OUT="\${2#file:}"; shift 2;;
+    -serial) case "\$2" in file:*) OUT="\${2#file:}";; esac; shift 2;;
     -D) LOG="\$2"; shift 2;;
     *) shift;;
   esac
 done
-[ -n "\$OUT" ] && cat "$1" > "\$OUT"
 [ -n "\$LOG" ] && cat "$2" > "\$LOG"
-echo "fake-qemu done"
+# -serial stdio (track 1, harness-driven) puts the console on stdout;
+# -serial file: (track 2) still writes the file directly.
+if [ -n "\$OUT" ]; then cat "$1" > "\$OUT"; else cat "$1"; fi
 EOF
   chmod +x "$BIN/fake-qemu"
 }
@@ -713,6 +714,92 @@ grep -q 'candidates.slice(0, 3)' "$REPO/workflows/pipeline.js"
 chk "2·3순위까지 후보로 시도"  "$?" "0"
 grep -q 'best_progress' "$REPO/scripts/stop_conditions.py"
 chk "정지 보고에 부팅 깊이"    "$?" "0"
+
+
+# 18. 외부 입력 하니스 — autoboot 게이트 (S921N 셸 미도달 회귀)
+printf '\n\033[1m== 18. 외부 입력 하니스 ==\033[0m\n'
+
+# 게이트를 진짜로 흉내내는 가짜 QEMU: CR 3연타를 받아야 프롬프트를 낸다
+cat > "$BIN/fake-qemu-gate" <<'PYEOF'
+#!/usr/bin/env python3
+import sys
+need = int(__import__("os").environ.get("GATE_CR", "3"))
+sys.stdout.write("booting...\n"); sys.stdout.flush()
+cnt = 0
+while True:
+    b = sys.stdin.buffer.read(1)
+    if not b:
+        sys.exit(0)
+    if b == b"\r":
+        cnt += 1
+        if cnt >= need:
+            break
+    else:
+        cnt = 0
+sys.stdout.write("S-BOOT # \n"); sys.stdout.flush()
+line = b""
+while True:
+    b = sys.stdin.buffer.read(1)
+    if not b or b == b"\r":
+        break
+    line += b
+sys.stdout.write("Following commands are supported\n" if line == b"help" else "?\n")
+sys.stdout.flush()
+PYEOF
+chmod +x "$BIN/fake-qemu-gate"
+
+HW=$(new_ws harness); printf 'int h;\n' > "$HW/06_machine/machine.c"
+printf 'shell\tS-BOOT # \ncommands\tFollowing commands are supported\n' > "$HW/milestone_tokens.txt"
+printf 'x' > "$HW/bl.bin"
+TIMEOUT=6 QEMU="$BIN/fake-qemu-gate" bash "$S/run_round.sh" "$HW" 1 t 1 shell "shell,commands" "$HW/bl.bin" help shell > "$ROOT/obsh.json" 2>/dev/null
+chk "CR 연타로 게이트 통과 → 셸 도달" \
+    "$(python3 -c "import json;print(json.load(open('$ROOT/obsh.json'))['milestone'])" 2>/dev/null)" "commands"
+chk "머신 자가주입 아님" \
+    "$(python3 -c "import json;print(json.load(open('$ROOT/obsh.json'))['injected'])" 2>/dev/null)" "False"
+grep -q "autoboot 중단 시도" "$HW/07_logs/input_1.txt" 2>/dev/null
+chk "보낸 입력을 기록으로 남김"  "$?" "0"
+grep -q "명령" "$HW/07_logs/input_1.txt" 2>/dev/null
+chk "프롬프트 관측 후 명령 전송" "$?" "0"
+
+# 도출된 패턴(count)을 따르는가 — exynos 하드코딩이 아니라 슬롯이어야 한다
+HW2=$(new_ws harness_plan); printf 'int h;\n' > "$HW2/06_machine/machine.c"
+printf 'shell\tS-BOOT # \n' > "$HW2/milestone_tokens.txt"
+printf 'x' > "$HW2/bl.bin"
+printf '{"autoboot_interrupt":{"bytes":"\\r","count":5,"evidence":"gate @0x1234 cmp w8,#5"}}\n' \
+    > "$HW2/input_plan.json"
+GATE_CR=5 TIMEOUT=6 QEMU="$BIN/fake-qemu-gate" bash "$S/run_round.sh" "$HW2" 1 t 1 shell "shell" "$HW2/bl.bin" help shell > /dev/null 2>&1
+grep -q "x5 (derived)" "$HW2/07_logs/input_1.txt" 2>/dev/null
+chk "도출된 연타 수를 사용"      "$?" "0"
+chk "5연타 게이트도 통과" \
+    "$(python3 -c "import json;print(json.load(open('$HW2/observation.json'))['milestone'])" 2>/dev/null)" "shell"
+
+# 머신은 입력을 만들지 않는다 — 템플릿 회귀
+grep -q "rx_seed" "$REPO/templates/machine.c.tmpl"
+chk "템플릿에 자가 시드 없음"    "$?" "1"
+grep -q "qemu_chr_fe_accept_input" "$REPO/templates/machine.c.tmpl"
+chk "accept_input 호출 있음"     "$?" "0"
+grep -q "{{ENTRY_PC}}" "$REPO/templates/machine.c.tmpl"
+chk "진입 PC 가 로드주소와 별개 슬롯" "$?" "0"
+
+# 검증 항목 4 — shell 표면에서도 자가입력을 잡는가
+IW=$(new_ws item4)
+printf 'Following commands are supported\x00' > "$IW/bl3.bin"
+printf 'Following commands are supported\n'   > "$IW/07_logs/console_1.txt"
+printf '| shell_func | 0x9021f3dc |\n' > "$IW/STATIC.md"
+printf '0x9021f3dc: stp\n' > "$IW/07_logs/run_1.log"
+printf 'static void f(void){ qemu_chr_fe_write_all(s->chr,b,1); }\n' > "$IW/06_machine/machine.c"
+V4=$(python3 "$S/verify.py" "$IW" --track 1 --bl3 "$IW/bl3.bin" --trace "$IW/07_logs/run_1.log" --input-token help 2>/dev/null)
+chk "외부 입력이면 항목4 통과" \
+    "$(echo "$V4" | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][3]["pass"])')" "True"
+printf 'static void rx_seed(S*s,const char*p){}\nstatic void f(void){ qemu_chr_fe_write_all(s->chr,b,1); }\n' \
+    > "$IW/06_machine/machine.c"
+V4=$(python3 "$S/verify.py" "$IW" --track 1 --bl3 "$IW/bl3.bin" --trace "$IW/07_logs/run_1.log" --input-token help 2>/dev/null)
+chk "머신이 RX 를 채우면 항목4 불통과" \
+    "$(echo "$V4" | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][3]["pass"])')" "False"
+
+# 구현 범위가 문서에 못박혀 있는가
+grep -q "BL33" "$REPO/skills/rehost-bootloader/SKILL.md"
+chk "SKILL 에 실행 범위 명시"    "$?" "0"
 
 
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
