@@ -63,6 +63,7 @@ stop = load(stop_path, {})
 
 gate = fp.get("source_gate") or {}
 origin = fp.get("origin") or {}
+inp = fp.get("input") or {}
 observation = {
     "round": int(run_n),
     "track": int(track),
@@ -95,9 +96,28 @@ observation = {
     "origin_block": origin.get("block", ""),
     "far": fp.get("far", "none"),
     "elr": fp.get("elr", "none"),
+    # What the input path did. Without these a round cannot separate "the gate
+    # was never offered our bytes" from "the gate read them and the firmware
+    # booted on", and the first one is not an observation about the firmware.
+    "input_offered": bool(inp.get("offered", False)),
+    "prompt_seen": bool(inp.get("prompt_seen", False)),
+    "command_sent": bool(inp.get("command_sent", False)),
+    "input_starved": bool(inp.get("starved", False)),
+    "rx_reported": bool(inp.get("rx_reported", False)),
+    "rx_served": inp.get("rx_served"),
+    "rx_polls": inp.get("rx_polls"),
+    "input_summary": inp.get("summary", ""),
+    "input_log": inp.get("log", ""),
+    # Could this run read the boot medium's partition table? "unknown" means the
+    # boot never got that far, which is not the same as "missing" and must not
+    # block anything.
+    "storage_partition_table": (fp.get("storage") or {}).get("partition_table", "unknown"),
+    "storage_token": (fp.get("storage") or {}).get("token", ""),
     # True when a longer run produced more console: the wall is our time budget,
-    # not the firmware.
-    "timeout_bound": bool(fp.get("timeout_bound", False)),
+    # not the firmware. null means the probe did not run, which is NOT the same
+    # as false - reporting an unmeasured value as measured is what let a stalled
+    # run look like a firmware wall for five rounds.
+    "timeout_bound": fp.get("timeout_bound"),
     "probe_console_bytes": fp.get("probe_console_bytes", -1),
     "console": fp.get("console", ""),
     "summary": fp.get("summary", ""),

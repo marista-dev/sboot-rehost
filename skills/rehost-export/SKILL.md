@@ -46,9 +46,24 @@ bash <PLUGIN>/scripts/make_export.sh
 `evidence/` + turnkey `run.sh`·`setup.sh`·`.gitignore` 생성.
 
 `evidence/` 에는 **사람이 읽는 기록과 기계가 읽는 측정치가 둘 다** 들어간다:
-`VERIFICATION.md` `PROGRESS.md` `JOURNAL.md` `STATIC.md`/`KERNEL_STATIC.md` `INPUT.md`
-콘솔·요약 로그 + **`metrics.jsonl`**(시간·토큰) **`rounds.jsonl`**(회차별 지문/분류/fixer/효과)
-`blockers.jsonl` `verdict_script.json`(스크립트 1 차 5/5 측정).
+`VERIFICATION.md` `ANALYSIS.md` `PROGRESS.md` `JOURNAL.md` `STATIC.md`/`KERNEL_STATIC.md`
+`INPUT.md` 콘솔·요약 로그 + 하니스 입력 기록(`input_*.txt`, `input_summary.json`) +
+**`metrics.jsonl`**(시간·토큰) **`rounds.jsonl`**(회차별 지문/분류/fixer/효과)
+`blockers.jsonl` `verdict_script.json`(스크립트 1 차 5/5 측정) `analysis.json`.
+
+**`ANALYSIS.md` 는 `make_export.sh` 가 `analyze_run.py` 를 돌려 만든다.** 시간·토큰 총량만
+넘기면 받는 사람이 jsonl 을 직접 읽어야 하므로, 기록에서 계산되는 것은 계산해서 넣는다:
+
+| 절 | 답하는 질문 |
+|---|---|
+| 2 | 단계별로 시간과 토큰이 얼마나 들었나 |
+| 3 | 어느 회차가 오래 걸렸나 (재분석·재생성 시간은 분리) |
+| 4 | 어느 정지점에 회차를 가장 많이 썼나 |
+| 5 | 관측이 안 바뀐 정체 구간은 어디였고 무엇이 그것을 끝냈나 |
+| 6 | 분류·담당별 분포와 관측을 바꾼 비율 |
+| 7 | 실제로 부팅을 전진시킨 변경은 무엇이었나 |
+| 10 | 왜 오래 걸렸나 — 관측·비용·근거 3 항으로 |
+| 11 | 기록 자체의 한계 (번호 중복, 누락된 측정) |
 
 **대용량 이미지(트랙 2 K3 super/disk)**: make_export 가 자동으로 못 넣은 것은 직접 `firmware/` 로
 복사 (또는 너무 크면 `firmware/README.txt` 에 "본인 disk.img 를 여기 두세요" 안내 + run.sh 가 `EUFS_LU_IMAGE` 참조).
@@ -61,14 +76,29 @@ bash <PLUGIN>/scripts/make_export.sh
 - `02_boot-chain.md` — 부팅 체인 상 이 트랙의 진입점.
 - `03_trial-and-error.md` — JOURNAL 의 시행착오(원인/분석/해결) + `rounds.jsonl` 의
   분류 분포·시도한 변경 목록 요약.
-- `04_timeline.md` — JOURNAL 세션 시각 + **`metrics.jsonl` 의 단계별 소요 시간·누적 토큰**.
+- `04_timeline.md` — JOURNAL 세션 시각 + **`ANALYSIS.md` 2·3 절**(단계별 소요·비용,
+  소요가 길었던 회차). 수치를 다시 추정하지 말고 `ANALYSIS.md` 의 값을 인용한다.
+- `07_cost-analysis.md` — **`ANALYSIS.md` 4·5·7·10 절**을 근거로: 어느 정지점이 회차를
+  가장 많이 먹었는지, 정체 구간이 무엇으로 끝났는지, 어느 변경이 실제로 부팅을
+  전진시켰는지, 왜 오래 걸렸는지. 논문·보고서에 그대로 옮길 수 있는 수준으로 쓴다.
 - `05_bypasses.md` — `06_machine/bypasses.md` (`[대상/이유/방법/부작용]`).
 - `06_verification.md` — 5/5 **2 단 검증** 결과: 스크립트 1 차(`verdict_script.json`) 와
   verifier 2 차(`VERIFICATION.md`) 를 **둘 다** 싣고, 판정이 달랐다면 어느 쪽이 이겼고
   근거가 무엇인지 명시 (올리는 방향 override 는 byte 증거가 있어야 유효).
 
-`DEST/README.md`(개요 + 한 줄 실행) + `DEST/HOW-TO-RUN.md`(전제·실행·재빌드). 모든 서술은 실제
-기록 근거로만 (지어내기 금지, 정직성).
+`DEST/README.md`(개요 + 한 줄 실행 + **실행 비용과 소요** 요약) + `DEST/HOW-TO-RUN.md`
+(전제·실행·재빌드). 모든 서술은 실제 기록 근거로만 (지어내기 금지, 정직성).
+
+### 문서 서술 규칙 (docs/ · README · HOW-TO-RUN 전부)
+
+- 자연스럽고 공식적인 한국어로 쓴다. 구어체·감탄·과장은 쓰지 않는다.
+- **용어를 새로 만들지 않는다.** 현업 통용 용어이거나 이 저장소가 이미 쓰는 용어
+  (정지점 · 회차 · 우회 · 마일스톤 · 부팅 깊이 · 도출)만 쓴다. `fastboot` · `UART` ·
+  `MemoryRegion` 처럼 그대로 쓰는 것이 표준인 말은 억지로 옮기지 않는다.
+- **항목화한다.** 줄글 문단을 늘어놓지 않는다. 비교할 값이 둘 이상이면 표, 순서가 있으면
+  번호 목록, 그 밖에는 굵은 표제어를 단 글머리표를 쓴다.
+- 수치에는 근거 파일을 붙인다 — "오래 걸렸다" 가 아니라 "1 시간 40 분 (`ANALYSIS.md` 5 절)".
+- 확인하지 못한 것은 확인하지 못했다고 적는다. 빈칸을 추측으로 채우지 않는다.
 
 ## Step 4 — gitignore 보장 (★ 항상)
 

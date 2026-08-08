@@ -34,8 +34,8 @@ fixers:
     edits: [machine.c, machine_kernel.c]
 
   fixer-bootflow:
-    description: bootloader control flow (entry redirect / console routing / getline timeout)
-    handles: [null_ret, console_silent, shell_exit_early]
+    description: bootloader control flow (entry redirect / console routing / getline timeout / shell mode gate)
+    handles: [null_ret, console_silent, shell_exit_early, shell_mode_gate]
     knowledge: [knowledge/faults_bootloader.md]
     tools: [capstone]
     edits: [machine.c]
@@ -68,6 +68,21 @@ fixers:
 
 # No owner -> static-analyzer. There is no fallback fixer by design.
 unmapped_policy: escalate_to_static_analyzer
+
+# Named faults that belong to no fixer because they are not about the firmware.
+# Ranking one would spend a round repairing a fault that does not exist.
+#   harness_input_starved  the gate polled the console and read none of our bytes,
+#                          so the surface was never offered its input. The pipeline
+#                          re-runs the round; if it persists, the gate's derived
+#                          contiguous / empty_poll_budget are what to question.
+#   partition_table_unavailable
+#                          the boot medium is a stub on track 1, so the partition
+#                          table it would be read from does not exist. Every
+#                          downstream failure (environment, panel, modem, next
+#                          stage) follows from that one fact. The pipeline records
+#                          BLOCKED_STORAGE only when the current goal actually
+#                          needs the medium; lower grades are unaffected.
+not_firmware: [harness_input_starved, partition_table_unavailable]
 
 # --- When to split a fixer further ---------------------------------------
 # Guessing the split up front gets it wrong. Decide from the data that

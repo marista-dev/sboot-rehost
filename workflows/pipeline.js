@@ -65,6 +65,15 @@ const socFamily = String(args?.soc_family ?? 'generic').toLowerCase()
 const arch      = String(args?.arch ?? 'arm64').toLowerCase()
 const PLUGIN    = posix(args?.plugin_dir) ?? '${CLAUDE_PLUGIN_ROOT}'
 const ROUND_CAP = Number(args?.runtime_round_cap ?? 120)
+// Wall-clock budget per round. It is a property of how long this firmware takes
+// to walk to its surface, not a constant: on S921N the prompt landed between 5.2
+// and 8.0 seconds of wall time, so the old fixed 8 made reaching it a coin flip.
+const RUN_TIMEOUT = Number(args?.run_timeout_s ?? 20)
+// How many times a round may be re-run when the input path never reached the
+// gate. That is a harness failure, so classifying it would spend a fixer on a
+// fault that does not exist - but retrying forever is its own trap, so it is
+// bounded and what was dropped gets logged.
+const STARVED_RETRIES = Number(args?.starved_retries ?? 2)
 
 // One accumulating record per firmware. The analyst appends to it, the
 // classifier and the fixers read it. Everything derived about this target lives
@@ -111,6 +120,20 @@ const hasSuper = args?.has_super === true
 //   A  reach the surface and run its listing command  (help / getvar)
 //   B  other command handlers actually do their work
 //   C  the bootloader proceeds with its normal boot flow (autoboot)
+// Rungs that cannot be cleared unless the boot medium is readable.
+//
+// This is definitional, not vendor knowledge: "the bootloader proceeds with a
+// normal boot" means it loads the next stage from the medium, on S-Boot, LK and
+// aboot alike. So the RULE is universal here, while the EVIDENCE that the medium
+// is unreadable is derived per firmware (storage_tokens.txt).
+//
+// Track 1 deliberately does not implement a storage controller, so on this track
+// a firmware that reports its partition table missing has put this rung out of
+// reach - by our own track boundary, not by anything about the firmware. The
+// loop must say that rather than spend rounds prescribing memory windows for a
+// table that was never going to arrive.
+const STORAGE_DEPENDENT_RUNGS = ['autoboot']
+
 function goalsFor(surfaceName) {
   const ladders = {
     1: {
@@ -151,6 +174,22 @@ const KNOWLEDGE = track === 2
 // Last resort. Not in KNOWN_FIXERS: it is reached only after a specialist has
 // declined, never by ranking, so that the widest scope stays the exception.
 const GENERAL_FIXER = 'fixer-general'
+
+// House style for every document a human reads. Appended to each prompt that
+// writes one, so the rule lives in one place instead of being restated - and
+// drifting - in five.
+const DOC_STYLE =
+  `\n문서 서술 규칙 (사람이 읽는 모든 문서에 적용):\n` +
+  `- 자연스럽고 공식적인 한국어로 쓴다. 보고서에 쓰는 문장이면 되고, 구어체나 감탄은 쓰지 않는다.\n` +
+  `- **용어를 새로 만들지 않는다.** 현업에서 통용되는 용어, 또는 이 저장소가 이미 쓰는 용어\n` +
+  `  (정지점·회차·우회·마일스톤·부팅 깊이·도출)만 쓴다. 새 조어는 읽는 사람에게 뜻이\n` +
+  `  전달되지 않고, 같은 대상을 문서마다 다르게 부르게 만든다.\n` +
+  `- 영어 용어를 한국어로 억지로 옮기지 않는다. fastboot·UART·MemoryRegion 처럼 그대로\n` +
+  `  쓰는 것이 표준인 말은 그대로 쓴다.\n` +
+  `- **항목화한다.** 줄글 문단을 늘어놓지 말고 표·목록·소제목으로 나눈다. 비교할 값이\n` +
+  `  둘 이상이면 표, 순서가 있으면 번호 목록, 그 밖에는 굵은 표제어를 단 글머리표를 쓴다.\n` +
+  `- 수치에는 근거 파일을 붙인다. "오래 걸렸다"가 아니라 "1시간 40분 (rounds.jsonl)".\n` +
+  `- 확인하지 못한 것은 확인하지 못했다고 쓴다. 빈칸을 추측으로 채우지 않는다.\n`
 
 // --- helpers -----------------------------------------------------------------
 
@@ -301,8 +340,23 @@ const RUN_SCHEMA = {
     origin_far: { type: 'string' },
     origin_elr: { type: 'string' },
     origin_block: { type: 'string' },
-    timeout_bound: { type: 'boolean' },
+    // null when the probe did not run. Distinct from false, which means it ran
+    // and a longer budget produced nothing more.
+    timeout_bound: { type: ['boolean', 'null'] },
     probe_console_bytes: { type: 'integer' },
+    // What the input path did this round (scripts/uart_harness.py).
+    input_offered: { type: 'boolean' },
+    prompt_seen: { type: 'boolean' },
+    command_sent: { type: 'boolean' },
+    input_starved: { type: 'boolean' },
+    rx_reported: { type: 'boolean' },
+    rx_served: { type: ['integer', 'null'] },
+    rx_polls: { type: ['integer', 'null'] },
+    input_summary: { type: 'string' },
+    // ok | missing | unknown - whether this run could read the boot medium's
+    // partition table. Never inferred from silence.
+    storage_partition_table: { type: 'string' },
+    storage_token: { type: 'string' },
     far: { type: 'string' },
     elr: { type: 'string' },
     console: { type: 'string' },
@@ -503,9 +557,15 @@ const prior = await agent(
       `     is right. Disassemble the gate (the shell function's first bl) and\n` +
       `     write ${workdir}/input_plan.json:\n` +
       `       {"autoboot_interrupt": {"bytes": "\\r", "count": <N>,\n` +
+      `        "contiguous": <bool>, "empty_poll_budget": <N>, "one_shot": <bool>,\n` +
       `        "gate_addr": "0x...", "evidence": "<disassembly line + bytes>"}}\n` +
+      `     Every property the harness needs must be its OWN FIELD. Prose in\n` +
+      `     "evidence" reaches a reader, not the code: a gate that fails on one\n` +
+      `     empty poll has to say empty_poll_budget 0, or the harness will let\n` +
+      `     the run of bytes be broken and the surface is lost with no sign why.\n` +
       `     If you cannot derive N, write no file - the harness then uses a\n` +
-      `     documented default and says it was a default.\n`
+      `     documented default and says it was a default. Omitted optional fields\n` +
+      `     are read as the strictest case, which is the safe direction.\n`
     : '') + `\n` +
   `First record the phase:\n` +
   `  bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Analyze (static-analyzer prior)"\n` +
@@ -516,7 +576,8 @@ const prior = await agent(
       `and write KERNEL_STATIC.md.`) +
   `\nAnything you cannot derive stays "미확정" with a confirm plan. Never borrow ` +
   `values from another device or build.\n\n` +
-  `Write STATIC.md / KERNEL_STATIC.md in natural Korean - the user reads them.\n\n` +
+  `Write STATIC.md / KERNEL_STATIC.md in natural Korean - the user reads them.\n` +
+  DOC_STYLE + `\n` +
   `When finished:\n` +
   `  bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" metric phase=Analyze ` +
   `event=analyze_end timer=analyze tokens_total=${budget.spent()}`,
@@ -638,7 +699,7 @@ async function buildMachine(diagnosis) {
   `5. A build error must be reported verbatim with build_ok=false. Never guess a fix.\n` +
   `6. Confirm registration: qemu-system-aarch64 -M help | grep ${machine}\n` +
   `7. Ensure ${workdir}/06_machine/bypasses.md exists (header only is fine).\n` +
-  `   That file is user-facing: write it in natural Korean.\n` +
+  `   That file is user-facing.\n` + DOC_STYLE +
   `8. bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" metric phase=Build ` +
   `event=build_end tokens_total=${budget.spent()}`,
   { schema: BUILD_SCHEMA, label: again ? `rebuild-${diagnosis.round}` : 'build',
@@ -670,6 +731,16 @@ let round = 0
 let goalIndex = 0
 let stopped = false
 let stopReason = null
+// Consecutive re-runs spent because the input never reached the gate. Reset by
+// any round whose input path did work, so a single bad moment does not use up
+// the allowance for the rest of the run.
+let starvedRetries = 0
+// The last DEFINITE reading of whether the boot medium's partition table could
+// be read. "unknown" never overwrites it: a round that died early tells us
+// nothing about storage, and letting it erase a real observation would make the
+// gate below flicker.
+let storageVerdict = 'unknown'
+let storageSeenAt = null
 
 while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   const goal = goals[goalIndex]
@@ -680,6 +751,7 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   // relays that document: it never assembles `stop` itself, so the stop backstop
   // cannot be weakened by a transcription slip.
   const obs = await shell(`run-${round}`, 'Loop',
+    `TIMEOUT=${RUN_TIMEOUT} ` +
     `bash "${PLUGIN}/scripts/run_round.sh" "${workdir}" ${track} ${machine} ${round} ` +
     `${shq(goal)} ${shq(ladderArg)}` +
     (track === 1 ? ` ${shq(bootloader_path)} help ${shq(activeSurface)}` : '') + `\n` +
@@ -705,12 +777,80 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     break
   }
 
+  // The gate polled the console and never got a byte of ours. That is the input
+  // path failing, not the firmware deciding anything, and classifying it spends
+  // a fixer round on a fault that does not exist. Re-run instead - and say so
+  // when the retries are used up, rather than letting it pass as an observation.
+  if (obs?.input_starved === true) {
+    if (starvedRetries < STARVED_RETRIES) {
+      starvedRetries += 1
+      log(`[루프] 회차 ${round}: ★ 입력이 게이트에 닿지 않았습니다 ` +
+          `(폴링 ${obs?.rx_polls ?? '?'} 회, 읽힌 바이트 0). 펌웨어 판정이 아니므로 ` +
+          `분류하지 않고 재실행합니다 (${starvedRetries}/${STARVED_RETRIES}).`)
+      await shell(`starved-${round}`, 'Loop',
+        `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" decision ` +
+        `${shq(`회차 ${round}`)} ${shq('입력 굶음 — 재실행')} ` +
+        `${shq(`uart_harness 가 보낸 바이트를 펌웨어가 한 번도 읽지 않았습니다 ` +
+               `(${obs?.input_summary ?? ''})`)}`,
+        OK_SCHEMA)
+      round -= 1            // this was not a round about the firmware
+      continue
+    }
+    // Out of retries. Say what is being carried forward as an observation and
+    // why it is suspect, instead of letting it pass silently as one.
+    log(`[루프] 회차 ${round}: 입력 굶음이 재실행 ${STARVED_RETRIES} 회 뒤에도 계속됩니다 — ` +
+        `관측으로 취급하고 분류를 진행하지만, input_plan 의 contiguous/empty_poll_budget 과 ` +
+        `게이트 공급 창을 함께 의심하세요.`)
+  } else {
+    starvedRetries = 0
+  }
+
+  // Did this run get far enough to say anything about the boot medium?
+  if (obs?.storage_partition_table === 'missing' || obs?.storage_partition_table === 'ok') {
+    if (storageVerdict !== obs.storage_partition_table) {
+      storageVerdict = obs.storage_partition_table
+      storageSeenAt = round
+      if (storageVerdict === 'missing') {
+        log(`[루프] 회차 ${round}: 펌웨어가 파티션표를 읽지 못했다고 보고했습니다 ` +
+            `(${obs?.storage_token ?? ''}). 트랙 1 은 스토리지 컨트롤러를 구현하지 않으므로 ` +
+            `이후 "${STORAGE_DEPENDENT_RUNGS.join(', ')}" 칸은 이 트랙에서 도달할 수 없습니다. ` +
+            `현재 목표까지는 그대로 진행합니다.`)
+      }
+    }
+  }
+
+  // The goal we are now on needs the medium, and the firmware told us it could
+  // not read it. No fixer on this track can change that - fixer-storage is not
+  // on the track's roster by design - so continuing would spend rounds on a rung
+  // that is out of reach for a reason that has nothing to do with the firmware.
+  if (track === 1 && STORAGE_DEPENDENT_RUNGS.includes(goal) && storageVerdict === 'missing') {
+    log(`[루프] ★ 목표 "${goal}" 은 부팅 매체를 읽어야 도달합니다. 회차 ${storageSeenAt} 에서 ` +
+        `펌웨어가 파티션표 부재를 보고했고, 트랙 1 에는 이를 고칠 수단이 없습니다.`)
+    await shell(`storage-blocker-${round}`, 'Loop',
+      `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=BLOCKED_STORAGE ` +
+      `detail=${shq(`목표 "${goal}" 은 부팅 매체를 읽어야 하는데 회차 ${storageSeenAt} 콘솔에서 ` +
+                    `펌웨어가 파티션표 부재를 보고했습니다 (${obs?.storage_token ?? ''}). ` +
+                    `트랙 1 은 스토리지 컨트롤러를 구현하지 않으므로 이 칸은 트랙 경계 때문에 ` +
+                    `도달 불가입니다 — 펌웨어의 한계가 아닙니다.`)}\n` +
+      `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" note ` +
+      `${shq(`정지: BLOCKED_STORAGE — "${goal}" 은 트랙 1 범위 밖입니다. ` +
+             `도달한 칸까지는 유효하며, 이 칸이 필요하면 /sboot-rehost:rehost-kernel 로 ` +
+             `스토리지를 구현하거나 목표 등급을 낮춰 재개하십시오.`)}`,
+      OK_SCHEMA)
+    stopped = true; stopReason = 'BLOCKED_STORAGE'
+    break
+  }
+
   log(`[루프] 회차 ${round} (목표 ${goal}) — 마일스톤 ${obs?.milestone ?? '?'}, ` +
       `콘솔 고유 ${obs?.console_uniq ?? 0} 줄, 예외 ${obs?.exceptions ?? '?'} 건, ` +
       `최초 ${obs?.origin_type ?? 'none'}@${obs?.origin_elr ?? 'none'}, ` +
       `정체 ${obs?.stall_count ?? 0} 회` +
       (obs?.injected ? ' ★ 자가주입 감지' : '') +
-      (obs?.timeout_bound ? ' ★ 타임아웃 한계 (더 돌리면 더 나옴)' : ''))
+      (track === 1
+        ? ` · 입력: ${obs?.prompt_seen ? '프롬프트 관측' : '프롬프트 미관측'}` +
+          `${obs?.rx_reported ? `, 펌웨어가 읽은 바이트 ${obs?.rx_served ?? '?'}` : ''}`
+        : '') +
+      (obs?.timeout_bound === true ? ' ★ 타임아웃 한계 (더 돌리면 더 나옴)' : ''))
 
   // Everything derived about this firmware so far. Read before the supervisor,
   // because judging the layer means comparing the machine's premises against the
@@ -752,10 +892,43 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     `(best so far ${obs?.best_progress?.uniq ?? 0} in round ${obs?.best_progress?.round ?? '-'}). ` +
     `On a one-rung ladder this is the only measure of forward motion - a milestone ` +
     `of "none" does not mean the boot went nowhere.\n` +
-    (obs?.timeout_bound
+    (obs?.timeout_bound === true
       ? `★ A longer run produced MORE console (${obs?.console_bytes}B → ` +
         `${obs?.probe_console_bytes}B). This wall is the run timeout, not the ` +
         `firmware. Do not send a fixer after a stop point that is our own clock.\n`
+      : obs?.timeout_bound === null || obs?.timeout_bound === undefined
+        ? `timeout_bound is null: the longer-run probe did NOT run this round, so ` +
+          `nothing is known about whether the wall is our clock. Treat it as ` +
+          `unmeasured, not as "measured and it is the firmware".\n`
+        : '') +
+    // Before naming a stop point at all: did our input ever reach the gate? On
+    // S921N the harness fired the command without ever seeing the prompt in every
+    // single round, including the two that reached the shell, and no artifact
+    // said so. A surface that was never offered its input is not a firmware fact.
+    (track === 1
+      ? `INPUT PATH THIS ROUND - check this BEFORE naming a stop point.\n` +
+        `  prompt observed: ${obs?.prompt_seen}   command sent: ${obs?.command_sent}\n` +
+        (obs?.rx_reported
+          ? `  the firmware read ${obs?.rx_served} of our bytes across ` +
+            `${obs?.rx_polls} console polls\n`
+          : `  the machine does not report RX consumption, so how much of our ` +
+            `input the firmware actually took is unknown (rebuild picks up the ` +
+            `counters from templates/machine.c.tmpl)\n`) +
+        (obs?.input_starved
+          ? `  ★ STARVED: the gate polled and got none of our bytes. This is the ` +
+            `harness, not the firmware. Do not prescribe a fixer for it.\n`
+          : '') +
+        `  Details: ${obs?.input_summary ?? '(none)'}\n` +
+        `BOOT MEDIUM: partition table = ${obs?.storage_partition_table ?? 'unknown'}` +
+        (obs?.storage_partition_table === 'missing'
+          ? ` (${obs?.storage_token ?? ''})\n` +
+            `  Track 1 does not implement a storage controller, so every failure ` +
+            `downstream of this - partition lookups, environment, panel/modem ` +
+            `images, loading the next stage - follows from OUR track boundary, ` +
+            `not from the firmware. Do NOT prescribe memory windows or fixers for ` +
+            `them. Only the interactive surface and its command handlers are in ` +
+            `scope on this track.\n`
+          : `\n`)
       : '') +
     `Recent rounds: ${JSON.stringify(recent)}\n` +
     `Derived stop points (${staticDoc}):\n${derivedTable}\n` +
@@ -1155,7 +1328,7 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
         ? `The run is stalling. Suspect the side effects of an earlier bypass before adding a new one.\n`
         : '') +
       `\nChange exactly ONE place and append the four-field bypass entry to bypasses.md.\n` +
-      `bypasses.md and the PROGRESS.md line are user-facing: write them in natural Korean.\n` +
+      `bypasses.md and the PROGRESS.md line are user-facing.\n` + DOC_STYLE +
       `If this is not your area answer not_mine=true. If you have no untried change ` +
       `left, answer no_new_change=true honestly - that feeds the stop condition.`,
       { agentType: candidate, schema: FIXER_SCHEMA, label: `${candidate}-${round}`, phase: 'Loop' }
@@ -1315,7 +1488,11 @@ if (stopped) {
     best_milestone: summary?.best_milestone ?? null,
     best_progress: depth,
     tried_changes: summary?.tried_changes ?? [],
-    note: 'REAL 로 표기하지 마세요. 정직한 미완이며 같은 명령으로 재실행하면 이어서 진행됩니다.',
+    note: stopReason === 'BLOCKED_STORAGE'
+      ? '이 정지는 펌웨어의 한계가 아니라 트랙 경계입니다. 도달한 칸까지의 결과는 그대로 ' +
+        '유효하니 그 등급으로 보고하시고, 남은 칸이 필요하면 /sboot-rehost:rehost-kernel 로 ' +
+        '스토리지를 구현한 뒤 재개하십시오. REAL 로 표기하지 마세요.'
+      : 'REAL 로 표기하지 마세요. 정직한 미완이며 같은 명령으로 재실행하면 이어서 진행됩니다.',
   }
 }
 
@@ -1353,11 +1530,12 @@ const verifier = await agent(
   `   - Lowering the verdict (REAL -> FORCED) is always yours to make. When in doubt, lower it.\n` +
   `   - Raising it (FORCED -> REAL) is only valid with byte-level evidence. Without ` +
   `     that evidence the script verdict stands and your override is void.\n\n` +
-  `3. Write ${workdir}/VERIFICATION.md in natural Korean - the user reads it. ` +
+  `3. Write ${workdir}/VERIFICATION.md - the user reads it. ` +
   `   Show both the script verdict and yours, and when they differ say which won and why.\n\n` +
   `4. Finally record:\n` +
   `   bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" metric phase=Verify ` +
-  `event=verify_end tokens_total=${budget.spent()}`,
+  `event=verify_end tokens_total=${budget.spent()}` +
+  DOC_STYLE,
   { agentType: 'verifier', schema: VERIFIER_SCHEMA, label: 'verify', phase: 'Verify' }
 )
 
@@ -1370,21 +1548,51 @@ log(`[검증] 스크립트 ${verifier?.script_passes ?? '?'}/5 → 최종 ${pass
 // =============================================================================
 phase('Package')
 
+// The run analysis, before the kit is written. It is computed from the recorded
+// measurements, so it is a script's job, not something to ask an agent to
+// estimate: which stop point cost the most rounds, which changes moved nothing,
+// and where the time went are all arithmetic on rounds.jsonl / metrics.jsonl.
+const analysis = await shell('analyze-run', 'Package',
+  `bash "${PLUGIN}/scripts/py.sh" analyze_run.py "${workdir}" --track ${track}\n` +
+  `# Writes ${workdir}/ANALYSIS.md (읽는 문서) and analysis.json (수치).\n` +
+  `# Report the JSON it prints.`,
+  {
+    type: 'object',
+    properties: {
+      rounds: { type: 'integer' },
+      series: { type: 'integer' },
+      total_seconds: { type: 'integer' },
+      total_tokens: { type: 'integer' },
+      stall_stretches: { type: 'integer' },
+      findings: { type: 'integer' },
+    },
+  })
+log(`[분석] 회차 ${analysis?.rounds ?? '?'}건 · 정체 구간 ${analysis?.stall_stretches ?? '?'}개 · ` +
+    `원인 항목 ${analysis?.findings ?? '?'}건 → ${workdir}/ANALYSIS.md`)
+
 await agent(
-  `Assemble the reproduction kit in ${workdir}/10_reproduce/.\n` +
-  `Everything written here is user-facing: use natural Korean.\n\n` +
+  `Assemble the reproduction kit in ${workdir}/10_reproduce/.\n\n` +
   `Include:\n` +
   `- README.md (INPUT.md summary, build and run steps, verdict ${passes}/5 ${verdict})\n` +
   (track === 1 ? `- bootloader/ (copy of ${bootloader_path})\n`
                : `- fw/ (Image.patched, *.dtb, initramfs reference)\n`) +
   `- machine/ (sources from 06_machine plus bypasses.md)\n` +
-  `- scripts/ (setup_env.sh, build and run scripts)\n` +
-  `- evidence/ (latest console and summary, VERIFICATION.md, PROGRESS.md, JOURNAL.md,\n` +
-  `  metrics.jsonl, rounds.jsonl, verdict_script.json)\n\n` +
+  `- scripts/ (setup_env.sh, build and run scripts, uart_harness.py, input_plan.json)\n` +
+  `- evidence/ (latest console and summary, input log and input_summary.json,\n` +
+  `  VERIFICATION.md, ANALYSIS.md, PROGRESS.md, JOURNAL.md,\n` +
+  `  metrics.jsonl, rounds.jsonl, verdict_script.json, analysis.json)\n\n` +
+  `README.md must carry a "실행 비용과 소요" section built FROM ${workdir}/ANALYSIS.md -\n` +
+  `not a re-estimate. Quote its figures and point to it for the detail:\n` +
+  `  - 총 회차 ${analysis?.rounds ?? '?'}회, 총 소요, 총 토큰\n` +
+  `  - 가장 오래 머문 정지점과 그 비용 (ANALYSIS.md 4절)\n` +
+  `  - 정체 구간 ${analysis?.stall_stretches ?? '?'}개와 무엇이 각 구간을 끝냈는지 (5절)\n` +
+  `  - 실제로 부팅을 전진시킨 변경 (7절)\n` +
+  `Do not restate a number ANALYSIS.md does not contain, and do not soften one it does.\n\n` +
   (verdict === 'REAL'
     ? `The verdict is REAL. State it as "5/5 통과, REAL 판정" and nothing stronger.\n`
     : `The verdict is FORCED. Do not write "REAL" or "성공" anywhere in the README.\n`) +
-  `Finally: bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Package 완료"`,
+  DOC_STYLE +
+  `\nFinally: bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Package 완료"`,
   { label: 'package', phase: 'Package' }
 )
 

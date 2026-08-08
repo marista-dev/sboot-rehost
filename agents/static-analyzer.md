@@ -156,14 +156,75 @@ run counter, plus the byte compared in the loop). Write
 
 ```json
 { "autoboot_interrupt": { "bytes": "\r", "count": 3,
+                          "contiguous": true,
+                          "empty_poll_budget": 0,
+                          "one_shot": true,
                           "gate_addr": "0xf48a0af0",
-                          "evidence": "0xf48a0b10 cmp w8, #3 (bytes 1f0c0071), byte compared at 0xf48a0b04 cmp w9, #0xd" } }
+                          "evidence": "0xf48a0b10 cmp w8, #3 (bytes 1f0c0071), byte compared at 0xf48a0b04 cmp w9, #0xd; empty-poll budget from 0xf4844fd0 cmp w24, w21 with w21 = arg w2 = 0" } }
 ```
 
+**Every property the harness needs must be its own field, not prose.** On S921N
+the `evidence` string said, correctly, "w21=0, so a single empty poll fails it" -
+and nothing in the code could read a sentence, so the harness had no idea the run
+of bytes had to be unbroken. A derived fact that only a human can read has not
+reached anyone.
+
+| field | derive it from | if you cannot derive it |
+|---|---|---|
+| `bytes` | the byte the collection loop compares (`cmp w?, #0xd`) | write no file |
+| `count` | the run counter's target (`cmp w?, #N`) | write no file |
+| `empty_poll_budget` | the argument the caller passes as the allowed empty-poll count, and the `cmp`/`b.ls` that uses it | omit; the harness assumes 0 |
+| `contiguous` | true when `empty_poll_budget` is 0 - one empty poll and the gate is gone | omit; the harness assumes true |
+| `one_shot` | whether the gate is entered once or re-polled later in the boot | omit; the harness assumes true |
+
+Omitting a field means "the strictest reading", which costs a few extra bytes of
+input. Guessing a lenient value costs the surface, silently.
+
 `scripts/uart_harness.py` reads this and types that pattern from outside QEMU.
-**If you cannot derive N, write no file** - the harness then uses a documented
-default (CR x3) and records that it was a default. A guessed count in the file
-would look derived and stop anyone from questioning it.
+**If you cannot derive the byte or the count, write no file** - the harness then
+uses a documented default (CR x3) and records that it was a default. A guessed
+count in the file would look derived and stop anyone from questioning it.
+
+### 12c) Partition table availability — write `storage_tokens.txt`
+
+Grade C means the bootloader carries on into a normal boot, and that requires
+reading the boot medium: the partition table first, then the next stage. Track 1
+does not implement a storage controller, so on this track the medium is a stub
+and the table cannot load. That is a **track boundary, not a firmware fault**,
+and the loop has to be able to tell the two apart - otherwise it spends rounds
+prescribing memory windows for a partition table that was never going to arrive.
+
+Whether a given run could read the table is an observation on the console, and
+the strings are vendor-specific, so derive them. Write
+`<workdir>/storage_tokens.txt`, one `<state><TAB><token>` per line:
+
+```
+missing	There is no pit binary
+missing	pit_check_integrity: invalid pit.
+ok	<the string the firmware prints once the table has loaded>
+```
+
+| state | what the token means |
+|---|---|
+| `missing` | the firmware itself reported that the table is absent or failed its integrity check |
+| `ok` | the firmware reported a loaded, valid table |
+
+Rules:
+
+- Derive both states when you can. `missing` is the one the gate needs; `ok`
+  only prevents a false negative, so **omit `ok` rather than guess it**.
+- Use strings the firmware prints, found in the image. Do not write a token you
+  cannot locate at a file offset.
+- **Absence of a token is not evidence.** A run that stopped before storage init
+  prints neither, and the loop reads that as `unknown`, never as `missing`.
+  Do not add a token meant to fire on silence.
+- Locate the boot-medium decision too (a `get_boot_device`-style function, or
+  whatever this image uses) and record it in the derived table, so the classifier
+  can recognise the chain.
+
+If you cannot derive either state, write no file. The loop then treats storage
+readiness as unknown and blocks nothing, which is the safe direction: a wrongly
+blocked grade is a false "unreachable", and this project never reports one.
 
 ### 12b) Entry PC for a multi-stage container
 

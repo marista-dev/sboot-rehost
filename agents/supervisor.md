@@ -59,6 +59,25 @@ came from **our machine code, not the firmware or kernel** (honesty rule 7,
 self-injection). It does not count as reaching anything. The milestone has
 already been dropped, so trust the file as given and route to `fault-classifier`.
 
+## Check the input path before you name a firmware problem (track 1)
+
+`fingerprint.json` has an `input` block from `scripts/uart_harness.py` plus the
+machine's RX counters. A bootloader's autoboot gate is one-shot: if our pattern
+was not sitting in the RX buffer while it polled, the firmware boots on, and that
+looks exactly like a firmware that read the input and declined it.
+
+| `input` says | how to read it |
+|---|---|
+| `starved: true` | the gate polled (`rx_polls > 0`) and read none of our bytes. **Not a firmware stop point.** The pipeline re-runs it; if it survives that, the question is the gate's derived `contiguous` / `empty_poll_budget` in `input_plan.json`, not a MemoryRegion |
+| `rx_served > 0` and `prompt_seen: false` | the firmware took our input and still did not open the surface. This IS a firmware observation - route it normally |
+| `rx_reported: false` | the machine was built before the RX counters existed, so consumption is unknown. Say that rather than assuming; a rebuild picks the counters up from the template |
+| `command_sent: false` | the surface never came up, so no command was sent. Correct behaviour, not a failure to report |
+
+`timeout_bound` is three-valued. `null` means the longer-run probe did **not**
+run, so nothing is known about whether the wall is our own clock - it is not the
+same as `false`, and reading it as one is how five rounds of an unmoving console
+got treated as a firmware wall.
+
 ## Goal advancement is measured, not claimed
 
 The pipeline advances the ladder from the **observed** milestone alone. Routing
