@@ -24,6 +24,38 @@ are not sure, answer `unknown` - it costs you nothing.
 | history | `<workdir>/rounds.jsonl` - is this classification repeating? |
 | knowledge | `knowledge/faults_bootloader.md`, `faults_kernel.md`, `faults_storage.md` |
 
+## Before naming anything: did our input reach the gate? (track 1)
+
+`fingerprint.json` carries an `input` block written by `scripts/uart_harness.py`
+and the machine's RX counters. Read it first.
+
+| what you see | what it means |
+|---|---|
+| `starved: true` (`rx_polls > 0`, `rx_served == 0`) | the firmware polled the console and got **none** of our bytes. The surface was never offered its input, so **there is no firmware stop point to name here.** Answer `harness_input_starved` |
+| `rx_served > 0`, `prompt_seen: false` | the firmware read our bytes and still did not open the surface. That IS a firmware observation - classify it normally |
+| `rx_reported: false` | the machine predates the counters, so how much of our input the firmware took is unknown. Say so rather than assuming either way |
+
+A surface that was never offered its input looks exactly like a firmware that
+refused it. On S921N every single round fired the command without ever seeing the
+prompt, including the two rounds that reached the shell, and nothing recorded it -
+so the difference was invisible for the whole run.
+
+## And: is the boot medium readable? (track 1)
+
+`fingerprint.json` carries `storage.partition_table`: `ok`, `missing`, or
+`unknown`. Track 1 models the medium as a stub, so `missing` is the expected
+state, and it cascades - the environment, panel, modem and next-stage loads all
+fail after it.
+
+**Those are one stop point, not many.** Name it `partition_table_unavailable`
+once and stop there. Do not classify each downstream failure separately and do
+not send `fixer-memory` after them: the partition table is data that was never
+read, so no memory window produces it, and the parser rejecting a zeroed buffer
+is the parser working correctly.
+
+`unknown` means the boot did not reach storage initialisation. It is not
+evidence of anything - classify the round on its actual stop point.
+
 ## Stop points no fixer owns
 
 Some rows in the knowledge tables read **build layer** in the owning-fixer column.

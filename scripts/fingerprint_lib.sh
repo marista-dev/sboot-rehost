@@ -100,10 +100,14 @@ fp_run_verdict() {
 
 # fp_prev_stuck <prev_fingerprint_json> <console_bytes>  -> echoes yes|no
 #
-# "The previous round ended at exactly this console size with no exception."
-# That is the signature of a hang that has not moved, and the only case where
-# spending one longer run to separate a firmware wall from the wall-clock budget
-# is worth it.
+# "The previous round ended at exactly this console size." That is the signature
+# of a boot that has not moved, and the only case where spending one longer run
+# to separate a firmware wall from the wall-clock budget is worth it.
+#
+# It also demanded zero exceptions once. A firmware can sit at the same console
+# size for rounds while its trace still carries a handful of exceptions - the
+# S921N run did exactly that for five rounds at 82,639 bytes with 8/8/8/5/2 - and
+# that extra condition skipped the probe on precisely the rounds it was for.
 fp_prev_stuck() {
     local prev="$1" csz="$2"
     [ -f "$prev" ] || { echo no; return 0; }
@@ -113,8 +117,7 @@ try:
     d = json.load(open(sys.argv[1], encoding="utf-8"))
 except Exception:
     print("no"); raise SystemExit
-print("yes" if int(d.get("console_bytes", -1)) == int(sys.argv[2])
-             and int(d.get("exceptions", -1)) == 0 else "no")
+print("yes" if int(d.get("console_bytes", -1)) == int(sys.argv[2]) else "no")
 PY
 }
 

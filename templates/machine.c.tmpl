@@ -72,6 +72,8 @@ struct SbootState {
     CharFrontend uart_chr;
     uint8_t  rx[256];
     unsigned rx_head, rx_tail, rx_count;
+    /* RX consumption counters - see rehost_rx_report() */
+    uint64_t rx_served, rx_empty, rx_polls;
 };
 
 static SbootState *g_state;
@@ -96,12 +98,44 @@ static void uart_receive(void *opaque, const uint8_t *buf, int sz) {
  * the run when it finds one. The autoboot-interrupt pattern and the command both
  * come from scripts/uart_harness.py. */
 
+/* Report RX consumption on stderr, never on the console.
+ *
+ * Without this a round cannot tell two different things apart: the firmware
+ * polled the console and our bytes were not there (a harness failure), and the
+ * firmware read our bytes and chose to boot on anyway (a firmware observation).
+ * Both look like "no milestone", and treating the first as the second sends a
+ * fixer after a fault that does not exist.
+ *
+ * It goes to stderr because run_qemu.sh keeps stderr in a separate file: nothing
+ * here can reach console_<n>.txt, so the byte-match and source-negative checks
+ * are untouched. scripts/uart_harness.py parses these lines to decide when the
+ * buffer has drained, and forwards every line through unchanged.
+ *
+ * The field names are single letters on purpose. verify.py item 3 asks whether a
+ * console token appears anywhere in a machine string literal, by substring, so a
+ * literal saying "pending" would fail any firmware whose boot log prints that
+ * word. Nothing shorter than five characters can collide.
+ *   s = bytes handed to the firmware   e = reads that found the buffer empty
+ *   p = status-register polls          q = bytes still queued
+ */
+static void rehost_rx_report(SbootState *s) {
+    info_report("REHOST-RX s=%" PRIu64 " e=%" PRIu64 " p=%" PRIu64 " q=%u",
+                s->rx_served, s->rx_empty, s->rx_polls, s->rx_count);
+}
+
 /* ---- peri_lo MMIO (UART + catch-all) ---- */
 static uint64_t peri_lo_read(void *opaque, hwaddr off, unsigned sz) {
     SbootState *s = opaque;
     if (off == UART_STAT_OFF) {
         uint64_t st = 0x6;
         if (s->rx_count > 0) st |= 0x1;
+        /* A getc spins on this register, so the count runs to millions. Report
+         * the first poll - that is the one that says the firmware started
+         * listening - and then only rarely. */
+        s->rx_polls++;
+        if (s->rx_polls == 1 || (s->rx_polls & 0xfffffULL) == 0) {
+            rehost_rx_report(s);
+        }
         return st;
     }
     if (off == UART_RX_OFF) {
@@ -109,12 +143,22 @@ static uint64_t peri_lo_read(void *opaque, hwaddr off, unsigned sz) {
             uint8_t b = s->rx[s->rx_tail];
             s->rx_tail = (s->rx_tail + 1) % sizeof(s->rx);
             s->rx_count--;
+            s->rx_served++;
             /* Required: once can_receive has returned 0 QEMU stops feeding this
              * chardev until told the backlog cleared. Omitting it makes input
              * stop arriving partway through - the most common trap in a UART
              * model, and fatal for a gate that needs a run of keystrokes. */
             qemu_chr_fe_accept_input(&s->uart_chr);
+            /* Draining to empty is the moment the harness needs: the gate has
+             * taken what we gave it and a refill can now be accepted. */
+            if (s->rx_count == 0) {
+                rehost_rx_report(s);
+            }
             return b;
+        }
+        s->rx_empty++;
+        if (s->rx_empty == 1 || (s->rx_empty & 0xffffULL) == 0) {
+            rehost_rx_report(s);
         }
         return 0;
     }

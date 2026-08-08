@@ -30,6 +30,19 @@ INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (�
 | **C** | 부트로더가 정상 부팅 흐름 진행 | autoboot 진행 | 부트모드 결정 → 커널 로드 |
 
 사다리는 `A: [표면]` · `B: [표면, commands]` · `C: [표면, commands, autoboot]`.
+
+**등급 C 는 부팅 매체를 읽어야 도달한다.** "정상 부팅 흐름 진행" 은 정의상 다음 단계를
+매체에서 적재하는 것이고, 트랙 1 은 스토리지 컨트롤러를 구현하지 않으므로 매체가 스텁이다.
+펌웨어가 **파티션표 부재를 스스로 보고하면** 그 시점부터 C 는 이 트랙에서 도달 불가이며
+파이프라인이 `BLOCKED_STORAGE` 로 정지한다 — **펌웨어의 한계가 아니라 트랙 경계다.**
+그 아래 칸(A·B)은 영향을 받지 않는다. B 의 마일스톤은 명령 디스패치 자체라 `reset`·`uarten`
+처럼 매체가 필요 없는 핸들러로 도달하며, `printenv`·`load_cp_header` 처럼 파티션을 읽는
+명령만 실기와 다른 결과를 낸다.
+
+파티션표 가용성은 **관측값**이다. 판정 문자열은 벤더마다 다르므로 static-analyzer 가
+`storage_tokens.txt` 에 `<ok|missing>\t<토큰>` 으로 도출하고, `run_qemu.sh` 가 콘솔에서
+찾아 `ok` / `missing` / `unknown` 을 기록한다. **토큰이 안 보이는 것은 근거가 아니다** —
+스토리지 초기화 전에 죽은 회차는 `unknown` 이고, `unknown` 은 아무 칸도 막지 않는다.
 각 단의 **관측 문자열은 static-analyzer 가 도출**해 `milestone_tokens.txt` 에 쓴다
 (`<마일스톤>\t<토큰>` 형식) — 벤더 배너를 코드에 박지 않는다.
 
@@ -195,6 +208,7 @@ python3 scripts/record.py <wd> blocker code=BLOCKED_KO detail="…"
 | `BLOCKED_BUILD` | ninja 실패 | 빌드 결과 (추측 수정 금지) |
 | `BLOCKED_ENV` | **실행 환경 미비** (WSL 부재 · QEMU/capstone 미설치) | `check_env.sh` 선행 검사 |
 | `BLOCKED_TEE` | vold/Keymint/TEEGRIS 시큐어월드 | **수동 기록** — 자동 감지 없음, 범위 밖으로 정직 기록 |
+| `BLOCKED_STORAGE` | **트랙 1 에서 매체가 필요한 칸**(등급 C)인데 펌웨어가 파티션표 부재를 보고 | `storage_tokens.txt` 관측 (`missing`) — 트랙 경계이지 펌웨어 한계가 아니다 |
 | `EXHAUSTED` | **시도 소진** | `stop_conditions.py` |
 
 **시도 소진**은 회차 카운트가 아니라 가능한 시도의 소진이다. 셋이 **동시** 성립할 때만:
@@ -445,6 +459,10 @@ success·REAL 금지.
     ├── VERIFICATION.md            verifier 2차 최종 판정
     ├── 06_machine/                machine 소스 + bypasses.md
     ├── input_plan.json            autoboot 게이트 입력 패턴 (도출, 없으면 기본값)
+    ├── input_summary.json         마지막 회차 입력 경로 결과 (프롬프트 관측·읽힌 바이트)
+    ├── storage_tokens.txt         파티션표 가용성 판정 문자열 (도출, 없으면 unknown)
+    ├── ANALYSIS.md                실행 분석 — 소요·비용·정체 구간·원인 (analyze_run.py)
+    ├── analysis.json              위 분석의 수치 (기계)
     ├── 07_logs/                   회차별 콘솔 + 요약 + origin_N.txt + input_N.txt
     ├── 08_docs/                   분석 메모 · static_archive.md (이관된 도출 근거)
     │                              (+ .record/ 타이머 · rounds/N/ 회차별 소스 스냅샷)

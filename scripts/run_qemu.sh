@@ -34,7 +34,11 @@ SURFACE="${6:-shell}"      # shell (UART console) | fastboot (USB dispatch)
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 QEMU="${QEMU:-$HOME/qemu-build/qemu-10.2.2/build/qemu-system-aarch64}"
-TIMEOUT="${TIMEOUT:-8}"
+# Wall-clock budget for one round. The S921N shell prompt appeared between 5.2s
+# and 8.0s of wall time under full tracing, so the old default of 8 left no
+# margin at all: a slightly slower host turned the same firmware into "did not
+# reach". The pipeline can override this (INPUT.md run_timeout_s).
+TIMEOUT="${TIMEOUT:-20}"
 # One extra run, only when the round looks like a hang that has not moved. See
 # the probe block below for why a fixed wall-clock budget needs a second look.
 TIMEOUT_PROBE="${TIMEOUT_PROBE:-1}"
@@ -57,7 +61,11 @@ ORIGIN="$WORKDIR/07_logs/origin_${RUN_N}.txt"
 INLOG="$WORKDIR/07_logs/input_${RUN_N}.txt"
 ERRF="$WORKDIR/07_logs/qemu_${RUN_N}.stderr.txt"
 LOG="$TRACE_DIR/run_${RUN_N}.log"
-rm -f "$OUT" "$SUM" "$LOG" "$ORIGIN" "$ERRF" "$INLOG"
+# What the harness did, machine-readable. Without it a round cannot say whether
+# the interrupt pattern ever got in front of the gate, and a harness failure is
+# recorded as a verdict about the firmware.
+INSUM="$WORKDIR/input_summary.json"
+rm -f "$OUT" "$SUM" "$LOG" "$ORIGIN" "$ERRF" "$INLOG" "$INSUM"
 
 # The console token that means the surface is up. static-analyzer derives it into
 # milestone_tokens.txt; the harness stops trying to interrupt autoboot once it
@@ -89,7 +97,7 @@ python3 "$HERE/record.py" "$WORKDIR" start "run_${RUN_N}" >/dev/null 2>&1 || tru
 # never started reported success and the round looked clean.
 RUN_RC=0
 python3 "$HERE/uart_harness.py" \
-    --console "$OUT" --input-log "$INLOG" \
+    --console "$OUT" --input-log "$INLOG" --summary "$INSUM" \
     --plan "$WORKDIR/input_plan.json" \
     --timeout "$TIMEOUT" --cmd "$CMD" --surface "$SURFACE" \
     ${PROMPT_ARGS[@]+"${PROMPT_ARGS[@]}"} \
@@ -99,6 +107,42 @@ python3 "$HERE/uart_harness.py" \
     -d int,in_asm,nochain -D "$LOG" \
     2> "$ERRF" || RUN_RC=$?
 tail -3 "$ERRF" 2>/dev/null || true
+
+# --- What the input path actually did ------------------------------------
+# `milestone=none` has two very different causes and they used to be the same
+# observation: the gate polled and our bytes were not there (a harness failure),
+# or the gate read them and the firmware booted on (a firmware observation).
+# Sending a fixer after the first one spends a round on a fault that does not
+# exist, so the round has to be able to tell them apart.
+eval "$(python3 - "$INSUM" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    d = {}
+def b(key):
+    return "true" if d.get(key) else "false"
+def n(key):
+    v = d.get(key)
+    return "null" if v is None else str(int(v))
+print(f'FP_INPUT_OFFERED={b("input_offered")}')
+print(f'FP_PROMPT_SEEN={b("prompt_seen")}')
+print(f'FP_COMMAND_SENT={b("command_sent")}')
+print(f'FP_COMMAND_BLIND={b("command_blind")}')
+print(f'FP_INPUT_STARVED={b("input_starved")}')
+print(f'FP_SUPPLY_CAPPED={b("supply_capped")}')
+print(f'FP_RX_REPORTED={b("rx_reported")}')
+print(f'FP_RX_SERVED={n("rx_served")}')
+print(f'FP_RX_POLLS={n("rx_polls")}')
+print(f'FP_BYTES_SENT={n("bytes_sent")}')
+PY
+)"
+# An absent summary means the harness itself did not finish; report it as unknown
+# rather than as "no input was offered", which would be a claim we cannot make.
+: "${FP_INPUT_OFFERED:=false}" "${FP_PROMPT_SEEN:=false}" "${FP_COMMAND_SENT:=false}"
+: "${FP_COMMAND_BLIND:=false}" "${FP_INPUT_STARVED:=false}" "${FP_SUPPLY_CAPPED:=false}"
+: "${FP_RX_REPORTED:=false}" "${FP_RX_SERVED:=null}" "${FP_RX_POLLS:=null}"
+: "${FP_BYTES_SENT:=null}"
 
 # --- Fingerprint: raw observations only, never a classification ---
 # NOTE: grep -c exits 1 when the count is zero while still printing "0".
@@ -194,15 +238,54 @@ for m in "$SURFACE" commands autoboot; do
 done
 MILESTONES_JSON=$(python3 -c 'import sys,json;print(json.dumps(sys.argv[1].split()))' "$REACHED")
 
+# --- Storage readiness (partition table) -------------------------------------
+# Grade C means the bootloader carries on into a normal boot, which requires
+# reading the boot medium. Track 1 does not implement a storage controller, so on
+# this track the medium is a stub and the table cannot load - a track boundary,
+# not a firmware fault. Recording which one it was keeps the loop from
+# prescribing memory windows for a partition table that was never going to come.
+#
+# The strings are vendor-specific, so static-analyzer derives them into
+# storage_tokens.txt as "<ok|missing><TAB><token>".
+#
+# ABSENCE IS NOT EVIDENCE. A round that died before storage init has printed
+# neither token; calling that "missing" would block a grade on a boot that never
+# got there. Unknown stays unknown, and unknown blocks nothing.
+STORAGE="unknown"; STORAGE_TOKEN=""
+SFILE="$WORKDIR/storage_tokens.txt"
+if [ -s "$SFILE" ]; then
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        case "$line" in *"$TAB"*) ;; *) continue ;; esac
+        s_state="${line%%$TAB*}"; s_token="${line#*$TAB}"
+        [ -n "$s_token" ] || continue
+        grep -qF "$s_token" "$OUT" 2>/dev/null || continue
+        case "$s_state" in
+            # A failed integrity check is decisive: the firmware looked and said no.
+            missing) STORAGE="missing"; STORAGE_TOKEN="$s_token"; break ;;
+            ok)      if [ "$STORAGE" = "unknown" ]; then
+                         STORAGE="ok"; STORAGE_TOKEN="$s_token"
+                     fi ;;
+        esac
+    done < "$SFILE"
+fi
+STORAGE_TOKEN_JSON="$(fp_json_escape "$STORAGE_TOKEN")"
+
 # --- Timeout probe -----------------------------------------------------------
 # TIMEOUT is a fixed wall-clock budget, so "the firmware hung" and "we killed a
-# boot that was still working" produce the same observation: no exception, no new
-# console. When the round looks like that AND the previous round ended at exactly
-# the same console size, one longer run answers which it was. The probe never
-# touches the fingerprint - it only reports timeout_bound, so the supervisor can
-# tell a harness wall from a firmware wall instead of spending rounds on it.
-TIMEOUT_BOUND="false"; PROBE_BYTES=-1
-if [ "$TIMEOUT_PROBE" != "0" ] && [ "$MILESTONE" = "none" ] && [ "$EXC" -eq 0 ] \
+# boot that was still working" produce the same observation: the console stopped
+# growing. When the previous round ended at exactly the same console size, one
+# longer run answers which it was. The probe never touches the fingerprint - it
+# only reports timeout_bound, so the supervisor can tell a harness wall from a
+# firmware wall instead of spending rounds on it.
+#
+# It used to also require zero exceptions. On S921N rounds 12-16 the console was
+# byte-identical at 82,639 for five rounds while the trace carried 8/8/8/5/2
+# exceptions, so the probe was skipped every time - and `false` was written as
+# though it had been measured. An unmeasured value that reads as a measurement
+# is worse than no value, so a skipped probe now reports null.
+TIMEOUT_BOUND="null"; PROBE_BYTES=-1
+if [ "$TIMEOUT_PROBE" != "0" ] && [ "$MILESTONE" = "none" ] \
    && [ "$FP_RUN_FAILED" -eq 0 ] && [ -f "$PREV" ]; then
     if [ "$(fp_prev_stuck "$PREV" "$CSZ")" = "yes" ]; then
         PROBE_OUT="$WORKDIR/07_logs/probe_${RUN_N}.txt"
@@ -210,6 +293,7 @@ if [ "$TIMEOUT_PROBE" != "0" ] && [ "$MILESTONE" = "none" ] && [ "$EXC" -eq 0 ] 
         rm -f "$PROBE_OUT" "$PROBE_LOG"
         python3 "$HERE/uart_harness.py" \
             --console "$PROBE_OUT" --input-log "${INLOG}.probe" \
+            --summary "${INSUM}.probe" \
             --plan "$WORKDIR/input_plan.json" \
             --timeout $((TIMEOUT * PROBE_MULT)) --cmd "$CMD" --surface "$SURFACE" \
             ${PROMPT_ARGS[@]+"${PROMPT_ARGS[@]}"} \
@@ -219,7 +303,7 @@ if [ "$TIMEOUT_PROBE" != "0" ] && [ "$MILESTONE" = "none" ] && [ "$EXC" -eq 0 ] 
             -d int,nochain -D "$PROBE_LOG" \
             >/dev/null 2>&1 || true
         if [ -f "$PROBE_OUT" ]; then PROBE_BYTES=$(wc -c < "$PROBE_OUT" | tr -d ' '); else PROBE_BYTES=0; fi
-        [ "$PROBE_BYTES" -gt "$CSZ" ] && TIMEOUT_BOUND="true"
+        if [ "$PROBE_BYTES" -gt "$CSZ" ]; then TIMEOUT_BOUND="true"; else TIMEOUT_BOUND="false"; fi
         rm -f "$PROBE_LOG"
     fi
 fi
@@ -249,6 +333,24 @@ cat > "$WORKDIR/fingerprint.json" <<JSON
   "source_gate": { "injected": ${INJECTED}, "token": "${INJECTED_TOKEN_JSON}" },
   "run_failed": $([ "$FP_RUN_FAILED" -eq 1 ] && echo true || echo false),
   "run_error": "${RUN_ERROR_JSON}",
+  "input": {
+    "offered": ${FP_INPUT_OFFERED},
+    "prompt_seen": ${FP_PROMPT_SEEN},
+    "command_sent": ${FP_COMMAND_SENT},
+    "command_blind": ${FP_COMMAND_BLIND},
+    "starved": ${FP_INPUT_STARVED},
+    "supply_capped": ${FP_SUPPLY_CAPPED},
+    "rx_reported": ${FP_RX_REPORTED},
+    "rx_served": ${FP_RX_SERVED},
+    "rx_polls": ${FP_RX_POLLS},
+    "bytes_sent": ${FP_BYTES_SENT},
+    "summary": "${INSUM}",
+    "log": "${INLOG}"
+  },
+  "storage": {
+    "partition_table": "${STORAGE}",
+    "token": "${STORAGE_TOKEN_JSON}"
+  },
   "timeout_bound": ${TIMEOUT_BOUND},
   "probe_console_bytes": ${PROBE_BYTES},
   "console": "${OUT}",
@@ -273,6 +375,13 @@ fi
 if [ "$TIMEOUT_BOUND" = "true" ]; then
     echo "★ 타임아웃 한계: ${TIMEOUT}s 로는 끊겼지만 $((TIMEOUT * PROBE_MULT))s 에서는 콘솔이 더 나왔습니다 (${CSZ}B → ${PROBE_BYTES}B). 펌웨어 정지점이 아니라 실행 시간이 벽입니다." >&2
 fi
+if [ "$FP_INPUT_STARVED" = "true" ]; then
+    echo "★ 입력 굶음: 펌웨어가 콘솔을 ${FP_RX_POLLS} 회 폴링했는데 우리 바이트를 한 번도 읽지 않았습니다 (${INSUM}). 하니스 문제이며 펌웨어 정지점이 아닙니다." >&2
+fi
+if [ "$MILESTONE" = "none" ] && [ "$FP_PROMPT_SEEN" = "false" ] && [ "$FP_RX_REPORTED" = "true" ] \
+   && [ "$FP_RX_SERVED" != "null" ] && [ "$FP_RX_SERVED" -gt 0 ]; then
+    echo "· 입력 경로 확인: 펌웨어가 우리 바이트 ${FP_RX_SERVED} 개를 읽었고 그래도 표면이 안 열렸습니다 — 이것은 펌웨어 관측입니다." >&2
+fi
 
 echo "console=$OUT"
 echo "summary=$SUM"
@@ -289,3 +398,11 @@ echo "milestone=$MILESTONE"
 echo "injected=$INJECTED"
 echo "run_failed=$FP_RUN_FAILED"
 echo "timeout_bound=$TIMEOUT_BOUND"
+echo "storage_partition_table=$STORAGE"
+echo "input_offered=$FP_INPUT_OFFERED"
+echo "prompt_seen=$FP_PROMPT_SEEN"
+echo "command_sent=$FP_COMMAND_SENT"
+echo "input_starved=$FP_INPUT_STARVED"
+echo "rx_reported=$FP_RX_REPORTED"
+echo "rx_served=$FP_RX_SERVED"
+echo "rx_polls=$FP_RX_POLLS"

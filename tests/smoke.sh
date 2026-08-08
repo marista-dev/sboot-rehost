@@ -772,13 +772,25 @@ chk "프롬프트 관측 후 명령 전송" "$?" "0"
 HW2=$(new_ws harness_plan); printf 'int h;\n' > "$HW2/06_machine/machine.c"
 printf 'shell\tS-BOOT # \n' > "$HW2/milestone_tokens.txt"
 printf 'x' > "$HW2/bl.bin"
-printf '{"autoboot_interrupt":{"bytes":"\\r","count":5,"evidence":"gate @0x1234 cmp w8,#5"}}\n' \
+printf '{"autoboot_interrupt":{"bytes":"\\r","count":5,"contiguous":true,"empty_poll_budget":0,"evidence":"gate @0x1234 cmp w8,#5"}}\n' \
     > "$HW2/input_plan.json"
 GATE_CR=5 TIMEOUT=6 QEMU="$BIN/fake-qemu-gate" bash "$S/run_round.sh" "$HW2" 1 t 1 shell "shell" "$HW2/bl.bin" help shell > /dev/null 2>&1
-grep -q "x5 (derived)" "$HW2/07_logs/input_1.txt" 2>/dev/null
+grep -q "x5 (derived" "$HW2/07_logs/input_1.txt" 2>/dev/null
 chk "도출된 연타 수를 사용"      "$?" "0"
 chk "5연타 게이트도 통과" \
     "$(python3 -c "import json;print(json.load(open('$HW2/observation.json'))['milestone'])" 2>/dev/null)" "shell"
+# 도출된 게이트 성질이 산문이 아니라 기계가 읽는 필드로 전달되는가
+chk "게이트 성질이 요약에 실림" \
+    "$(python3 -c "import json;d=json.load(open('$HW2/input_summary.json'));print(d['count'],d['contiguous'],d['empty_poll_budget'],d['source'])" 2>/dev/null)" \
+    "5 True 0 derived"
+# 프롬프트를 못 봤으면 명령을 보내지 않는다 — 블라인드 전송 폐기 회귀
+chk "프롬프트 관측 후에만 명령 전송" \
+    "$(python3 -c "import json;d=json.load(open('$HW2/input_summary.json'));print(d['prompt_seen'],d['command_sent'],d['command_blind'])" 2>/dev/null)" \
+    "True True False"
+# 관측 문서까지 배선됐는가 — 입력 경로 사실이 회차에 실려야 분류가 그것을 볼 수 있다
+chk "관측 문서에 입력 경로 사실" \
+    "$(python3 -c "import json;d=json.load(open('$HW2/observation.json'));print(d['prompt_seen'],d['input_offered'],d['input_starved'])" 2>/dev/null)" \
+    "True True False"
 
 # 머신은 입력을 만들지 않는다 — 템플릿 회귀
 grep -q "rx_seed" "$REPO/templates/machine.c.tmpl"
@@ -807,6 +819,124 @@ chk "머신이 RX 를 채우면 항목4 불통과" \
 # 구현 범위가 문서에 못박혀 있는가
 grep -q "BL33" "$REPO/skills/rehost-bootloader/SKILL.md"
 chk "SKILL 에 실행 범위 명시"    "$?" "0"
+
+# =============================================================================
+# 18b. 파티션표 가용성 — 등급 C 는 매체를 읽어야 도달한다 (S921N PIT 회귀)
+# =============================================================================
+printf '\n\033[1m== 18b. 파티션표 가용성 ==\033[0m\n'
+
+# 펌웨어가 파티션표 부재를 스스로 보고하는 콘솔을 내는 가짜 QEMU
+cat > "$BIN/fake-qemu-pit" <<'PYEOF'
+#!/usr/bin/env python3
+import os, sys, time
+say = lambda t: (sys.stdout.write(t), sys.stdout.flush())
+say("get_boot_device() == BOOT_UFS\n")
+say("UFS link established\n")
+if os.environ.get("PIT_OK") == "1":
+    say("pit_check_integrity: pit is valid\n")
+else:
+    say("pit_check_integrity: invalid pit.(0x0)\n")
+    say("update_guid_partition_table: There is no pit binary.\n")
+say("check sbl_shell mode\n\nautoboot aborted..\nS-BOOT # ")
+time.sleep(1.2)
+PYEOF
+chmod +x "$BIN/fake-qemu-pit"
+
+PW=$(new_ws pit); printf 'int p;\n' > "$PW/06_machine/machine.c"
+printf 'shell\tS-BOOT # \n' > "$PW/milestone_tokens.txt"
+printf 'x' > "$PW/bl.bin"
+printf 'missing\tThere is no pit binary\nmissing\tpit_check_integrity: invalid pit.\nok\tpit_check_integrity: pit is valid\n' \
+    > "$PW/storage_tokens.txt"
+TIMEOUT=3 QEMU="$BIN/fake-qemu-pit" bash "$S/run_round.sh" "$PW" 1 t 1 shell "shell" "$PW/bl.bin" help shell >/dev/null 2>&1
+chk "파티션표 부재를 관측" \
+    "$(python3 -c "import json;print(json.load(open('$PW/observation.json'))['storage_partition_table'])" 2>/dev/null)" "missing"
+chk "판정 근거 토큰을 남김" \
+    "$(python3 -c "import json;print(bool(json.load(open('$PW/observation.json'))['storage_token']))" 2>/dev/null)" "True"
+# 매체를 못 읽어도 표면 도달은 영향을 받지 않는다 (등급 A 는 그대로)
+chk "표면 도달은 영향 없음" \
+    "$(python3 -c "import json;print(json.load(open('$PW/observation.json'))['milestone'])" 2>/dev/null)" "shell"
+
+# 표가 정상이면 ok 로 관측되어야 한다
+PIT_OK=1 TIMEOUT=3 QEMU="$BIN/fake-qemu-pit" bash "$S/run_round.sh" "$PW" 1 t 2 shell "shell" "$PW/bl.bin" help shell >/dev/null 2>&1
+chk "정상이면 ok 로 관측" \
+    "$(python3 -c "import json;print(json.load(open('$PW/observation.json'))['storage_partition_table'])" 2>/dev/null)" "ok"
+
+# ★ 미관측은 막지 않는다 — 토큰 파일이 없으면 unknown 이어야 한다.
+#   침묵을 'missing' 으로 읽으면 스토리지에 닿기도 전에 죽은 회차가 등급을 막는다.
+NW=$(new_ws pit_unknown); printf 'int p;\n' > "$NW/06_machine/machine.c"
+printf 'shell\tS-BOOT # \n' > "$NW/milestone_tokens.txt"
+printf 'x' > "$NW/bl.bin"
+TIMEOUT=3 QEMU="$BIN/fake-qemu-pit" bash "$S/run_round.sh" "$NW" 1 t 1 shell "shell" "$NW/bl.bin" help shell >/dev/null 2>&1
+chk "토큰 파일 없으면 unknown"  \
+    "$(python3 -c "import json;print(json.load(open('$NW/observation.json'))['storage_partition_table'])" 2>/dev/null)" "unknown"
+
+# 규칙이 문서·지식표·등록부에 등재됐는가
+grep -q "BLOCKED_STORAGE" "$REPO/CLAUDE.md"
+chk "블로커 코드가 CLAUDE.md 에" "$?" "0"
+grep -q "partition_table_unavailable" "$REPO/knowledge/faults_bootloader.md"
+chk "정지점이 지식표에"          "$?" "0"
+grep -q "partition_table_unavailable" "$REPO/fixers/registry.yaml"
+chk "담당 없음으로 등록"         "$?" "0"
+grep -q "STORAGE_DEPENDENT_RUNGS" "$REPO/workflows/pipeline.js"
+chk "의존 칸이 파이프라인에"      "$?" "0"
+grep -q "storage_tokens.txt" "$REPO/agents/static-analyzer.md"
+chk "도출 지시가 분석가에"        "$?" "0"
+
+# =============================================================================
+# 19. 실행 분석 — jsonl 기록에서 소요·정체·귀인을 계산
+# =============================================================================
+printf '\n\033[1m== 19. 실행 분석 ==\033[0m\n'
+
+AW=$(new_ws analysis)
+printf '| 모델 | SM-TEST |\n| 트랙 | 1 |\n' > "$AW/INPUT.md"
+# 5회차: 2·3·4 가 같은 정지점(정체), 그중 2·3 의 변경은 관측을 못 움직임.
+# 재분석(600초)·재생성이 4회차와 5회차 사이에 끼어 있다.
+# 실제 기록과 같은 모양: 회차마다 Run/Loop 이벤트가 있어 단계 구간이 좁게 잡힌다.
+{
+  printf '{"epoch":1000,"ts":"T0","phase":"Start","event":"session_start"}\n'
+  printf '{"epoch":1100,"ts":"T1","phase":"Build","event":"build_end","tokens_total":1000}\n'
+  printf '{"epoch":1250,"ts":"T1a","phase":"Run","round":1,"event":"run_end"}\n'
+  printf '{"epoch":1300,"ts":"T1b","phase":"Loop","round":1,"event":"apply_end","tokens_total":1500}\n'
+  printf '{"epoch":1550,"ts":"T2a","phase":"Run","round":2,"event":"run_end"}\n'
+  printf '{"epoch":1600,"ts":"T2b","phase":"Loop","round":2,"event":"apply_end","tokens_total":2200}\n'
+  printf '{"epoch":2450,"ts":"T3a","phase":"Run","round":3,"event":"run_end"}\n'
+  printf '{"epoch":2500,"ts":"T3b","phase":"Loop","round":3,"event":"apply_end","tokens_total":3600}\n'
+  printf '{"epoch":4050,"ts":"T4a","phase":"Run","round":4,"event":"run_end"}\n'
+  printf '{"epoch":4100,"ts":"T4b","phase":"Loop","round":4,"event":"apply_end","tokens_total":5000}\n'
+  printf '{"epoch":5000,"ts":"T5","phase":"Analyze","event":"analyze_end","tokens_total":9000}\n'
+  printf '{"epoch":5100,"ts":"T6","phase":"Build","event":"build_end","tokens_total":9500}\n'
+} > "$AW/metrics.jsonl"
+{
+  printf '{"epoch":1200,"ts":"T2","round":1,"fp_origin_esr":"0x1","fp_origin_far":"0xa","fp_origin_elr":"0xb","fp_milestone":"none","fp_bytes":10,"fp_uniq":5,"fp_exc":1,"category":"data_abort_unmapped","fixer":"fixer-memory","change_key":"memory:w1","effect":"applied","tokens_total":1500}\n'
+  printf '{"epoch":1500,"ts":"T3","round":2,"fp_origin_esr":"0x2","fp_origin_far":"0xc","fp_origin_elr":"0xd","fp_milestone":"none","fp_bytes":20,"fp_uniq":9,"fp_exc":1,"category":"unknown","fixer":"fixer-memory","change_key":"memory:w2","effect":"applied","analyst_new_facts":0,"tokens_total":2200}\n'
+  printf '{"epoch":2400,"ts":"T4","round":3,"fp_origin_esr":"0x2","fp_origin_far":"0xc","fp_origin_elr":"0xd","fp_milestone":"none","fp_bytes":20,"fp_uniq":9,"fp_exc":1,"category":"unknown","fixer":"fixer-memory","change_key":"memory:w3","effect":"applied","tokens_total":3600}\n'
+  printf '{"epoch":4000,"ts":"T4b","round":4,"fp_origin_esr":"0x2","fp_origin_far":"0xc","fp_origin_elr":"0xd","fp_milestone":"none","fp_bytes":20,"fp_uniq":9,"fp_exc":1,"category":"data_abort_unmapped","fixer":"fixer-memory","change_key":"memory:w4","effect":"applied","tokens_total":5000}\n'
+  printf '{"epoch":5400,"ts":"T7","round":1,"fp_origin_esr":"0x3","fp_origin_far":"0xe","fp_origin_elr":"0xf","fp_milestone":"shell","fp_bytes":900,"fp_uniq":80,"fp_exc":1,"category":"reached","effect":"progress","tokens_total":10000}\n'
+} > "$AW/rounds.jsonl"
+A=$(python3 "$S/analyze_run.py" "$AW" --track 1 2>/dev/null)
+chk "분석 생성 성공"            "$?" "0"
+chk "회차 수를 셈"              "$(echo "$A" | python3 -c 'import json,sys;print(json.load(sys.stdin)["rounds"])')" "5"
+chk "회차 번호 되감김을 구간으로" "$(echo "$A" | python3 -c 'import json,sys;print(json.load(sys.stdin)["series"])')" "2"
+chk "정체 구간을 찾음"          "$(echo "$A" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stall_stretches"])')" "1"
+# 3회차(2-3 아님, 1-3)는 앞뒤가 같은 정지점이라 정체 구간에 들어가야 한다
+chk "정체 구간 길이 3회차"      "$(python3 -c 'import json;print(json.load(open("'"$AW"'/analysis.json"))["stretches"][0]["rounds"])')" "3"
+# 재분석·재생성(1000초)이 낀 회차는 그 시간을 회차 소요에서 빼야 한다
+chk "단계 시간이 회차에서 분리됨" \
+    "$(python3 -c 'import json;r=[x for x in json.load(open("'"$AW"'/analysis.json"))["rounds"] if x["label"]=="2-1"][0];print(r["stage_seconds"], r["raw_duration_s"], r["duration_s"])')" \
+    "1000 1400 400"
+# 토큰은 누적값이라 델타로 복원되어야 한다 (일부 이벤트에만 실려 있어도)
+chk "단계별 토큰이 0 이 아님" \
+    "$(python3 -c 'import json;p=json.load(open("'"$AW"'/analysis.json"))["phases"];print(p["Analyze"]["tokens"]>0 and p["Build"]["tokens"]>0)')" "True"
+grep -q "## 10. 소요 원인 분석" "$AW/ANALYSIS.md"
+chk "원인 분석 절이 있음"        "$?" "0"
+grep -q "## 11. 기록의 한계" "$AW/ANALYSIS.md"
+chk "기록 한계를 밝힘"          "$?" "0"
+grep -q "관측을 움직이지 못한 변경" "$AW/ANALYSIS.md"
+chk "무효 변경을 짚음"          "$?" "0"
+# 기록이 아예 없어도 죽지 않아야 한다 (내보내기 중간에 멈추면 안 됨)
+EW=$(new_ws analysis_empty)
+python3 "$S/analyze_run.py" "$EW" --track 1 >/dev/null 2>&1
+chk "기록이 없어도 생성"        "$?" "0"
 
 
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
