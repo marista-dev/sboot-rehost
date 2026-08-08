@@ -39,7 +39,23 @@ KERNEL_STATIC.md
 PROGRESS.md
 VERIFICATION.md
 JOURNAL.md
+ANALYSIS.md
+fixer_candidates.md
 new_example/
+
+# 워크스페이스 루트에 회차마다 쌓이는 관측·측정 산출물.
+# 위의 문서 목록과 같은 이유로 둔다 — 저장소 폴더 안에서 /rehost-* 를 돌렸을 때
+# 펌웨어 도출값이 커밋되지 않게 하는 방어선이다.
+input_plan.json
+input_summary.json
+storage_tokens.txt
+milestone_tokens.txt
+fingerprint.json
+fingerprint.prev.json
+observation.json
+verdict_script.json
+analysis.json
+*.jsonl
 
 # ────────────────────────────────────────────────────────────────
 # examples/ — 전부 무시 (로컬 펌웨어 작업 예제가 git 에 안 섞이게).
@@ -74,6 +90,10 @@ run_*.txt
 
 # 로컬 플러그인 활성화 레이어 (/plugin 없는 환경에서 skills/·agents/ 를 .claude/ 로 연결)
 .claude/
+
+# 오케스트레이션 레이어(oh-my-claudecode)의 로컬 상태 — 세션 기록·메모·계획·로그.
+# 이 저장소의 내용물이 아니라 도구가 만드는 작업 상태다.
+.omc/
 
 # ────────────────────────────────────────────────────────────────
 # 설계·분석 스크래치 문서 (재설계 논의용, 저장소 정본 아님 — 커밋 금지).
