@@ -1,496 +1,436 @@
 # sboot-rehost — 항상 로드되는 컨텍스트
 
-이 파일은 sboot-rehost 플러그인 작업 중 Claude Code 가 항상 컨텍스트에 로드한다.
-모든 회차·도출·검증이 이 규칙에 따른다.
+QEMU 위에서 모바일 기기 펌웨어를 **원본 바이너리 그대로** 실행시키는 플러그인이다.
+이 파일의 규칙이 모든 회차·도출·검증에 적용된다.
 
 ---
 
-## 트랙 (목표 타깃 2종)
+## 1. 무엇을 하는가
 
-부팅 체인의 **어느 진입점부터 진짜 바이너리를 실행하느냐**로 트랙이 갈린다.
-INPUT.md 의 `track` 슬롯 (1|2) 이 결정. 두 트랙은 별도 진입점 (한 체인으로 잇지 않음).
+부트로더 컨테이너를 **한 번 적재**하고, 첫 스테이지부터 커널이 rootfs 를 마운트할 때까지
+**하나의 연속 실행**으로 간다. 다음 단계 적재는 펌웨어 자신의 코드가 수행한다.
 
-| 트랙 | 진입점 (체인) | 도달 지점 | 등급 | 방법론 |
-|---|---|---|---|---|
-| **1 부트로더** | 부트로더 (③) | 그 부트로더의 **인터랙티브 표면** — UART 셸(S-Boot) 또는 fastboot/USB(LK) | A/B/C | [instruction.md](methodology/instruction.md) |
-| **2 커널** | 커널 EL1 (⑥⑦) | 커널 → rootfs 마운트 → 진짜 벤더 스토리지 드라이버 → Android 2단계 | K1/K2/K3 | [track2_kernel_storage.md](methodology/track2_kernel_storage.md) |
+```
+컨테이너 적재 → stage0 → stage1 → … → 부트로더 → 커널 → rootfs
+                  ↑                        │
+            리셋 PC (도출값)          부트로더가 매체에서 커널을 읽어 적재
+```
 
-**트랙은 정체성이 아니라 인자다.** 루프 골격은 하나이고, 바뀌는 것은 목표 사다리·지식
-테이블·실행 스크립트뿐이다. `workflows/pipeline.js` 하나가 `track` 인자로 둘 다 돈다.
+**QEMU 에 `-kernel Image` · `-dtb` · `-initrd` 를 주지 않는다.** 커널을 직접 넘기면 부트
+과정을 건너뛴 것이 되어, 커널 이미지만 실행하는 기존 연구와 구별되지 않는다.
 
-### 트랙 1 등급 — 부트로더가 얼마나 진짜로 동작하나
-
-목표는 "셸" 이 아니라 **그 부트로더에서 실제로 도달 가능한 인터랙티브 표면**이다.
-표면은 `bl_surface` 가 정하고, 등급은 그 표면 위에서 **얼마나 깊이 동작하는가**다.
-
-| 등급 | 뜻 | `shell` 표면 (S-Boot) | `fastboot` 표면 (LK) |
-|---|---|---|---|
-| **A** | 표면 도달 + 목록 명령 실행 | 프롬프트 + `help` 출력 | `getvar:` 수신·에코·dispatch |
-| **B** | 다른 명령 핸들러가 실제로 동작 | `reset`·`printenv` 등이 일함 | `flash`·`reboot` 등이 일함 |
-| **C** | 부트로더가 정상 부팅 흐름 진행 | autoboot 진행 | 부트모드 결정 → 커널 로드 |
-
-사다리는 `A: [표면]` · `B: [표면, commands]` · `C: [표면, commands, autoboot]`.
-
-**등급 C 는 부팅 매체를 읽어야 도달한다.** "정상 부팅 흐름 진행" 은 정의상 다음 단계를
-매체에서 적재하는 것이고, 트랙 1 은 스토리지 컨트롤러를 구현하지 않으므로 매체가 스텁이다.
-펌웨어가 **파티션표 부재를 스스로 보고하면** 그 시점부터 C 는 이 트랙에서 도달 불가이며
-파이프라인이 `BLOCKED_STORAGE` 로 정지한다 — **펌웨어의 한계가 아니라 트랙 경계다.**
-그 아래 칸(A·B)은 영향을 받지 않는다. B 의 마일스톤은 명령 디스패치 자체라 `reset`·`uarten`
-처럼 매체가 필요 없는 핸들러로 도달하며, `printenv`·`load_cp_header` 처럼 파티션을 읽는
-명령만 실기와 다른 결과를 낸다.
-
-파티션표 가용성은 **관측값**이다. 판정 문자열은 벤더마다 다르므로 static-analyzer 가
-`storage_tokens.txt` 에 `<ok|missing>\t<토큰>` 으로 도출하고, `run_qemu.sh` 가 콘솔에서
-찾아 `ok` / `missing` / `unknown` 을 기록한다. **토큰이 안 보이는 것은 근거가 아니다** —
-스토리지 초기화 전에 죽은 회차는 `unknown` 이고, `unknown` 은 아무 칸도 막지 않는다.
-각 단의 **관측 문자열은 static-analyzer 가 도출**해 `milestone_tokens.txt` 에 쓴다
-(`<마일스톤>\t<토큰>` 형식) — 벤더 배너를 코드에 박지 않는다.
-
-**표면이 없으면 등급도 없다.** 어느 표면에도 입력 경로가 없으면 `BLOCKED_NO_INPUT_PATH`
-로 정직하게 정지한다. 명령 테이블이 바이너리에 있어도 dispatcher 가 그것을 참조하지
-않으면 도달 불가이며, 트램폴린으로 출력을 강제하는 것은 **FORCED**다.
+실행 불가한 스테이지(암호화 또는 패키지에 없음)는 **다음 실행 가능 스테이지로 진입을
+재지정**해 건너뛰고, 건너뛴 사실을 우회 기록에 남긴다.
 
 ---
 
-## 구성 요소 — LLM 에이전트 + 결정론 스크립트
+## 2. 용어
 
-> **측정은 스크립트, 해석·제어는 LLM, 정지의 입력값은 사실.**
+| 용어 | 뜻 |
+|---|---|
+| **스테이지** | 부트 체인의 한 단계 (BL1 · BL2 · 부트로더 …). 개수와 이름은 `stage_map.json` 도출값 |
+| **회차** | 실행 1회 + 분석 + 변경 1건. `run N` |
+| **정지점** | 실행이 더 나아가지 못하는 지점과 그 원인 |
+| **실행 지문** | 정지점의 식별자. 최초 예외의 ESR/FAR/ELR, 마일스톤, 콘솔 고유 줄 수, 예외 수 자릿수 |
+| **목표 단계** | 도달 목표의 순서 목록 (예: `bl1_entry → bl2_entry → shell → …`) |
+| **우회** | 실기와 다르게 만든 부분. 전부 기록 대상 |
+| **계층** | 회차로 고칠 수 있는 것(loop)과 머신 생성 전제(build)의 구분 |
 
-### LLM 에이전트 (`agents/`)
+---
 
-| 이름 | 한 줄 | 수정 권한 |
+## 3. 목표 단계와 등급
+
+목표 단계는 **고정하지 않는다.** `stage_map.json` 이 실행 가능한 스테이지를 세고, 그만큼
+칸이 만들어진 뒤 공통 후단이 붙는다. 스테이지 수가 펌웨어마다 다르기 때문이다.
+
+```
+stage_entry × N  →  <표면>  →  medium_up  →  partitions
+                 →  verify_ok  →  kernel_entry  →  userspace  →  rootfs
+```
+
+| 등급 | 범위 | 뜻 |
 |---|---|---|
-| `static-analyzer` | 바이너리·자산 → 근거 있는 사실. 근거 없으면 "미확정" | ✗ (분석 문서만) |
-| `supervisor` | 지문 + 정지 조건 → 라우팅·정지 + **층 판정** + **처방** + **우회 철회** | ✗ |
-| `fault-classifier` | 로그 → 정지점 이름 + 담당 fixer 순위. 모르면 `unknown` | ✗ |
-| `fixer-memory` `fixer-el3` `fixer-bootflow` `fixer-kernel` `fixer-storage` | 담당 오류를 **직접 수정** (회차당 하나) | **○** |
-| `fixer-general` | **담당이 없을 때만** — 범위 무제한 (수정·빌드·실행) + 새 fixer 후보 기록 | **○** |
-| `verifier` | 5/5 스크립트 측정을 2 차 재검증 | ✗ (VERIFICATION.md 만) |
+| **F1** | 스테이지 진입 전부 + 표면 | 부트로더 체인이 실제로 동작 |
+| **F2** | F1 + `medium_up` · `partitions` · `verify_ok` · `kernel_entry` | 부트로더가 커널을 적재·검증·기동 |
+| **F3** | F2 + `userspace` · `partitions_up` (+ `super_mounted`) | rootfs 마운트까지 완주 |
 
-**트랙 1 에는 `fixer-kernel`·`fixer-storage` 가 오르지 않는다.** 부트로더 단계는 스토리지
-컨트롤러 구현으로 가지 않으며, 이는 프롬프트 권고가 아니라 파이프라인이 후보 목록과
-지식 테이블을 트랙으로 갈라 집행한다.
+- 각 칸의 관측 문자열은 static-analyzer 가 도출해 `milestone_tokens.txt` 에 기록한다.
+  벤더 문자열을 코드에 직접 넣지 않는다.
+- `super.img` 가 없는 펌웨어는 `super_mounted` 를 목표에 넣지 않는다 (`has_super`).
+- **F1 은 매체 모델 없이 도달 가능하다.** 첫 스테이지는 이전 단계가 남긴 함수 포인터로
+  블록을 읽으므로, 스토리지 모델이 없어도 진행된다. F1 을 확정한 뒤 F2 로 간다.
 
-**`fixer-general` 은 최후수단이다.** 전문가가 전부 반려했을 때만 도달하며 순위로는 못
-오른다. 범위가 무제한이므로 "새로 시도할 변경 없음" 이 잘 안 나오는데, 이를 대비해
-`stop_conditions.py` 가 **지문을 못 움직인 변경은 시도로 세지 않는다** (`futile_spent`).
-그 기록은 `<workdir>/fixer_candidates.md` 에 쌓이고, 정식 fixer 승격은 사람이 커밋한다 —
-에이전트 레지스트리는 세션 시작 스냅샷이라 런타임 생성 파일은 그 회차에 로드되지 않는다.
+### 표면
 
-**fixer 만 코드를 고친다.** 나머지 LLM 은 읽기만 한다. 분류하는 쪽과 고치는 쪽이 같으면
-"고칠 게 있어야 하니까" 없는 병명을 지어내기 때문이다.
-
-### 결정론 컴포넌트 (`scripts/`, `workflows/`)
-
-| 이름 | 한 줄 | 집행하는 불변 |
-|---|---|---|
-| `workflows/pipeline.js` | 루프 배선 + 단계 제어 | 사실 정지를 LLM 이 못 뒤집게 강제 |
-| `run_round.sh` | 한 회차 통째 수행 → **관측 문서 1개** (`observation.json`) | LLM 이 `stop` 을 조립하지 못하게 함 |
-| `run_qemu.sh` / `run_kernel.sh` | 실행 → **지문 추출 + 출처 게이트 + 실행실패 판정** | §7 자가주입 금지 (매 회차) |
-| `uart_harness.py` | **QEMU 밖에서** 콘솔 입력 주입 (autoboot 중단 패턴 → 명령) | 입력은 외부에서 — 머신이 자기에게 명령 금지 |
-| `fingerprint_lib.sh` | **최초 예외 추출** · 콘솔 고유줄 · 실행실패 판정 (두 run 스크립트 공용) | 재귀 말미가 아니라 원인을 지문으로 |
-| `sync_machine.sh` | 06_machine 소스를 QEMU 트리로 반영 | **고친 소스가 실제로 빌드된다** |
-| `revert_change.sh` | 반증된 우회를 **그 회차 변경만** 역패치로 제거 | 틀린 모델 위에 쌓지 않기 |
-| `static_rotate.py` | 도출 기록이 커지면 근거는 보관, **표는 유지** | 회차 비용 상승 차단 |
-| `wsl_bridge.sh` | 셸이 Windows 면 WSL 로 건너뜀 (scripts 공통 가드) | 실행은 Linux, 기록은 Windows |
-| `check_env.sh` | 루프 전 실행 환경 선행 검사 | 못 도는 셸에서 회차 소모 금지 |
-| `check_change.sh` | 한 변경 검문 (diff · 우회 4항목) + 회차별 스냅샷 | 회차 = 한 변경 · 되돌릴 수 있음 |
-| `derived_facts.py` | 도출표의 **새 정지점 수 측정** (시그니처 dedup) | 도출 자기신고 금지 |
-| `stop_conditions.py` | 정지 조건 계산 | 무한 진동 차단 |
-| `verify.py` | 5/5 **측정** | §6 실증거 |
-| `record.py` | 측정치 JSONL 기록 | 추적 가능성 |
-
-### 데이터 (지식 / 프로세스 분리)
-
-`fixers/registry.yaml` (오류 → 담당 fixer) · `knowledge/*.md` (정지점 테이블) ·
-`profiles/*.yaml` (SoC 탐색 힌트 — **값이 아니라 "어디를 볼지"**).
-**새 정지점 = 테이블 한 줄. 새 fixer = 파일 하나 + 등록부 몇 줄.** 프롬프트는 안 고친다.
+부트로더의 인터랙티브 표면은 UART 셸 또는 fastboot/USB 이며, **도출값**이다.
+명령 테이블이 바이너리에 있어도 디스패처가 참조하지 않으면 도달 불가다.
+어느 표면에도 입력 경로가 없으면 `BLOCKED_NO_INPUT_PATH` 로 정지한다.
 
 ---
 
-## 도출은 기록으로 남아야 쓰인다
+## 4. 구성 요소
 
-**펌웨어당 기록은 하나다** — `STATIC.md`(트랙 1) / `KERNEL_STATIC.md`(트랙 2).
-static-analyzer 는 **덮어쓰지 않고 append** 하며, 루프 안의 재도출도 여기에 쌓는다.
+> 측정은 스크립트가, 해석과 제어는 에이전트가, 정지 판정의 입력값은 관측 사실이 맡는다.
+
+### 에이전트 (`agents/`)
+
+| 이름 | 역할 | 소스 수정 |
+|---|---|---|
+| `static-analyzer` | 바이너리·자산에서 사실을 도출. 근거가 없으면 "미확정" | 불가 (분석 문서만) |
+| `supervisor` | 라우팅·정지·계층 판정·우회 철회 | 불가 |
+| `fault-classifier` | 로그에서 정지점 이름과 담당 지정. 모르면 `unknown` | 불가 |
+| `fixer-memory` `fixer-el3` `fixer-bootflow` `fixer-secureboot` `fixer-storage` `fixer-kernel` | 담당 정지점을 직접 수정 (회차당 1건) | **가능** |
+| `fixer-general` | 담당이 없을 때만. 범위 무제한 | **가능** |
+| `verifier` | 스크립트 측정을 2차 재검증 | 불가 (판정 문서만) |
+
+**수정 권한은 fixer 에게만 있다.** 분류하는 쪽과 고치는 쪽이 같으면, 고칠 대상을 만들기
+위해 없는 원인을 지목하게 된다.
+
+`fixer-general` 은 전문가가 전부 반려했을 때만 도달한다. 범위가 무제한이라 "시도할 것이
+없다"는 답이 잘 나오지 않으므로, `stop_conditions.py` 가 **지문을 움직이지 못한 변경은
+시도로 세지 않는다**.
+
+### 스크립트 (`scripts/`, `workflows/`)
+
+| 이름 | 역할 |
+|---|---|
+| `workflows/pipeline.js` | 전체 흐름 제어. 관측 사실에 근거한 정지를 에이전트가 뒤집지 못하게 강제 |
+| `check_version.sh` | **플러그인 버전 확인 (첫 게이트)** |
+| `check_env.sh` | 실행 환경 사전 점검 |
+| `stage_map.py` | 스테이지 지도 도출 (엔트로피 · 진입 스텁 · 문자열 · 적재 주소) |
+| `build_lu.py` | 부팅 매체 합성 (GPT + 파티션) |
+| `run_round.sh` | 회차 1회 수행 → 관측 문서 1개 (`observation.json`) |
+| `run_full.sh` | QEMU 실행 → 지문 추출 · 출력 출처 검증 · 실행 실패 판정 |
+| `uart_harness.py` | QEMU 외부에서 콘솔 입력 주입 |
+| `fingerprint_lib.sh` | 최초 예외 추출 · 콘솔 고유 줄 수 · 실행 실패 판정 |
+| `sync_machine.sh` | 워크스페이스 소스를 QEMU 트리에 반영 |
+| `check_change.sh` | 변경 1건 검문 (diff + 우회 기록) |
+| `revert_change.sh` | 반증된 우회를 해당 회차 변경만 역패치 |
+| `stop_conditions.py` | 정지 조건 계산 |
+| `verify.py` | 6항목 측정 |
+| `record.py` · `journal.sh` | 측정치·경위 기록 |
+| `make_resume.py` | 정지 시 인계 문서 생성 |
+| `analyze_run.py` | 소요·비용·정체 구간·해결 경위 분석 |
+| `wsl_bridge.sh` | 셸이 Windows 면 WSL 로 전환 |
+
+### 데이터
+
+`fixers/registry.yaml` (정지점 → 담당) · `knowledge/faults_unified.md` (정지점 분류표) ·
+`profiles/*.yaml` (SoC 탐색 힌트 — **값이 아니라 어디를 볼지**).
+
+**새 정지점은 분류표 한 줄, 새 fixer 는 파일 하나와 등록 몇 줄이다.** 프롬프트는 고치지 않는다.
+
+---
+
+## 5. 흐름
 
 ```
-[사전 도출]  static-analyzer → STATIC.md      → Build 가 읽어 머신을 만든다
-[재도출]     static-analyzer → STATIC.md 의
-                              `## 도출된 정지점` 표 한 줄
-                                               → fault-classifier 가 매칭
-                                               → fixer 가 그 줄의 "시도할 변경" 적용
-                                               → check_change → ninja 재빌드
-```
-
-**답변에만 있는 사실은 아무에게도 안 닿는다.** 분류기도 fixer 도 표를 읽지 에이전트의
-답을 읽지 않으므로, 기록되지 않은 도출은 없는 것과 같다. 메커니즘이 미확정이면
-줄을 쓰지 않는다 — 근거 없는 줄은 fixer 를 틀린 가지로 보내므로 §1 위반이다.
-
-## Flow
-
-```
-[static-analyzer] 사전 도출 → (하드 블로커면 ★ 정지)
+[버전 확인] → [환경 확인] → [static-analyzer 도출] → (하드 블로커면 정지)
    ↓
-(Build) machine 소스 + ninja → (빌드 에러면 ★ 정지)
+[Build] 머신 소스 생성 + 매체 합성 + ninja → (빌드 실패면 정지)
    ↓
-┌── LOOP (목표 사다리마다) ────────────────────────────────────┐
-│ (run_round.sh) snapshot + 실행 + 지문 + 출처게이트 + 정지조건  │
-│                → 관측 문서 1개 (observation.json)             │
-│ [supervisor] 라우팅 + 층 판정                                 │
-│   ├ 목표 도달 → 검증으로 / 사다리 다음 칸                      │
-│   ├ ★ 정지 (구조상 도달 불가)                                  │
-│   ├ **Build 층 문제 → 머신 재생성 (rebuild)**                  │
-│   ├ **우회가 반증됨 → 그 회차 변경만 철회 (revert)**           │
-│   ├ **담당 fixer 없음 → fixer-general 직행 (처방 동반)**       │
-│   ├ 미지·정체 → [static-analyzer] 재도출                       │
-│   └ [fault-classifier] 분류 + fixer 순위                       │
-│        → [1→2→3 순위 fixer] 한 변경 (전원 반려 시 general)     │
-│        → (check_change) → (sync_machine) → (ninja)             │
+┌── 회차 루프 (목표 단계마다) ─────────────────────────────────┐
+│ run_round.sh: 실행 → 지문 → 출처 검증 → 정지 조건            │
+│                → observation.json                            │
+│ supervisor: 라우팅 및 계층 판정                               │
+│   ├ 목표 도달 → 다음 단계                                     │
+│   ├ 구조상 도달 불가 → 정지                                   │
+│   ├ build 계층 문제 → 머신 재생성                             │
+│   ├ 우회가 반증됨 → 그 회차 변경만 철회                       │
+│   └ fault-classifier → 담당 fixer 1건 변경                    │
+│        → check_change → sync_machine → ninja                  │
 └──────────────────────────────────────────────────────────────┘
    ↓
-(verify.py 측정) → [verifier 재검증] → REAL | FORCED → 재현 키트
+verify.py 측정 → verifier 재검증 → REAL 또는 FORCED → 재현 키트
 ```
 
 ---
 
-## 실행 기록 — 필수
+## 6. 도출은 기록에 남아야 쓰인다
 
-**모든 `/sboot-rehost:rehost-*` 명령은 기록해야 한다. 기록 없이 완료 보고 금지.**
-시각은 반드시 실제 `date` 출력 (조작·추정 금지, 정직성 §6 확장).
+펌웨어당 기록은 `STATIC.md` 하나이며, static-analyzer 는 **덮어쓰지 않고 추가**한다.
 
-### 사람이 읽는 기록 — `JOURNAL.md` (`scripts/journal.sh`, append-only)
+```
+사전 도출 → STATIC.md → Build 가 읽어 머신 생성
+재도출   → STATIC.md 의 "도출된 정지점" 표 한 줄
+         → fault-classifier 가 매칭 → fixer 가 그 줄의 처방 적용
+```
 
-| 시점 | 명령 |
+**응답에만 있는 사실은 아무에게도 전달되지 않는다.** 분류기도 fixer 도 표를 읽지 에이전트의
+답변을 읽지 않는다. 메커니즘이 미확정이면 줄을 쓰지 않는다 — 근거 없는 줄은 fixer 를 잘못된
+방향으로 보낸다.
+
+---
+
+## 7. 정직성 규칙
+
+| # | 규칙 | 집행 |
+|---|---|---|
+| 1 | **추측 스텁 금지.** 특히 적응형 토글(예: "12회 읽은 뒤 값 변경"). 펌웨어를 잘못된 분기로 보내 우연한 통과로 끝난다 | `fault-classifier` 가 `unknown` 이면 재도출 |
+| 2 | **우회는 우회로 표기.** 펌웨어 패치를 정상 모델처럼 서술하지 않는다 | `check_change.sh` |
+| 3 | **모든 주소·구조·바이트열은 분석으로 도출.** 디스어셈블(capstone) 또는 실행 관찰(`qemu -d exec,int,unimp,guest_errors`) | `static-analyzer` |
+| 4 | **하드코딩을 분석처럼 표기하지 않는다.** 미확정은 "미확정 — N단계에서 확정" | 문서 검토 |
+| 5 | **도달하지 못한 지점은 그렇게 기록한다** | `verify.py` |
+| 6 | **성공 판정은 실행 증거로만.** 트레이스·콘솔·메모리 캡처. 문자열 정규식 단독은 인정하지 않는다 | `verify.py` + verifier |
+| 7 | **머신 내부에서 입력을 만들지 않는다.** 우리가 출력한 문자열을 도달로 세지 않는다 | `run_full.sh` 출력 출처 검증 (매 회차) |
+
+### 우회 기록
+
+모든 우회는 `06_machine/bypasses.md` 에 **네 항목**으로 기록한다.
+
+| 항목 | 내용 |
 |---|---|
-| 명령 시작 | `journal.sh <wd> session-start "<cmd>" "<track/target>"` |
-| 명령 완료 | `journal.sh <wd> session-end "<cmd>" "<결과>"` |
-| 회차 시작 | `journal.sh <wd> try-start "<N>" "<목표/정지점>"` |
-| 회차 완료 | `journal.sh <wd> try-end "<N>" "<원인>" "<분석>" "<해결>" "<증거>"` |
-| 단계 경계 | `journal.sh <wd> phase "<phase>"` |
-| 자동 결정 | `journal.sh <wd> decision "<지점>" "<선택>" "<근거>"` |
+| 대상 | 무엇을 바꿨는가 |
+| 이유 | 이 환경에서 왜 원본대로 동작하지 않는가 |
+| 방법 | 어떻게 바꿨는가 (주소·인코딩 포함) |
+| 부작용 | 이제 무엇이 검증되지 않는가 |
 
-### 기계가 읽는 측정치 — JSONL (`scripts/record.py`, append-only)
+**부작용 항목은 이후 실행이 정체될 때 가장 먼저 참조된다.** 형식적으로 채우면 정작 필요한
+시점에 쓸모가 없다.
 
-| 파일 | 내용 | 쓰임 |
+### 허위 통과 — 기술적 실패보다 위험하다
+
+| 수법 | 왜 통과처럼 보이나 | 왜 허위인가 |
 |---|---|---|
-| `metrics.jsonl` | **시간·토큰 등 측정 이벤트** (단계마다 그때그때) | 소요·비용 집계 |
-| `rounds.jsonl` | 회차 1건 = 1줄 (지문/분류/fixer/change_key/효과) | 정지 조건 계산 · 같은 변경 재시도 방지 · fixer 분화 근거 |
-| `blockers.jsonl` | **사실로 감지된** 하드 블로커 | LLM 이 부정할 수 없는 정지 입력값 |
-
-```
-python3 scripts/record.py <wd> start   <timer>
-python3 scripts/record.py <wd> metric  phase=Run round=12 timer=run_12 tokens_total=124300
-python3 scripts/record.py <wd> round   round=12 goal=link_up fp_far=0x… category=… effect=progress
-python3 scripts/record.py <wd> blocker code=BLOCKED_KO detail="…"
-```
+| 적응형 토글 | 드라이버가 눈에 띄게 전진 | 잘못된 분기로 보내며 다른 펌웨어에서 재현되지 않는다 (규칙 1) |
+| 머신이 프롬프트 문자열을 출력 | 로그에 프롬프트가 보인다 | 우리가 출력한 것이다 (규칙 7) |
+| 머신이 자기 수신 버퍼를 채움 | 셸이 응답한다 | 자기 자신과 대화한 것이다 |
+| 트램폴린으로 핸들러 강제 호출 | 명령 출력이 나온다 | 입력 → 디스패처 경로가 성립하지 않았다 |
 
 ---
 
-## 자율 실행 — 기본 켜짐
-
-**실행 명령(`/sboot-rehost:rehost-bootloader`·`/sboot-rehost:rehost-kernel`)은 시작하면
-끝까지 자율이다.** `AskUserQuestion` 호출 금지 — "계속할까요 / 확인해주세요" 류 질문
-자체가 규칙 위반이다. 모든 분기는 자동 결정하고 `journal.sh decision` 으로 남긴다.
-
-**예외**: `/sboot-rehost:rehost-setup` 의 트랙·등급 프롬프트는 허용 (실행 루프 중
-멈춤이 아니라 세팅 시점의 사용자 결정). 인자로 미리 주면 프롬프트 생략.
-
-### ★ 정지 정책 — "구조상 도달 불가" 만
-
-**회차 수·소요 시간은 정지 사유가 아니다.** 회차 상한이 없다. 시도할 수단이 남아
-있는 한 50 회차든 200 회차든 계속한다.
-
-| 코드 | 조건 | 감지 |
-|---|---|---|
-| `BLOCKED_CARVE` | 부트로더 이미지가 carve | static-analyzer 도출 (사실) |
-| `BLOCKED_ASSET` | 부팅 자산 없음 | 파일 체크 |
-| `BLOCKED_KO` | K3 인데 **`.ko` 부재 AND 커널 빌트인도 아님** | static-analyzer 도출 |
-| `BLOCKED_BUILD` | ninja 실패 | 빌드 결과 (추측 수정 금지) |
-| `BLOCKED_ENV` | **실행 환경 미비** (WSL 부재 · QEMU/capstone 미설치) | `check_env.sh` 선행 검사 |
-| `BLOCKED_TEE` | vold/Keymint/TEEGRIS 시큐어월드 | **수동 기록** — 자동 감지 없음, 범위 밖으로 정직 기록 |
-| `BLOCKED_STORAGE` | **트랙 1 에서 매체가 필요한 칸**(등급 C)인데 펌웨어가 파티션표 부재를 보고 | `storage_tokens.txt` 관측 (`missing`) — 트랙 경계이지 펌웨어 한계가 아니다 |
-| `EXHAUSTED` | **시도 소진** | `stop_conditions.py` |
-
-**시도 소진**은 회차 카운트가 아니라 가능한 시도의 소진이다. 셋이 **동시** 성립할 때만:
+## 8. 실행 지문
 
 ```
-(지문 정체 또는 A↔B 진동)
-AND static-analyzer 에스컬레이션이 새 사실 0
-AND 담당 fixer 전원이 "새로 시도할 변경 없음"
+실행 지문 = (최초 예외의 ESR/FAR/ELR, 마일스톤, 콘솔 바이트, 콘솔 고유 줄 수, 예외 수 자릿수)
 ```
 
-**dryness 는 마지막 한 줄이 아니라 최근 창(기본 3회차)으로 판정한다.** 한 회차의
-일시적 변화가 수십 회차의 정체를 지우면 소진은 영원히 성립하지 않는다.
+예외 핸들러가 자기 컨텍스트 저장에서 다시 폴트하면 abort 가 중첩되어 FAR 이 반복마다
+0x20 씩 증가하다가 **타임아웃이 끊은 지점**에서 멈춘다. 따라서 트레이스의 **마지막 FAR 은
+재귀의 위치이지 원인이 아니며**, 같은 정지점인데도 회차마다 값이 달라진다.
 
-**두 입력 모두 사실이어야 한다.** "새 사실 0" 은 분석가가 세는 숫자가 아니라
-`derived_facts.py` 가 **도출표에 늘어난 줄을 센 값**이다 (같은 시그니처 재도출 = 0).
-"fixer 소진" 도 **실제로 물어본 fixer 의 답**이어야 한다 — 아무도 안 부른 회차를
-전원 포기로 기록하면 소진 조건이 거짓으로 성립한다.
+그 값을 지문에 쓰면 분류기가 실재하지 않는 정지점을 지목하고, 정체 카운트가 영원히 0 이 되어
+소진·재도출·계층 재검토가 한 번도 발화하지 않는다.
 
-**정지 판정은 LLM 이 뒤집을 수 없다.** `stop=true` 인데 supervisor 가 계속을 내면
-pipeline 이 강제 정지하고 모순을 JOURNAL 에 기록한다. 매몰비용("한 번만 더")이
-정직성을 이기지 못하게 하는 장치다.
+- 원인은 `fingerprint.json` 의 `origin` (블록 전문은 `07_logs/origin_N.txt`)
+- 마지막 FAR/ELR 은 `far`/`elr` 로 따로 보존한다 — 기록이지 진단 입력이 아니다
+- 예외 수는 **자릿수**로 비교한다 (2.86M 과 2.88M 은 같은 관측)
 
-정지 산출물: 최고 마일스톤 · **최고 부팅 깊이** · 마지막 지문 · 시도한 변경 목록 ·
-**재개 안내**. `success=false`, **REAL 표기 금지.** 정지는 포기가 아니라 정직한
-인계이며 재개 가능하다.
+### 부팅 깊이
 
-`runtime_round_cap`(기본 120)은 **목표 판정이 아니라 런타임 한계**다. 도달하면
-"런타임 한계 — 재개 가능" 으로 보고하지, "도달 불가" 라고 하지 않는다.
+목표 단계가 한 칸일 때는 마일스톤이 계속 비어 있어도 실행이 전진할 수 있다.
+`best_progress.uniq`(**콘솔 고유 줄 수**)가 그 깊이를 센다. 재시도 루프가 같은 한 줄로 수백
+KB 를 출력하므로 바이트 수는 전진의 지표가 되지 못한다.
 
----
-
-## 지문은 최초 예외로 잡는다 — 정지·에스컬레이션·층판정의 입력값
-
-```
-지문 = (최초 예외의 ESR/FAR/ELR, 마일스톤, 콘솔 바이트, 콘솔 고유줄, 예외 수 자릿수)
-```
-
-핸들러가 자기 컨텍스트 세이브에서 다시 폴트하면 abort 가 중첩되어 FAR 이 매 반복
-0x20 씩 걷다가 **타임아웃이 끊은 자리**에서 멈춘다. 그래서 트레이스의 **마지막 FAR
-은 재귀의 위치이지 원인이 아니고, 같은 정지점인데도 회차마다 다르다.**
-
-그 값을 지문에 쓰면 두 가지가 동시에 죽는다 — 분류기는 실재하지 않는 정지점을
-이름 붙이고(그 처방은 매핑을 늘려도 sweep 이 옮겨갈 뿐 수렴 불가), `stall_count`
-는 영원히 0 이라 소진·에스컬레이션·층 재검토가 **한 번도 발화하지 않는다.**
-
-- 원인은 `fingerprint.json` 의 `origin` (블록 전문은 `07_logs/origin_N.txt`).
-- 마지막 FAR/ELR 은 `far`/`elr` 로 따로 보존한다 — 기록이지 진단 입력이 아니다.
-- 예외 수는 **자릿수**로 비교한다 (2.86M 과 2.88M 은 같은 관측).
-
-### 부팅 깊이 — 사다리가 한 칸일 때의 유일한 전진 신호
-
-등급 A 사다리는 `[표면]` 한 칸이라, 부팅이 PMIC 를 지나 스토리지 초기화까지 걸어가도
-`best_milestone` 은 계속 null 이다. `best_progress.uniq`(**콘솔 고유 줄 수**)가 그
-깊이를 센다. 바이트가 아니라 고유 줄인 이유는 재시도 루프가 같은 에러 한 줄로 394KB
-를 찍기 때문이다 — 그건 전진이 아니다.
-
-`timeout_bound=true` 는 **더 오래 돌리니 콘솔이 더 나왔다**는 뜻이다. 그 벽은 펌웨어가
-아니라 우리 실행 시간이므로 fixer 를 보내지 않는다.
+`timeout_bound=true` 는 **더 오래 실행하니 콘솔이 더 나왔다**는 뜻이다. 그 한계는 펌웨어가
+아니라 실행 시간이므로 fixer 를 배정하지 않는다.
 
 ### 실행되지 않은 회차는 회차가 아니다
 
-QEMU 가 시작조차 못 하면 지문은 전부 0 으로 완벽히 안정되고, 그건 정체로 읽혀
-`EXHAUSTED`(구조상 도달 불가)가 된다 — 실행된 적 없는 펌웨어에 대해서. 그래서
-`run_qemu.sh`/`run_kernel.sh` 는 종료코드와 트레이스·콘솔 0바이트를 검사해
-`run_failed` 를 세우고, 파이프라인은 그 회차에 `BLOCKED_ENV` 로 **정지**한다.
-하네스 문제를 펌웨어 판정으로 바꾸지 않기 위해서다.
-
-### 셸 도달은 autoboot 게이트를 넘는 문제다
-
-부트로더는 부팅 중 콘솔을 잠깐 폴링해 **특정 바이트 연속 입력**(대개 CR `0x0d` N회)이
-있으면 셸로, 없으면 autoboot 으로 간다. 게이트는 보통 **one-shot** 이라 그 창이 열린 동안
-그 패턴이 도착해야 하고, 못 넘기면 다른 게 다 맞아도 표면은 도달 불가다.
-
-- **연타 수 N 과 게이트 주소는 도출값**이다 — static-analyzer 가 셸 함수의 첫 `bl`(게이트)을
-  디스어셈블해 `<workdir>/input_plan.json` 에 쓴다. 벤더별 하드코딩이 아니다.
-- 입력은 `uart_harness.py` 가 **QEMU 밖에서** 넣는다 (`-serial stdio`). 게이트가 열릴 시점을
-  알 수 없으므로 창 동안 반복 시도하고, 프롬프트가 관측되면 명령을 보낸다.
-- 보낸 바이트는 전부 `07_logs/input_N.txt` 에 남는다 — 우리가 친 것과 펌웨어가 찍은 것이
-  구분돼야 한다.
-- **머신은 입력을 만들지 않는다.** RX 버퍼를 채우는 것은 chardev 콜백뿐이며, 머신이 스스로
-  채우면 `verify.py` 항목 4 가 두 표면 모두에서 불통과시킨다 (순환검증).
-- 도출 실패 시 하니스는 **문서화된 기본값(CR×3)** 을 쓰고 기본값이었다고 기록한다.
-
-### 고친 소스가 실제로 빌드되는가
-
-fixer 는 `06_machine/machine.c` 를 고치고 ninja 는 QEMU 트리의 `hw/arm/` 사본을
-빌드한다. 둘을 잇는 것이 `sync_machine.sh` 이며 **회차 적용·rebuild·general fixer
-모두 ninja 앞에 이것을 부른다.** 없으면 검문을 통과하고 빌드도 성공하는데 이전
-바이너리를 측정하게 되고, 그 회차는 "무효 변경" 으로 기록된다.
+QEMU 가 시작조차 못 하면 지문이 전부 0 으로 안정되고, 이는 정체로 읽혀 `EXHAUSTED`(구조상
+도달 불가)가 된다 — 실행된 적 없는 펌웨어에 대해서. `run_full.sh` 가 종료코드와 트레이스·콘솔
+0바이트를 검사해 `run_failed` 를 세우고, 파이프라인은 그 회차에 `BLOCKED_ENV` 로 정지한다.
 
 ---
 
-## 층 — 루프가 못 고치는 것이 있다
+## 9. 계층 — 회차로 고칠 수 없는 것
 
-fixer 는 **이미 있는 머신 소스의 한 곳**을 고친다. 머신이 **무엇을 전제로 만들어졌는지**는
-못 고친다 — `has_el3`, 진입 EL, 진입 PC, 로드/링크 주소, 메모리 골격, CPU 타입.
+fixer 는 **이미 있는 머신 소스의 한 곳**을 고친다. 머신이 **무엇을 전제로 생성됐는지**는
+고치지 못한다.
 
-| 층 | 예 | 고치는 주체 |
+| 계층 | 예 | 고치는 주체 |
 |---|---|---|
-| **loop** | 미매핑 MemoryRegion, 미처리 SMC id, 안 끝나는 폴링, 틀린 분기 | fixer (회차당 한 변경) |
-| **build** | `has_el3`, 진입 EL, 진입 PC, 로드 주소, 메모리 골격 | **rebuild — 어떤 fixer 도 못 닿는다** |
+| **loop** | 미매핑 MemoryRegion, 미처리 SMC id, 종료되지 않는 폴링, 잘못된 분기 | fixer (회차당 1건) |
+| **build** | `has_el3`, 진입 EL, 진입 PC, 스테이지 적재 주소, 메모리 골격, CPU 타입, 스킵 재지정 | **머신 재생성** |
 
-전제가 틀리면 fixer 는 증상만 처치한다. 벡터 베이스를 망가뜨리는 명령을 NOP 하는 것은,
-이미지를 틀린 EL 로 진입시킨 게 원인일 때 다음 증상을 남겨둘 뿐이다. **한 지문으로
-수십 회차를 보내는 폭주가 이렇게 생긴다.**
+전제가 틀리면 fixer 는 증상만 처치한다. 벡터 베이스를 손상시키는 명령을 NOP 으로 바꾸는 것은,
+이미지를 잘못된 EL 로 진입시킨 것이 원인일 때 다음 증상을 남겨둘 뿐이다.
 
-`futile_changes`(변경했는데 지문 불변)가 임계를 넘으면 `needs_layer_review` 가 서고,
-supervisor 는 **라우팅 전에 머신 소스를 읽고 층을 판정**한다. Build 층이면 `rebuild` 로
-구체적 전제 수정을 지정한다. 같은 `change_key` 의 재시도는 거부된다 — rebuild 가 무한
-공급이면 소진이 성립할 수 없기 때문이다.
+효과 없는 변경(변경했으나 지문 불변)이 임계를 넘으면 `needs_layer_review` 가 서고,
+supervisor 는 라우팅 전에 머신 소스와 `stage_map.json` 을 읽어 계층을 판정한다.
 
-## 정직성 규칙 7 항 (어기는 변경은 무효)
-
-1. **추측 stub 금지.** 특히 적응형 토글 (예: "12회 read=0, 그 뒤 0xFFFFFFFF 교대").
-   펌웨어를 잘못된 분기로 보내 "우연한 통과" 로 끝난다.
-2. **우회는 우회로 명시.** 펌웨어 패치를 정상 모델처럼 표현 금지. 매 우회는
-   `[대상 / 이유 / 방법 / 부작용]` 4 항으로 문서화 (`06_machine/bypasses.md`).
-3. **모든 주소·구조·바이트열은 분석으로 도출.** 도구는 둘뿐 —
-   디스어셈블(capstone) / 실행관찰(`qemu -d exec,int,unimp,guest_errors`).
-4. **하드코딩을 분석처럼 위장 금지.** 미확정은 "미확정 — N단계에서 확정" 으로.
-5. **못 간 지점은 못 갔다고 기록.** 가짜 통과 금지.
-6. **성공은 실제 트레이스/콘솔/메모리 캡처로만 판정.** 문자열 regex 단독 = 불인정.
-7. **머신 안 입력 자가주입 금지.** 우리가 찍은 문자열을 도달로 세지 않는다.
-
-### 집행 주체 (규칙은 프롬프트 권고가 아니라 구조)
-
-| 규칙 | 집행 |
-|---|---|
-| 자가주입 금지 (§7) | `run_*.sh` **출처 게이트** — 매 회차 자동 |
-| 실증거로만 판정 (§6) | `verify.py` 측정 + verifier 비대칭 override |
-| 추측 stub 금지 (§1) | `fault-classifier` `unknown` → `static-analyzer` 도출 |
-| 회차 = 한 변경 | `check_change.sh` diff 검문 |
-| 우회 4항목 | `check_change.sh` (없으면 되돌림) |
-| pre-image 검증 | `patch_kernel.py` (불일치면 적용 거부) |
-| 무한 루프 금지 | `stop_conditions.py` |
-| 값 차용 금지 | `static-analyzer` (모든 값에 이 펌웨어 근거) |
+**진입 EL 은 스테이지 자신이 정한다.** 진입 스텁이 쓰는 `vbar_el*` 가 그 스테이지가 기대하는
+EL 이다. 어느 쪽으로든 기본값을 두면 조용히 잘못된 EL 로 진입한다.
 
 ---
 
-## 검증 5/5 — 2 단, 방향 비대칭
+## 10. 정지 조건
+
+**회차 수와 소요 시간은 정지 사유가 아니다.** 시도할 수단이 남아 있는 한 계속한다.
+
+| 코드 | 조건 | 감지 |
+|---|---|---|
+| `BLOCKED_VERSION` | 세션이 로드한 플러그인이 최신이 아님 | `check_version.sh` (첫 게이트) |
+| `BLOCKED_ENV` | 실행 환경 미비 (WSL·QEMU·ninja·capstone) | `check_env.sh` |
+| `BLOCKED_ARCH` | 해당 아키텍처의 진입 스텁 시그니처 미정의 (현재 arm32) | `stage_map.py` 종료코드 3 |
+| `BLOCKED_CARVE` | 컨테이너가 부분 추출 | static-analyzer 도출 |
+| `BLOCKED_NO_INPUT_PATH` | 어느 표면에도 입력 경로 없음 | static-analyzer 도출 |
+| `BLOCKED_ASSET` | F2 이상인데 커널 자산 없음 (F1 로 낮추면 진행 가능) | 파일 확인 |
+| `BLOCKED_KO` | `.ko` 부재이고 커널 빌트인도 아님 | static-analyzer 도출 |
+| `BLOCKED_BUILD` | ninja 실패 | 빌드 결과 |
+| `BLOCKED_TEE` | 시큐어월드 (TEE) | 수동 기록 — 설계상 범위 밖 |
+| `EXHAUSTED` | 시도 소진 | `stop_conditions.py` |
+
+### 시도 소진
+
+회차 수가 아니라 **가능한 시도의 소진**이며, 셋이 동시에 성립할 때만 인정한다.
 
 ```
-1 단계 (스크립트)  verify.py → verdict_script.json      ← 측정
-2 단계 (verifier)  원시 로그·바이트로 재검증            ← 최종 판정
+(지문 정체 또는 A↔B 진동)
+AND static-analyzer 재도출에서 새 사실 0
+AND 담당 fixer 전원이 "시도할 변경 없음"
+```
+
+- 정체 여부는 마지막 한 회차가 아니라 **최근 창(기본 3회차)** 으로 판정한다.
+- "새 사실 0" 은 분석가의 자기 신고가 아니라 `derived_facts.py` 가 **도출표에 늘어난 줄을
+  센 값**이다.
+- "fixer 소진" 도 **실제로 질의한 fixer 의 답변**이어야 한다.
+
+**정지 판정은 에이전트가 뒤집을 수 없다.** `stop=true` 인데 supervisor 가 계속을 지시하면
+파이프라인이 강제 정지하고 모순을 기록한다.
+
+정지 시 `RESUME.md` 가 자동 생성된다: 도달 지점, 마지막 지문, 시도한 변경과 각각의 효과,
+아직 시도하지 않은 수단, 재개 명령. **정지는 중단이 아니라 인계이며 재개 가능하다.**
+
+`runtime_round_cap`(기본 120)은 목표 판정이 아니라 런타임 한계다.
+
+---
+
+## 11. 검증 (6항목)
+
+```
+1단계  verify.py       → verdict_script.json    (측정)
+2단계  verifier 에이전트 → 원시 로그·바이트 재검증  (최종 판정)
 ```
 
 | 방향 | 규칙 |
 |---|---|
-| **낮추기** REAL→FORCED | verifier 가 **무조건 우선.** 의심스러우면 낮춘다 |
-| **올리기** FORCED→REAL | **byte-level 증거를 제시할 때만.** 못 대면 스크립트 판정 유지 |
-
-**5/5 = REAL. 4/5 이하 = FORCED (성공 표시 금지).** 부분 점수 없음.
-
-### 트랙 1 (Table G)
+| 낮추기 (REAL → FORCED) | verifier 판단이 우선. 의심스러우면 낮춘다 |
+| 올리기 (FORCED → REAL) | 바이트 수준 증거를 제시할 때만 |
 
 | # | 항목 | 통과 조건 |
 |---|---|---|
-| 1 | PC 트레이스 | shell 함수 + exec_command 진입 PC 가 `-d in_asm` 로그에 등장 |
-| 2 | 출력 byte-match | 콘솔 출력 모든 토큰이 BL3 binary 에 file offset 으로 존재 |
-| 3 | 소스 negative | 머신 C 소스에 동일 출력 문자열 0 개 |
-| 4 | UART 단일 경로 + 외부 입력 | 출력 호출 1 자리 **AND** 머신이 RX 를 스스로 채우지 않음 |
-| 5 | 우회 목록 | `[대상/이유/방법/부작용]` 4 항으로 N 개 우회 기재 |
+| 1 | 체인 실행 트레이스 | 스테이지 진입 PC 가 `-d in_asm` 로그에 **순서대로** 등장 + 커널 진입 |
+| 2 | 출력 바이트 대조 | 콘솔 토큰이 펌웨어 바이너리에 파일 오프셋으로 존재 |
+| 3 | 소스 반증 | 머신 C 소스에 동일 출력 문자열 0개 |
+| 4 | 검증 양방향 | 정상 이미지 통과 **그리고** 1바이트 훼손 시 실패 |
+| 5 | 스토리지 이중 구동 | 같은 모델을 부트로더 드라이버와 커널 드라이버가 **둘 다** 구동 |
+| 6 | 우회 기록 | 네 항목으로 전부 기재 |
 
-### 트랙 2
+**6/6 만 REAL. 5/6 이하는 FORCED.** 부분 점수는 없다.
 
-| # | 항목 | 통과 조건 |
-|---|---|---|
-| 1 | 부팅 진행 | `Run /init` (K1) 이 콘솔·트레이스에 등장 |
-| 2 | 커널 메시지 증거 | `erofs: (device dm-N): mounted` (K2) / `sda: sda1…`·`Power mode change` (K3) — **머신 아닌 커널이 찍은 줄** |
-| 3 | 소스 negative | 머신 C 에 그 마운트/파티션 문자열 0 개 |
-| 4 | 드라이버 진짜 구동 (K3) | 트랜잭션 로그에 UTRD/Query/SCSI, `.ko` 는 원본 + 문서화된 우회만 |
-| 5 | 우회 목록 | 커널 패치 + `.ko` 패치 + SMC shim 전부 4 항목 |
+항목 4 가 중요한 이유: **항상 통과하는 검증기는 항상 통과하는 스텁과 구별되지 않는다.**
+훼손된 이미지가 실패해야 검증이 실제로 수행됐다는 증거가 된다.
 
-**K3 = 트랙 2 의 핵심 — "컨트롤러를 구현하면서 리호스팅".** 목표는 rootfs 마운트가 아니라
-**진짜 벤더 UFS 컨트롤러를 실제로 구동시키는 것**이고, 마일스톤은 그 완성도의 눈금이다.
+항목 5 가 중요한 이유: 스토리지 모델을 한 드라이버에 맞추면 다른 드라이버에서 깨진다.
+두 드라이버가 같은 모델을 구동한다는 사실 자체가 검증 장치다.
 
-| 단계 | 마일스톤 | 뜻 |
-|---|---|---|
-| — | `link_up` → `power_mode` → `scsi_attach` | 진행 중 (컨트롤러 미완성) |
-| **K3a** | **`partitions_up`** (`sda: sda1…`) | **최소 완료** — 커널이 파티션을 열거 |
-| **K3b** | `super_mounted` | **최종 단계 = 완전한 UFS 컨트롤러** |
+`.ko` 부재는 불가를 뜻하지 않는다. 벤더 드라이버가 커널에 빌트인(`CONFIG_SCSI_UFS_*=y`)이면
+`.ko` 는 설계상 존재하지 않으며, 빌트인 드라이버가 모델을 구동한다.
 
-**`partitions_up` 미도달 = UFS 컨트롤러 미완성.** 최고 마일스톤을 "미완" 으로 정직 보고하고
-success·REAL 금지.
+---
 
-**최종 단계는 토폴로지가 정한다.** `super.img`(dm-linear, 보통 EROFS)가 있는 펌웨어만
-`super_mounted` 에 도달할 수 있다. system/vendor 가 분리된 raw(ext4) 펌웨어는 구조상 그 줄을
-찍을 수 없으므로 **K3a 가 완료**이며, 사다리에 최종 단계를 넣지 않는다(`has_super`).
+## 12. 기록
 
-### ★ `.ko` 부재 ≠ K3 불가 (K3\*)
+모든 실행은 기록한다. **기록 없이 완료 보고를 하지 않는다.**
+시각은 반드시 실제 `date` 출력을 사용한다.
 
-벤더 드라이버가 커널에 빌트인(`CONFIG_SCSI_UFS_*=y`)이면 `.ko` 는 **설계상 존재하지 않는다.**
-그래도 진짜 벤더 드라이버는 커널 안에 있고, HCI 를 모델링하면 그 드라이버가 구동한다.
+### 사람이 읽는 기록 — `JOURNAL.md` (`scripts/journal.sh`, 추가 전용)
 
-| 사실 | 판정 |
+| 시점 | 명령 |
 |---|---|
-| 벤더 `.ko` 있음 | **K3** — 진짜 모듈 로드 |
-| `.ko` 없지만 `Image` 에 드라이버 심볼·문자열 있음 | **K3\*** — 빌트인 드라이버가 모델을 구동 |
-| `.ko` 없고 `Image` 에도 없음 | **`BLOCKED_KO`** — 진짜 도달 불가 |
+| 명령 시작·완료 | `session-start` / `session-end` |
+| 회차 시작·완료 | `try-start` / `try-end` |
+| 단계 경계 | `phase` |
+| 자동 결정 | `decision` |
+| **사용자 입력 원문** | `prompt` |
+| **시도 전 가설** | `hypothesis` |
+| **정지점 해결 경위** | `resolution` |
 
-`.ko` 부재만 보고 블로커를 내면 **도달 가능한 실행을 거부**하는 것이다.
+사용자 입력은 **요약하지 않고 원문 그대로** 남긴다. 실행이 멈췄을 때 어떤 지시로 그 방향을
+택했는지가 가장 먼저 사라지는 정보이며, 요약된 지시는 지시가 아니다.
+틀린 가설도 지우지 않는다 — 무엇을 배제했는지가 기록이다.
 
----
+### 기계가 읽는 기록 (`scripts/record.py`, 추가 전용)
 
-## 회차 기록 형식 (PROGRESS.md)
+| 파일 | 내용 |
+|---|---|
+| `metrics.jsonl` | 시간·토큰 측정 이벤트 |
+| `rounds.jsonl` | 회차 1건 = 1줄 (지문·분류·fixer·변경키·효과·**변경 사유**) |
+| `blockers.jsonl` | 관측으로 확인된 하드 블로커 |
+| `prompts.jsonl` | 사용자 입력 원문 |
+| `resolutions.jsonl` | 정지점 해결 경위 |
 
-```
-| run N | <정지점 신호> | <한 변경> |
-```
-
-한 회차 = 한 변경 = 한 줄. 여러 변경 묶기 금지 — `check_change.sh` 가 diff 로 막는다.
-
----
-
-## 사용 가능한 슬래시 명령
-
-- **`/sboot-rehost:rehost-init`** — 설치 후 1회. `rehost_workspaces/` + `_inbox/` 생성 + 의존성 설치.
-- **`/sboot-rehost:rehost-setup <이름>`** — `_inbox/` 펌웨어 자동 인식 + 격리 워크스페이스
-  생성(★ 덮어쓰기 금지) + 언팩·WSL 이동 + 트랙·등급 프롬프트 → INPUT.md + `.active`.
-- **`/sboot-rehost:rehost-bootloader`** — 트랙 1 실행 → `pipeline.js({track: 1})`.
-  S-Boot·LK·aboot 등 **벤더 구현체가 달라도 같은 단계이므로 같은 명령**이다.
-- **`/sboot-rehost:rehost-kernel`** — 트랙 2 실행 → `pipeline.js({track: 2})`
-- **`/sboot-rehost:rehost-status`** — 워크스페이스 목록 + 진행/검증/정지 요약
-- **`/sboot-rehost:rehost-export`** — **목표 완료 확인 후** "빌드 없이 실행" 키트 조립 →
-  `rehost_exports/<model>_<build>/track<N>/`. ★ 항상 gitignore, 미완이면 export 금지.
-
-흐름: **install → `rehost-init` → `_inbox/` 드롭 → `rehost-setup <이름>` →
-`rehost-bootloader`|`rehost-kernel`(자율) → (완료) `rehost-export`**.
+**fixer 를 지정한 회차는 `rationale`(변경 사유)이 필수다.** 없으면 `rationale_missing` 으로
+표시된다. 사유가 없는 회차는 나중에 무엇을 왜 바꿨는지 되짚을 수 없다.
 
 ---
 
-## 작업 디렉터리 구조
+## 13. 자율 실행
 
-```
-<cwd>/rehost_workspaces/          ← 작업 루트 (Windows cwd 밑)
-├── _inbox/                       ← 펌웨어 드롭
-├── .active                       ← 실행 기본 대상 id
-└── <id>/  (= <workdir>)
-    ├── INPUT.md                   0차 입력 (track 슬롯 포함)
-    ├── PROGRESS.md                회차 한 줄 이력 (사람)
-    ├── JOURNAL.md                 ★ 세션·시행착오 기록 (사람, append-only)
-    ├── metrics.jsonl              ★ 시간·토큰 측정 (기계)
-    ├── rounds.jsonl               ★ 회차 지문/분류/fixer/효과 (기계)
-    ├── blockers.jsonl             ★ 사실 하드 블로커 (기계)
-    ├── fingerprint.json           마지막 회차 지문 (run 스크립트 원시 관측)
-    ├── observation.json           마지막 회차 관측 문서 (지문 + 정지 조건 병합)
-    ├── verdict_script.json        5/5 스크립트 1차 측정
-    ├── VERIFICATION.md            verifier 2차 최종 판정
-    ├── 06_machine/                machine 소스 + bypasses.md
-    ├── input_plan.json            autoboot 게이트 입력 패턴 (도출, 없으면 기본값)
-    ├── input_summary.json         마지막 회차 입력 경로 결과 (프롬프트 관측·읽힌 바이트)
-    ├── storage_tokens.txt         파티션표 가용성 판정 문자열 (도출, 없으면 unknown)
-    ├── ANALYSIS.md                실행 분석 — 소요·비용·정체 구간·원인 (analyze_run.py)
-    ├── analysis.json              위 분석의 수치 (기계)
-    ├── 07_logs/                   회차별 콘솔 + 요약 + origin_N.txt + input_N.txt
-    ├── 08_docs/                   분석 메모 · static_archive.md (이관된 도출 근거)
-    │                              (+ .record/ 타이머 · rounds/N/ 회차별 소스 스냅샷)
-    ├── 10_reproduce/              재현 키트
-    ├── (트랙 1) STATIC.md · milestone_tokens.txt · 01_firmware/ 02_unpacked/
-    │            03_bootloader/ 04_static-analysis/
-    └── (트랙 2) KERNEL_STATIC.md · fw/ (Image.patched, *.dtb, initramfs, super)
+실행 명령은 시작하면 끝까지 자율이다. `AskUserQuestion` 을 호출하지 않는다.
+모든 분기는 자동 결정하고 `journal.sh decision` 으로 남긴다.
 
-WSL ext4 (대용량):
-  ~/rehost/<id>/       펌웨어 실행 사본
-  ~/rehost/_traces/    회차별 전체 `-d` 트레이스
-```
-
-**기록 위치 원칙**: 사용자가 보는 기록·해결과정은 **로컬 Windows cwd**,
-대용량 쓰기(실행 사본·전체 트레이스)는 **WSL ext4**.
-
-**세션은 어느 쪽에서 띄워도 된다.** WSL 안에서 띄우면 그대로 돌고, Windows 에서 띄우면
-`scripts/*` 의 `wsl_bridge.sh` 가드가 `wsl.exe -e` 로 건너간다 (`-e` 는 argv 를 그대로
-넘기므로 인용 계층이 늘지 않는다). 파일 배치는 두 경우 모두 같다 — 폴더·문서는 Windows,
-실행·트레이스는 WSL.
+예외: `rehost-setup` 의 등급 선택은 실행 루프 중 중단이 아니라 설정 시점의 사용자 결정이므로
+허용한다. 인자로 미리 주면 생략된다.
 
 ---
 
-## 사용자 의도 파악
+## 14. 명령
 
-- "다시 검증해줘 / 진짜야?" → `verifier` 즉시 호출 (필요하면 `verify.py` 부터)
-- "방향 맞아?" → `stop_conditions.py` 결과 + `rounds.jsonl` 분류 분포로 사실 보고
-- "9820 / 다른 분석가 자료 참고" → `methodology/worked_example.md` 재읽기
+| 명령 | 역할 |
+|---|---|
+| `/sboot-rehost:rehost-init` | 설치 후 1회. 작업 폴더 생성 + 의존성 설치 |
+| `/sboot-rehost:rehost-setup <이름>` | 펌웨어 인식 + 워크스페이스 생성 + `INPUT.md` 작성 |
+| **`/sboot-rehost:rehost-full`** | **통합 체인 실행** → `pipeline.js({target: 'F1'\|'F2'\|'F3'})` |
+| `/sboot-rehost:rehost-status` | 진행·검증·정지 요약 |
+| `/sboot-rehost:rehost-export` | 완료 확인 후 재현 키트 조립 |
 
-사용자가 명시적으로 다른 명령을 주지 않는 한 실행 명령(트랙 1 `/sboot-rehost:rehost-bootloader`,
-트랙 2 `/sboot-rehost:rehost-kernel`)의 파이프라인을 따른다.
+흐름: `rehost-init` → `_inbox/` 에 펌웨어 배치 → `rehost-setup` → `rehost-full` → `rehost-export`
+
+> `rehost-bootloader` 와 `rehost-kernel` 은 v0.19.0 에서 `rehost-full` 로 대체됐다.
+> 두 명령은 안내만 하고 종료한다.
+
+---
+
+## 15. 작업 디렉터리
+
+```
+<cwd>/rehost_workspaces/
+├── _inbox/                      펌웨어 배치 위치
+├── .active                      기본 대상 id
+└── <id>/
+    ├── INPUT.md                 입력 슬롯
+    ├── STATIC.md                도출 기록 (추가 전용)
+    ├── stage_map.json           스테이지 지도 (도출)
+    ├── PROGRESS.md              회차 이력 (사람)
+    ├── JOURNAL.md               세션·경위 기록 (사람, 추가 전용)
+    ├── RESUME.md                정지 시 인계 문서 (자동 생성)
+    ├── metrics/rounds/blockers/prompts/resolutions.jsonl
+    ├── fingerprint.json         마지막 회차 지문
+    ├── observation.json         마지막 회차 관측 문서
+    ├── verdict_script.json      6항목 측정
+    ├── VERIFICATION.md          verifier 최종 판정
+    ├── ANALYSIS.md              소요·비용·해결 경위 분석
+    ├── milestone_tokens.txt     목표 단계별 관측 문자열 (도출)
+    ├── input_plan.json          입력 게이트 패턴 (도출)
+    ├── lu_manifest.json         매체 파티션 구성 (도출)
+    ├── 06_machine/              머신 소스 + bypasses.md
+    ├── 07_logs/                 회차별 콘솔·요약·최초 예외·입력 로그
+    ├── 08_docs/                 분석 메모
+    ├── fw/                      부팅 자산 + 합성 매체 (lu0.img)
+    └── 10_reproduce/            재현 키트
+```
+
+대용량 쓰기(실행 사본·전체 트레이스)는 WSL ext4 에, 사용자가 읽는 문서는 로컬에 둔다.
+세션은 어느 쪽에서 시작해도 되며, `wsl_bridge.sh` 가 필요할 때 전환한다.
+
+---
+
+## 16. 회차 기록 형식 (`PROGRESS.md`)
+
+```
+| run N | <정지점 신호> | <변경 1건> |
+```
+
+회차 1건 = 변경 1건 = 1줄. 여러 변경을 묶지 않는다 (`check_change.sh` 가 diff 로 검사).
