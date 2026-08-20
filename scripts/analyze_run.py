@@ -255,6 +255,10 @@ def annotate_rounds(rounds, metrics):
             "fixer": row.get("fixer"),
             "change_key": row.get("change_key"),
             "effect": row.get("effect"),
+            # Why that change. Carried through so the report can separate a round
+            # that was reasoned about from one that merely happened.
+            "rationale": row.get("rationale"),
+            "rationale_missing": row.get("rationale_missing"),
             "analyst_new_facts": row.get("analyst_new_facts"),
             "fixer_no_new_change": row.get("fixer_no_new_change"),
             "origin_esr": row.get("fp_origin_esr"),
@@ -569,6 +573,8 @@ def render(workdir, data):
     if data["best_milestone"]:
         add(f"| 도달한 최고 마일스톤 | {cell(data['best_milestone'])} |")
     add(f"| 최고 부팅 깊이 | 콘솔 고유 {thousands(data['best_uniq'])} 줄 |")
+    if data.get("prompts"):
+        add(f"| 기록된 사용자 지시 | {len(data['prompts'])}건 |")
     add("")
 
     # 2
@@ -744,7 +750,56 @@ def render(workdir, data):
         add("귀속할 만한 사건이 기록에 없습니다.\n")
 
     # 11
-    add("## 11. 기록의 한계\n")
+    add("## 11. 해결 타임라인 — 무엇을 어떻게 풀었나\n")
+    add("정지점마다 무엇을 시도했고 무엇이 통했는지입니다. 입력은 `resolutions.jsonl` 과 "
+        "`rounds.jsonl` 의 `rationale` 이며, **기록되지 않은 해결은 없는 것과 같으므로** "
+        "둘 다 비어 있으면 이 절도 비어 있는 것이 정상입니다.\n")
+
+    add("### 11.1 풀린 정지점\n")
+    if data["resolutions"]:
+        add("| 정지점 | 시도 | 해결 | 근거 | 회차 |")
+        add("|---|---|---|---|---|")
+        for r in data["resolutions"]:
+            add(f"| {cell(r.get('stop'), 28)} | {cell(r.get('tried'), 40)} | "
+                f"{cell(r.get('fix'), 50)} | {cell(r.get('evidence'), 30)} | "
+                f"{cell(r.get('rounds'), 12)} |")
+    else:
+        add("`resolutions.jsonl` 에 기록이 없습니다. 정지점이 풀렸더라도 "
+            "**경위가 남지 않아** 다음 펌웨어에 재사용할 수 없습니다.")
+    add("")
+
+    named = [r for r in annotated if r["fixer"] and r["fixer"] != "없음"]
+    explained = [r for r in named if r.get("rationale")]
+    add("### 11.2 회차별 이유 기록률\n")
+    add("| 항목 | 값 |")
+    add("|---|---|")
+    add(f"| fixer 를 지명한 회차 | {len(named)}회 |")
+    add(f"| 그중 이유가 기록된 회차 | {len(explained)}회 ({pct(len(explained), len(named))}) |")
+    add("")
+    if named and len(explained) < len(named):
+        add(f"> ⚠ **{len(named) - len(explained)}회차의 변경 이유가 없습니다.** 그 회차들은 "
+            "무엇을 왜 바꿨는지 되짚을 수 없어, 같은 정지점을 다시 만났을 때 처음부터 "
+            "다시 판단해야 합니다.")
+        add("")
+
+    add("### 11.3 이유가 기록된 회차\n")
+    if explained:
+        add("| 회차 | 정지점 | 적용한 변경 | 관측 변화 | 이유 |")
+        add("|---|---|---|---|---|")
+        ordered = sorted(explained, key=lambda r: (r["moved_fingerprint"] is not True,))
+        for row in ordered:
+            moved = {True: "바뀜", False: "불변", None: "-"}[row["moved_fingerprint"]]
+            add(f"| {row['label']} | {cell(row['category'], 26)} | "
+                f"{cell(row['change_key'], 38)} | {moved} | {cell(row.get('rationale'), 60)} |")
+        add("")
+        add("- **관측 변화가 `바뀜` 인 행이 실제로 통한 처방**입니다. 다음 펌웨어에서 같은 "
+            "정지점을 만나면 여기부터 봅니다.")
+        add("- `불변` 인데 이유가 그럴듯했다면, 그 이유가 틀렸다는 기록입니다. 지우지 마십시오.")
+    else:
+        add("이유가 기록된 회차가 없습니다.")
+    add("")
+
+    add("## 12. 기록의 한계\n")
     for note in data["caveats"]:
         add(f"- {note}")
     add("")
@@ -759,7 +814,10 @@ def render(workdir, data):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("workdir")
-    parser.add_argument("--track", type=int, choices=(1, 2), default=None)
+    # Accepted and ignored: the track number is read from INPUT.md like every
+    # other slot. Kept so a caller written for the two-track era still runs, and
+    # unconstrained so the unified flow (which has no track) does not crash here.
+    parser.add_argument("--track", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--top", type=int, default=10,
                         help="how many entries the ranked tables show")
     args = parser.parse_args()
@@ -768,6 +826,8 @@ def main():
     rounds = read_jsonl(os.path.join(workdir, "rounds.jsonl"))
     metrics = read_jsonl(os.path.join(workdir, "metrics.jsonl"))
     blockers = read_jsonl(os.path.join(workdir, "blockers.jsonl"))
+    resolutions = read_jsonl(os.path.join(workdir, "resolutions.jsonl"))
+    prompts = read_jsonl(os.path.join(workdir, "prompts.jsonl"))
     verdict = read_json(os.path.join(workdir, "verdict_script.json"))
 
     series = split_series(rounds)
@@ -814,6 +874,8 @@ def main():
         "by_category": sorted(by_category.items(), key=lambda kv: -kv[1]["seconds"]),
         "by_fixer": sorted(by_fixer.items(), key=lambda kv: -kv[1]["count"]),
         "blockers": blockers,
+        "resolutions": resolutions,
+        "prompts": prompts,
         "verdict": verdict,
         "total_seconds": total_seconds,
         "total_tokens": total_tokens,

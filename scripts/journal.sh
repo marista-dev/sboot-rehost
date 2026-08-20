@@ -12,6 +12,14 @@
 #   journal.sh <workdir> phase "<phase-name>"        # 단계 경계 표시
 #   journal.sh <workdir> decision "<지점>" "<선택>" "<근거>"   # 자율 자동결정
 #   journal.sh <workdir> note  "<message>"
+#
+# 멈췄을 때 되짚기 위한 3 종 (기계 판독본은 record.py 의 prompts/resolutions.jsonl):
+#   journal.sh <workdir> prompt "<사용자 입력 원문>" ["<phase>"] ["<round>"]
+#       사용자가 실제로 친 것을 **요약하지 않고** 그대로 남긴다. 여러 줄 가능.
+#   journal.sh <workdir> hypothesis "<가설>" "<검증 방법>"
+#       시도 전에 남긴다. 틀린 가설도 지우지 않는다 — 무엇을 배제했는지가 기록이다.
+#   journal.sh <workdir> resolution "<정지점>" "<시도들>" "<해결>" "<근거>"
+#       정지점이 풀린 경위. 해결만 남기면 왜 그게 통했는지가 사라진다.
 set -e
 WD="$1"; OP="$2"; shift 2 2>/dev/null || { echo "usage: journal.sh <workdir> <op> ..." >&2; exit 1; }
 [ -n "$WD" ] || { echo "journal: workdir 필요" >&2; exit 1; }
@@ -51,5 +59,23 @@ case "$OP" in
     echo "journal: decision '${1:-}' → '${2:-}'";;
   note)
     init; echo "  - 메모($(now)): ${1:-}" >> "$J"; echo "journal: note";;
+  prompt)
+    # 원문 그대로. 요약하면 왜 그 방향으로 틀었는지가 사라진다.
+    # 펜스 블록에 넣는 이유: 프롬프트 안의 마크다운·별표·백틱이 문서를 망가뜨리지 않게.
+    init
+    { echo "  - **[PROMPT]** $(now)${2:+  phase=$2}${3:+ round=$3}"
+      echo '    ```text'
+      printf '%s\n' "${1:-}" | sed 's/^/    /'
+      echo '    ```'; } >> "$J"
+    echo "journal: prompt @ $(now)";;
+  hypothesis)
+    init
+    { echo "  - 가설($(now)): ${1:-}"; echo "    - 검증 방법: ${2:-}"; } >> "$J"
+    echo "journal: hypothesis";;
+  resolution)
+    init
+    { echo "  - **[RESOLVED]** ${1:-} — $(now)"
+      echo "    - 시도: ${2:-}"; echo "    - 해결: ${3:-}"; echo "    - 근거: ${4:-}"; } >> "$J"
+    echo "journal: resolution '${1:-}'";;
   *) echo "journal: unknown op '$OP'" >&2; exit 1;;
 esac
