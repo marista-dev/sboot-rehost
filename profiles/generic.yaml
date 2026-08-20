@@ -1,41 +1,108 @@
-# profiles/generic.yaml - SoC profile (defaults).
+# profiles/generic.yaml - chain profile (defaults).
 #
-# A profile carries **hints about where to look**, never values.
-# Real addresses and offsets are always derived from the target firmware
-# (honesty rule 1, never borrow).
+# A profile carries **hints about where to look**, never values. Real addresses
+# and offsets are always derived from the target firmware (honesty rule 1).
 #
-# Supporting a new SoC means copying this file and adjusting the hints.
-# The agent prompts stay untouched.
+# Supporting a new SoC means copying this file and adjusting the hints. The
+# agent prompts and the pipeline stay untouched.
+#
+# The unified flow rehosts ONE chain: first stage -> ... -> bootloader -> kernel.
+# There is no track split, so this file is organised by chain position rather
+# than by track.
 
 name: generic
 description: default search hints for an unknown or unprofiled target
 
-bootloader:            # track 1
-  # ASCII worth looking for when judging whether a BL3 is full.
-  # Their absence alone does not prove a carve.
-  known_strings: ["S-BOOT", "autoboot", "Following commands", "help", "reset"]
-  # Alignment and range for the entry candidate sweep
-  entry_align: 0x1000
-  entry_scan_limit: 0x300000
-  # Prompt candidates - the starting point for the shell function xref
-  prompt_candidates: ["S-BOOT # ", "# ", "> "]
+chain:
+  # How many stages a container holds, what they are called and where they load
+  # are all DERIVED - scripts/stage_map.py does it. These keys only say what
+  # shape to expect while doing that.
+  container_format: unknown        # unknown | flat | toc | vendor_header
+  container_notes:
+    - file offset 0 is often a header, not code; entering there executes header
+      bytes as instructions and traps on the first word
+    - if a segment table exists, parse it; if not, fall back to the entropy grid
+      and the entry-stub scan
 
-kernel:                # track 2
-  # Which DTB nodes to read - what to look for, not where it is
+  entry_stub:
+    # The signature that marks "a new stage starts here".
+    arm64: >
+      reset stub shape: a short branch, an `adr` that loads the vector table,
+      `mrs xN, currentel`, then `msr vbar_el{1,2,3}` on the branch for that
+      level. A bare `mrs currentel; ret` is a getter, NOT a stage boundary.
+    arm32: >
+      NOT DEFINED. AArch32 has no CurrentEL, so the arm64 signature finds
+      nothing and "no stages" would be a false observation. stage_map.py exits 3
+      and the caller must stop with BLOCKED_ARCH.
+
+  handoff_surface: >
+    What the previous stage leaves behind. Derive it, do not assume: look for
+    absolute loads the entry code performs BEFORE it writes anything. Classify
+    each as (a) a hardware register - which the machine models anyway, or (b) a
+    memory word the previous stage wrote - which only matters if that stage is
+    skipped. Only (b) constrains what may be skipped.
+
+  skip_policy: >
+    A stage that cannot execute (encrypted, or absent from the package) is
+    skipped by redirecting the previous stage's entry to the next executable
+    stage. Skipping is legitimate only when the stages after it read no memory
+    the skipped stage wrote (see handoff_surface). Never synthesise a value to
+    stand in for a skipped stage - that is honesty rule 1.
+
+# Keyword sets used by scripts/stage_map.py to name a region from what it says
+# about itself. One line per stage kind, flow-style list.
+stage_hints:
+  first_stage: ["loading", "rx done", "header fail", "preloader", "bl1", "epbl"]
+  dram_init: ["dmc", "dram", "mif", "lpddr", "ddr", "training", "leveling"]
+  bootloader: ["autoboot", "following commands", "fastboot", "boot linux", "board_"]
+  secure_os: ["teegris", "sec_os", "trusty", "tzsw", "secure os"]
+  el3_monitor: ["runtime service", "smc_handler", "esr_el1", "synchronous exception"]
+  crypto: ["cryptomanager", "crypto_operation", "rpmb", "aes", "sha256"]
+  power_fw: ["enter_wfi", "nvic", "acpm", "dvfs", "hotplug"]
+
+surface:
+  # The interactive surface is DERIVED before any goal is set. A command table
+  # that no dispatcher walks is an island, not a surface.
+  candidates: ["shell", "fastboot"]
+  prompt_candidates: ["S-BOOT # ", "# ", "> "]
+  notes:
+    - check the UART driver for a receive path (RBR read / rx polling) before
+      assuming a shell exists
+    - an output-only UART cannot carry a shell no matter what strings exist
+
+verified_boot:
+  # Where the bootloader's own verification lives, and what it verifies against.
+  keywords: [avb, vbmeta, libavb, hashtree, rollback, keystorage, "public key"]
+  notes:
+    - if the hash/RSA implementation is software inside the bootloader, TCG runs
+      it as-is and no crypto accelerator model is needed
+    - the image is genuinely signed, so verification is expected to PASS without
+      patching; a patch here means the model is wrong, not the firmware
+
+boot_medium:
+  hci_kind: unknown                # ufs | emmc | nvme - confirm from the DTB
+  block_size_candidates: [4096, 512]
+  dme_opcode: { get: 0x01, set: 0x02, peer_get: 0x03, peer_set: 0x04 }
+  notes:
+    - the first stage usually reads a partition table itself; an "EFI PART"
+      magic built by MOVZ/MOVK is direct evidence it parses GPT
+    - the SAME controller is driven by the bootloader and later by the kernel,
+      so one model is exercised twice - a model fitted to one will break on the
+      other, which is the point
+
+kernel:
   dtb_nodes:
     cmdline: /chosen
     cpus: /cpus
     memory: /memory
-    interrupt_controller: "compatible=arm,gic-v3"
+    interrupt_controller: "compatible=arm,gic"
     uart: "serial|uart"
     storage_hci: "ufs|mmc|nvme"
-  # arch-timer must be wired as full INTIDs; relative numbers trip a GIC assert
   arch_timer_intid: { secure_phys: 29, nonsecure_phys: 30, virt: 27, hyp: 26 }
-  # Keywords for locating security gates
   gate_keywords: [fips, crypto, defex, selinux, avb, vbmeta, complete_formation]
-
-storage:               # track 2 K3
-  # Backing image block size candidates, settled by the EFI PART signature offset
-  block_size_candidates: [4096, 512]
-  # UniPro DME opcodes - spec constants, identical across devices
-  dme_opcode: { get: 0x01, set: 0x02, peer_get: 0x03, peer_set: 0x04 }
+  notes:
+    - a boot image with ramdisk_size=0 is system-as-root: there is no initramfs
+      and userspace does not exist until the storage model works
+    - the DTB is authoritative for MMIO bases. Do NOT scan for 4-byte literals:
+      AArch64 builds constants with MOVZ/MOVK, so a literal scan finds
+      coincidental byte sequences and misses the real base

@@ -1,36 +1,93 @@
-# profiles/mediatek.yaml - MediaTek search hints.
+# profiles/mediatek.yaml - MediaTek chain hints.
+#
 # No values (addresses, offsets) live here; they are derived from the target
 # firmware (honesty rule 1). These only say WHERE to look.
+#
+# ★ The MediaTek bootloader chain is AArch32. The arm64 entry-stub signature
+#   finds nothing there, and "no stages found" would be a false observation.
+#   stage_map.py exits 3 for arm32 and the caller stops with BLOCKED_ARCH.
+#   Until an AArch32 signature and machine template exist, this profile
+#   documents the target rather than enabling a run.
 
 name: mediatek
-description: search hints for the MediaTek family (LK bootloader, MTK kernel)
+description: search hints for the MediaTek family (Preloader + LK bootloader)
 extends: generic
 
-bootloader:                          # track 1
+chain:
+  container_format: vendor_header
+  container_magic: "0x58881688"      # MTK image header; payload usually at 0x200
+  container_notes:
+    - the chain is Preloader -> LK, so expect TWO executable stages, not three
+    - preloader and lk ship as separate images (preloader_*.bin, lk.bin /
+      lk-verified.img) rather than as one multi-stage container
+    - the MTK header precedes the payload; entering at file offset 0 executes
+      header bytes
+
+  entry_stub:
+    arm32: >
+      NOT DEFINED. AArch32 has no CurrentEL and no VBAR_EL3, so the arm64
+      signature does not apply. Candidate shapes to characterise before writing
+      one: the reset vector table at image start, CP15 writes (`mcr p15, 0,
+      rX, c12, c0, 0` sets VBAR), and the switch out of secure monitor mode.
+      Until this is written, stage discovery is not available for this family.
+
+  handoff_surface: >
+    Derive it the same way as elsewhere - absolute loads the entry code performs
+    before it writes anything - but expect the boot ROM interface to differ from
+    the SRAM function-pointer table Exynos uses. Do not carry that assumption
+    across families.
+
+  skip_policy: >
+    Same rule: a stage may be skipped only if the stages after it read no memory
+    it wrote. Which MediaTek stages are encrypted is a per-device observation,
+    not a family constant - measure the entropy, do not assume.
+
+stage_hints:
+  first_stage: ["preloader", "pl ", "brom", "download agent", "da "]
+  dram_init: ["emi", "dramc", "dram", "calibration", "lpddr", "training"]
+  bootloader: ["little kernel", "lk build", "fastboot", "boot mode", "printenv"]
+  secure_os: ["trusty", "tee", "atf"]
+  el3_monitor: ["runtime service", "smc", "psci"]
+  crypto: ["sha256", "rsa", "aes"]
+  power_fw: ["spm", "sspm", "mcupm", "scp"]
+
+surface:
   implementation: LK                 # Little Kernel derivative
   arch: arm32                        # AArch32 ARM/Thumb-2, NOT AArch64
   image_names: ["lk.bin", "lk-verified.img", "preloader_*"]
-  container_magic: "0x58881688"      # MTK image header; payload usually at file 0x200
+  candidates: ["fastboot", "shell"]
   known_strings: ["Little Kernel", "lk build", "fastboot", "preloader",
                   "boot mode", "printenv"]
-  # ★ The console command table exists in many builds but is often UNREACHABLE:
-  #   the UART driver may be output-only and no USB reader references the table.
-  #   static-analyzer must derive the surface before any goal is set.
-  surface_candidates: ["fastboot", "shell"]
-  surface_notes:
-    - check the UART driver for a receive path (RBR read / rx polling) before
-      assuming a shell exists - MediaTek LK is commonly output-only
-    - USB side usually has several independent dispatchers (fastboot, META/AT,
-      download agent); each knows only its own command set
-    - a command table with no caller and no dispatcher reference is an island,
-      not a surface
   cmd_entry:
     size_hint: 16                    # {name, help, func, mask} - Exynos uses 32
     pointer_width: 4                 # AArch32: 4-byte pointers, not 8
   fastboot_strings: ["fastboot: processing commands", "fastboot_init(",
                      "command buf", "getvar:"]
+  notes:
+    - ★ the console command table exists in many builds but is often
+      UNREACHABLE - the UART driver may be output-only and no USB reader
+      references the table. Derive the surface before any goal is set
+    - the USB side usually has several independent dispatchers (fastboot,
+      META/AT, download agent); each knows only its own command set
+    - a command table with no caller and no dispatcher reference is an island
 
-kernel:                              # track 2
+verified_boot:
+  scheme: avb
+  keywords: [avb, vbmeta, libavb, hashtree, rollback, "public key"]
+  notes:
+    - confirm whether verification runs in LK or is delegated to a TEE payload;
+      only the former can be observed in this environment
+
+boot_medium:
+  hci_kind: ufs                      # some devices are eMMC; confirm from the DTB
+  notes:
+    - UFS is usually built into the kernel (=y), so no vendor .ko exists by
+      design - that is K3*, not a blocker
+    - super.img on these devices is an Android sparse super, not a GPT disk;
+      a LUN with a synthesised GPT is required for partition enumeration
+    - the HCI interrupt must be level-triggered, not a pulse
+
+kernel:
   uart_earlycon: mtk                 # 16550-compatible, reg-shift 2
   driver_names: ["ufs_mtk", "ufshcd", "mtk-uart"]
   notes:
@@ -39,20 +96,10 @@ kernel:                              # track 2
       no firmware here; their IPIs time out and must fail gracefully
     - '-icount is often required: timer interrupt overload can look like a hang'
     - 'initcall_debug on the cmdline pinpoints a stalled initcall'
-  # ★ MPIDR encoding differs per SoC and silently deadlocks the boot when wrong.
   cpu_topology_hint:
     check: "fdtdump <dtb> | grep -A3 'cpu@'"
     note: >
-      DTB cpu reg of 0x0,0x100,0x200 … means Aff1 is the core index, i.e. one
+      DTB cpu reg of 0x0,0x100,0x200 ... means Aff1 is the core index, i.e. one
       core per cluster. QEMU's default 4-per-cluster then produces MPIDRs the
       DTB never names, psci cpu_on returns -22 and cpuhp holds cpu_hotplug_lock
-      until init blocks forever. See knowledge/faults_kernel.md cpu_cluster_mpidr.
-
-storage:                             # track 2 K3
-  hci_kind: ufs                      # some devices are eMMC; confirm from the DTB
-  notes:
-    - UFS is usually built into the kernel (=y), so no vendor .ko exists by
-      design - that is K3*, not a blocker
-    - super.img on these devices is an Android sparse super, not a GPT disk;
-      a LUN with a synthesised GPT is required for partition enumeration
-    - the HCI interrupt must be level-triggered, not a pulse
+      until init blocks forever. See the knowledge table's cpu_cluster_mpidr row.

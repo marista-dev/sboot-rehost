@@ -1,32 +1,106 @@
-# profiles/exynos.yaml - Samsung Exynos search hints.
+# profiles/exynos.yaml - Samsung Exynos chain hints.
+#
 # No values (addresses, offsets) live here; they are derived from the target
-# firmware (honesty rule 1).
+# firmware (honesty rule 1). These only say WHERE to look.
+#
+# The family spans generations that differ in container format and in how much
+# of the chain is encrypted, so the differences are written down rather than
+# averaged away.
 
 name: exynos
 description: search hints for the Samsung Exynos family
 extends: generic
 
-bootloader:
+chain:
+  container_format: varies
+  container_notes:
+    - "sboot.bin is a multi-stage container: first stage + EPBL + BL2 + power
+       firmware + bootloader + payloads. Derive the split, do not assume it."
+    - >
+      Some generations carry a TOC: a 32-byte header whose +0x08 reads `daeh`
+      ("head" little-endian) and whose stage-name table lists the segments
+      (bl2 / bootload / el3_mon / ldfw / tzsw / dt / bl_head / icm / svm ...).
+      Parse it when present - it names the segments for you.
+    - >
+      Other generations have NO TOC magic at all. The header is a few words and
+      the first real instruction is a short branch a little past offset 0. There
+      the entropy grid plus the entry-stub scan is the only route.
+    - file offset 0 is the header. Entering there executes header bytes as
+      instructions - the entry PC is derived, never assumed to be 0
+
+  entry_stub:
+    arm64: >
+      As generic: short branch, `adr` for the vector table, `mrs xN, currentel`,
+      then `msr vbar_el3` (with el2/el1 branches). Observed identically across
+      Exynos generations, and it is what separates one stage from the next.
+
+  handoff_surface: >
+    The first stage does not call into the boot ROM; it reads FUNCTION POINTERS
+    the boot ROM left in SRAM and calls through them. Find them by tracking
+    `mov/movk` of an SRAM-range constant, then `ldr wN,[that]`, then `blr xN`.
+    The same window also holds data slots (a work-buffer pointer, sizes). Model
+    exactly the slots that are called - the count is small and derivable, and
+    modelling the whole boot ROM is neither necessary nor possible.
+    Later stages read PMU registers (reset status / boot mode) rather than
+    anything the previous stage wrote, which is what makes a skip safe.
+
+  skip_policy: >
+    EPBL is encrypted with an AES key held in eFuse/SSS on every generation
+    seen so far - it can never execute here. Skip it by redirecting the first
+    stage's EPBL entry to the next executable stage's entry stub. Verify first
+    that the next stage reads no memory EPBL wrote (see handoff_surface).
+    The secure OS payload (TEEGRIS) is likewise encrypted and is out of scope:
+    record BLOCKED_TEE rather than attempting it.
+
+stage_hints:
+  first_stage: ["loading epbl", "epbl rx", "epbl header", "epbl pass", "secureboot"]
+  dram_init: ["bl2 pass", "dmc", "dram info", "pll_mif", "dvfs_mif", "lpddr"]
+  bootloader: ["s-boot", "autoboot", "following commands", "board_power_off", "boot linux"]
+  secure_os: ["teegris", "sec_os", "seclib"]
+  el3_monitor: ["unhandled kernel synchronous exception", "esr_el1", "far_el1", "samsung_drv"]
+  crypto: ["cryptomanager", "crypto_operation", "rpmb_error", "cm_virt_to_phys"]
+  power_fw: ["enter_wfi", "nvic_int", "dyn_plug", "attachid", "acpm"]
+
+surface:
   implementation: S-Boot
   arch: arm64
+  candidates: ["shell"]
   known_strings: ["S-BOOT", "autoboot", "Following commands", "dramtest", "reset"]
   prompt_candidates: ["S-BOOT # "]
-  surface_candidates: ["shell"]      # UART console with a receive path
   cmd_entry:
     size_hint: 32                    # {name, help, handler, next}
     pointer_width: 8
-  notes:
-    - sboot.bin is usually a multi-stage BL1/BL2/BL3 image; carve out the BL3 region only
-    - if the carve verdict fails, re-scan the original sboot.bin on 4 KB alignment
 
-kernel:
-  uart_earlycon: exynos4210          # earlycon family, confirm against DTB /chosen
+verified_boot:
+  scheme: avb
+  keywords: [libavb, avb_main, vbmeta, "PO_AVB_KEY", hashtree, rollback,
+             load_and_verify_hash_partition]
+  companion_files:
+    - keystorage.bin       # SLSI-magic key store; look for an `avbtool` string
+                           # and a per-purpose slot table (cp_key / vbmeta / ...)
+    - vbmeta.img           # AVB0 magic; header names the algorithm and carries
+                           # both the signature and the public key
   notes:
-    - /chosen bootargs commonly carries kvm-arm.mode=protected, so HVC belongs to the kernel pKVM
-    - always wire arch-timer as full INTIDs; the DTB lists relative numbers
+    - the hash and RSA implementations are software inside the bootloader on the
+      generations seen so far, so no crypto-accelerator model is required
+    - rollback indices come from RPMB; that read has to answer before AVB
+      completes
 
-storage:
+boot_medium:
   hci_kind: ufs
   notes:
-    - the vendor UFS driver often ships as a separate .ko, which is required for K3
-    - a platform telemetry function causing a null dereference is a .ko bypass candidate
+    - the DTB `ufs@` node is authoritative for the register bases (HCI, unipro,
+      PHY, cport) and for the interrupt number
+    - the first stage parses GPT itself - an "EFI PART" constant assembled with
+      MOVZ/MOVK is direct evidence, and its `+0x28` read is PartitionEntryLBA
+    - the vendor UFS driver is usually built into the kernel (=y), so no .ko
+      exists by design - that is K3*, not a blocker
+
+kernel:
+  uart_earlycon: exynos4210          # confirm against the DTB /chosen node
+  notes:
+    - /chosen bootargs commonly carries kvm-arm.mode=protected, so HVC belongs
+      to the kernel's own pKVM - do not intercept it
+    - always wire arch-timer as full INTIDs; the DTB lists relative numbers
+    - a separate hypervisor blob may ship alongside (uh.bin, "GREENTEA"/RKP);
+      it is EL2 and is not part of the boot chain being rehosted
