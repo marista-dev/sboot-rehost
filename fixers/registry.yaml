@@ -22,30 +22,31 @@ fixers:
   fixer-memory:
     description: memory map and peripheral windows
     handles: [data_abort_unmapped, infinite_poll, unmapped_mmio, cpu_cluster_mpidr]
-    knowledge: [knowledge/faults_bootloader.md, knowledge/faults_kernel.md]
+    knowledge: [knowledge/faults_unified.md]
     tools: [fdtdump, grep]
-    edits: [machine.c, machine_kernel.c]
+    edits: [machine_full.c]
 
   fixer-el3:
     description: EL3 and exception levels (SMC / PSCI / HVC / FP trap)
     handles: [smc_undef, psci_suspend, hvc_pkvm, fpu_trap]
-    knowledge: [knowledge/faults_bootloader.md, knowledge/faults_kernel.md]
+    knowledge: [knowledge/faults_unified.md]
     tools: [capstone]
-    edits: [machine.c, machine_kernel.c]
+    edits: [machine_full.c]
 
   fixer-bootflow:
-    description: bootloader control flow (entry redirect / console routing / getline timeout / shell mode gate)
-    handles: [null_ret, console_silent, shell_exit_early, shell_mode_gate]
-    knowledge: [knowledge/faults_bootloader.md]
+    description: chain control flow (stage handoff / console routing / getline timeout / shell mode gate)
+    handles: [null_ret, console_silent, shell_exit_early, shell_mode_gate,
+              handoff_slot_missing, stage_handoff_missing]
+    knowledge: [knowledge/faults_unified.md]
     tools: [capstone]
-    edits: [machine.c]
+    edits: [machine_full.c]
 
   fixer-kernel:
     description: kernel .text patches, GIC wiring, rootfs path
     handles: [security_gate, kernel_oops, gic_ppi, rootfs_mount]
-    knowledge: [knowledge/faults_kernel.md, knowledge/kernel_gates.md]
+    knowledge: [knowledge/faults_unified.md, knowledge/kernel_gates.md]
     tools: [capstone, fdtdump, patch_kernel.py]
-    edits: [machine_kernel.c, patch_kernel.py]
+    edits: [machine_full.c, patch_kernel.py]
 
   fixer-storage:
     description: vendor storage HCI model, UPIU fields, documented .ko bypasses
@@ -62,9 +63,20 @@ fixers:
       - upiu_field_off
       - block_size
       - vendor_telemetry_null
-    knowledge: [knowledge/faults_storage.md]
-    tools: [readelf, objdump, capstone]
-    edits: [storage_hci.c, machine_kernel.c]
+      # The medium is modelled in the unified flow, so a missing partition table
+      # or key store is a defect in what we synthesised - not a track boundary.
+      - partition_table_unavailable
+      - keystore_partition_missing
+    knowledge: [knowledge/faults_unified.md, knowledge/faults_storage.md]
+    tools: [readelf, objdump, capstone, build_lu.py]
+    edits: [storage_hci.c, machine_full.c, build_lu.py]
+
+  fixer-secureboot:
+    description: the bootloader's own verified boot (AVB / vbmeta / rollback index / key store)
+    handles: [avb_verify_fail, rollback_index_unavailable]
+    knowledge: [knowledge/faults_unified.md]
+    tools: [capstone, avbtool, build_lu.py]
+    edits: [machine_full.c, build_lu.py]
 
 # No owner -> static-analyzer. There is no fallback fixer by design.
 unmapped_policy: escalate_to_static_analyzer
@@ -82,7 +94,21 @@ unmapped_policy: escalate_to_static_analyzer
 #                          stage) follows from that one fact. The pipeline records
 #                          BLOCKED_STORAGE only when the current goal actually
 #                          needs the medium; lower grades are unaffected.
-not_firmware: [harness_input_starved, partition_table_unavailable]
+not_firmware: [harness_input_starved]
+
+# --- Build-layer stop points --------------------------------------------
+# A fixer changes one place in sources that exist; it cannot change a premise the
+# machine was BUILT on. Ranking one here would spend a round producing a band-aid
+# that changes nothing, which is what a run of identical fingerprints looks like.
+# These route to `supervisor` -> rebuild with a concrete premise correction, and
+# `stage_map.json` is the record of the premises to correct.
+#   stage_entry_el_mismatch  the stage was entered at an exception level it was
+#                            not built for. Derive the level from which vbar_el*
+#                            the stage's OWN entry stub writes - never default.
+#   stage_decrypt_blocked    the run reached a decrypt routine for a stage that
+#                            cannot execute here. The skip redirect is missing or
+#                            points at the wrong stage.
+build_layer: [stage_entry_el_mismatch, stage_decrypt_blocked]
 
 # --- When to split a fixer further ---------------------------------------
 # Guessing the split up front gets it wrong. Decide from the data that

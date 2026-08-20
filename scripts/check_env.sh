@@ -36,7 +36,11 @@ esac
 
 # --- Everything below runs on the Linux side ---------------------------------
 WD="${1:-}"
-TRACK="${2:-1}"
+# The unified flow walks one chain, so the environment it needs is the union of
+# what the whole chain needs. DTB tooling was a track-2-only requirement; here
+# the bootloader assembles a DTB for the kernel it loads, so it is needed
+# whenever the target goes past the bootloader.
+TARGET="$(printf '%s' "${2:-F2}" | tr '[:lower:]' '[:upper:]')"
 QEMU="${QEMU:-$HOME/qemu-build/qemu-10.2.2/build/qemu-system-aarch64}"
 
 problems=""
@@ -61,9 +65,9 @@ fi
 command -v python3 >/dev/null 2>&1 || add "python3 가 없습니다"
 command -v ninja   >/dev/null 2>&1 || add "ninja 가 없습니다 (머신 재빌드에 필요)"
 python3 -c 'import capstone' >/dev/null 2>&1 || add "python capstone 모듈이 없습니다 (정적 도출에 필요)"
-if [ "$TRACK" = "2" ]; then
+if [ "$TARGET" != "F1" ]; then
     command -v fdtdump >/dev/null 2>&1 || command -v dtc >/dev/null 2>&1 \
-        || add "dtc/fdtdump 가 없습니다 (트랙 2 DTB 파싱에 필요)"
+        || add "dtc/fdtdump 가 없습니다 (DTB 파싱에 필요 — 목표 $TARGET 은 커널 구간을 포함합니다)"
 fi
 
 emit_with_python() {

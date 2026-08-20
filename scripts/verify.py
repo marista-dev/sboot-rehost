@@ -374,12 +374,139 @@ def k3_stage_report(haystack):
     return {"stage": stage, "cleared": cleared}
 
 
+# --- unified chain -----------------------------------------------------------
+# Six items, because this flow makes two claims the two-track tables never had
+# to check: that the chain really ran stage by stage, and that the firmware's own
+# verified boot passed on its own terms. Both are easy to fake and neither is
+# provable by a console string alone, so each gets an item that can FAIL.
+
+def stage_entries(workdir):
+    """Per-stage entry PCs from the derived map, in chain order."""
+    path = os.path.join(workdir, "stage_map.json")
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return []
+    out = []
+    for st in data.get("stages") or []:
+        if st.get("state") != "exec":
+            continue
+        base = (st.get("base") or {}).get("load_base")
+        off = st.get("entry_pc_file_offset")
+        rng = st.get("file_range") or [None, None]
+        if base is None or off is None or rng[0] is None:
+            continue
+        out.append({"name": st.get("name") or f"stage{st.get('index')}",
+                    "pc": base + (off - rng[0])})
+    return out
+
+
+def verify_full(workdir, args):
+    console_path = args.console or find_console(workdir, 1)
+    trace_path = args.trace or find_trace(workdir, 1)
+    sources = [args.machine] if args.machine else find_machine_sources(workdir, 1)
+    console = read_bytes(console_path)
+    container = read_bytes(args.container) if args.container else b""
+    trace = read_text(trace_path)
+    hay = console.decode("utf-8", errors="replace") + "\n" + trace
+    items = []
+
+    # 1. The chain actually walked, stage by stage, in order.
+    stages = stage_entries(workdir)
+    if not stages:
+        ev = ("stage_map.json 에서 실행 스테이지의 진입 PC 를 얻지 못했습니다 — "
+              "체인이 걸어갔는지 확인할 수단이 없습니다")
+        ok = False
+    else:
+        seen, order_ok, last = [], True, -1
+        low = trace.lower()
+        for st in stages:
+            at = low.find(f"{st['pc']:#x}".lower())
+            if at < 0:
+                continue
+            seen.append(st["name"])
+            if at < last:
+                order_ok = False
+            last = at
+        ok = len(seen) == len(stages) and order_ok
+        ev = (f"스테이지 {len(seen)}/{len(stages)} 진입 PC 확인"
+              + (f" (순서 {' → '.join(seen)})" if ok else "")
+              + ("" if ok else
+                 f" — {'순서가 어긋납니다' if len(seen) == len(stages) else '일부가 트레이스에 없습니다'}"))
+    items.append({"n": 1, "name": "체인 PC 트레이스 (스테이지 진입이 순서대로)",
+                  "pass": ok, "evidence": ev})
+
+    # 2. Everything on the console came out of the firmware image.
+    tokens = set(re.findall(rb"[\w\-]{3,}", console))
+    missing = sorted(t.decode("latin-1") for t in tokens if container.find(t) < 0)
+    items.append({
+        "n": 2, "name": "출력 byte-match (콘솔 토큰이 펌웨어 안에 존재)",
+        "pass": bool(tokens) and not missing,
+        "evidence": (f"토큰 {len(tokens)} 개가 모두 컨테이너 안에 있습니다"
+                     if tokens and not missing else
+                     f"토큰 {len(tokens)} 개 중 {len(missing)} 개를 찾지 못했습니다: {missing[:10]}"
+                     + " (커널이 찍은 줄이면 Image 안에 있는지도 확인하십시오)"),
+    })
+
+    # 3. ... and not out of our machine source.
+    neg_ok, neg_detail = check_source_negative(sources, console)
+    items.append({"n": 3, "name": "소스 negative (머신 C 에 출력 문자열 없음)",
+                  "pass": neg_ok, "evidence": neg_detail})
+
+    # 4. Verified boot, BOTH ways. A verifier that only ever says yes is
+    #    indistinguishable from a stub that always says yes, so passing the
+    #    intact image is only half the evidence.
+    neg_path = os.path.join(workdir, "07_logs", "avb_negative.txt")
+    ok_tok = args.verify_ok_token or "verify"
+    pos = bool(re.search(re.escape(ok_tok), hay, re.I)) and "fail" not in hay.lower()[-4000:]
+    if not os.path.exists(neg_path):
+        items.append({"n": 4, "name": "검증 양방향 (정상 통과 + 훼손 실패)", "pass": False,
+                      "evidence": ("negative test 를 돌리지 않았습니다. vbmeta 1 바이트를 훼손한 "
+                                   f"회차의 콘솔을 {neg_path} 에 남기십시오 — 통과만 보이는 "
+                                   "검증은 항상 통과하는 스텁과 구별되지 않습니다")})
+    else:
+        neg = read_text(neg_path).lower()
+        neg_failed = ("fail" in neg or "error" in neg or "invalid" in neg)
+        items.append({"n": 4, "name": "검증 양방향 (정상 통과 + 훼손 실패)",
+                      "pass": bool(pos and neg_failed),
+                      "evidence": (f"정상 이미지 통과={pos}, 훼손 이미지 실패={neg_failed}"
+                                   + ("" if pos and neg_failed else
+                                      " — 훼손했는데도 통과했다면 검증이 실제로 돌지 않는 것입니다"))})
+
+    # 5. The same controller model, driven by two different drivers.
+    boot_side = any_match([r"EFI PART", r"[Pp]artition", r"GPT"], hay)
+    kern_side = any_match(K3_STAGES["partitions_up"], hay)
+    items.append({
+        "n": 5, "name": "스토리지 이중 구동 (부트로더 드라이버 + 커널 드라이버)",
+        "pass": bool(boot_side and kern_side),
+        "evidence": (f"부트로더측 파티션 접근={bool(boot_side)}, 커널측 열거={bool(kern_side)}"
+                     + ("" if boot_side and kern_side else
+                        " — 한쪽만 되는 모델은 그 드라이버의 기대에 맞춘 것이지 "
+                        "컨트롤러를 모델한 것이 아닙니다")),
+    })
+
+    # 6. Every bypass written down, four fields each.
+    ok, detail = check_bypass(workdir)
+    items.append({"n": 6, "name": "우회 기록 4 항목", "pass": ok, "evidence": detail})
+
+    return items, console_path, trace_path, sources
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("workdir")
-    parser.add_argument("--track", type=int, choices=(1, 2), required=True)
-    parser.add_argument("--target", default=None, help="track 1: A/B/C, track 2: K1/K2/K3")
-    parser.add_argument("--bl3", default=None, help="track 1 BL3 binary")
+    # Legacy: the two-track era. Omitted means the unified chain.
+    parser.add_argument("--track", type=int, choices=(1, 2), default=None)
+    parser.add_argument("--target", default=None,
+                        help="unified: F1/F2/F3 (legacy: A/B/C, K1/K2/K3)")
+    parser.add_argument("--container", default=None,
+                        help="the bootloader container, loaded whole")
+    parser.add_argument("--bl3", default=None, help="legacy alias for --container")
+    parser.add_argument("--verify-ok-token", default=None,
+                        help="console token that means the firmware's own verification passed")
     parser.add_argument("--machine", default=None, help="machine source (auto-discovered if omitted)")
     parser.add_argument("--console", default=None)
     parser.add_argument("--trace", default=None)
@@ -392,7 +519,18 @@ def main():
                              "machine sources (fastboot default: getvar:)")
     args = parser.parse_args()
 
-    if args.track == 1:
+    args.container = args.container or args.bl3
+    args.bl3 = args.container
+    unified = args.track is None or str(args.target or "").upper().startswith("F")
+
+    if unified:
+        if not args.container:
+            print("verify: --container (부트로더 컨테이너) 가 필요합니다", file=sys.stderr)
+            sys.exit(1)
+        items, console, trace, sources = verify_full(args.workdir, args)
+        storage = k3_stage_report(
+            read_bytes(console).decode("utf-8", errors="replace") + "\n" + read_text(trace))
+    elif args.track == 1:
         if not args.bl3:
             print("verify: track 1 requires --bl3", file=sys.stderr)
             sys.exit(1)
@@ -405,7 +543,7 @@ def main():
 
     passes = sum(1 for i in items if i["pass"])
     result = {
-        "track": args.track,
+        "flow": "unified" if unified else f"legacy-track{args.track}",
         "target": args.target,
         "passes": passes,
         "total": len(items),

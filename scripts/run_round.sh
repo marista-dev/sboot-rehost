@@ -10,7 +10,7 @@
 #   deterministically, and the agent only relays one document it did not build.
 #
 # Usage:
-#   run_round.sh <workdir> <track> <machine> <run_n> <goal> <ladder> [bootloader] [cmd] [surface]
+#   run_round.sh <workdir> <machine> <run_n> <goal> <ladder> [container] [cmd] [surface]
 #
 # Output:
 #   <workdir>/observation.json   (also printed to stdout)
@@ -20,14 +20,13 @@
 set -u
 
 WD="${1:?workdir required}"
-TRACK="${2:?track required}"
-MACHINE="${3:?machine required}"
-RUN_N="${4:?run number required}"
-GOAL="${5:-}"
-LADDER="${6:-}"
-BL3="${7:-}"
-CMD="${8:-help}"
-SURFACE="${9:-shell}"   # track 1 interactive surface
+MACHINE="${2:?machine required}"
+RUN_N="${3:?run number required}"
+GOAL="${4:-}"
+LADDER="${5:-}"
+CONTAINER="${6:-}"      # bootloader container, loaded whole
+CMD="${7:-help}"
+SURFACE="${8:-shell}"   # the bootloader's interactive surface
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -36,20 +35,18 @@ bash "$HERE/journal.sh" "$WD" try-start "$RUN_N" "목표 $GOAL" >/dev/null 2>&1 
 # can then actually be taken back out (revert_change.sh).
 bash "$HERE/check_change.sh" "$WD" snapshot "$RUN_N" >/dev/null 2>&1 || true
 
+# One chain, one run script. The bootloader loads what comes after it, so there
+# is nothing to branch on here any more.
 RUN_RC=0
-if [ "$TRACK" = "1" ]; then
-    bash "$HERE/run_qemu.sh" "$WD" "$MACHINE" "$BL3" "$CMD" "$RUN_N" "$SURFACE" >/dev/null || RUN_RC=$?
-else
-    bash "$HERE/run_kernel.sh" "$WD" "$MACHINE" "$RUN_N" >/dev/null || RUN_RC=$?
-fi
+bash "$HERE/run_full.sh" "$WD" "$MACHINE" "$CONTAINER" "$CMD" "$RUN_N" "$SURFACE" >/dev/null || RUN_RC=$?
 
 STOP_TMP="$(mktemp)"
 python3 "$HERE/stop_conditions.py" "$WD" --ladder "$LADDER" > "$STOP_TMP" 2>/dev/null || echo '{}' > "$STOP_TMP"
 
-python3 - "$WD" "$GOAL" "$STOP_TMP" "$RUN_N" "$TRACK" "$RUN_RC" <<'PY'
+python3 - "$WD" "$GOAL" "$STOP_TMP" "$RUN_N" "$RUN_RC" <<'PY'
 import json, os, sys
 
-wd, goal, stop_path, run_n, track, run_rc = sys.argv[1:7]
+wd, goal, stop_path, run_n, run_rc = sys.argv[1:6]
 
 def load(path, default):
     try:
@@ -66,7 +63,6 @@ origin = fp.get("origin") or {}
 inp = fp.get("input") or {}
 observation = {
     "round": int(run_n),
-    "track": int(track),
     "goal": goal,
     "run_exit_code": int(run_rc),
     # A run that produced no fingerprint, or one the run script judged failed,

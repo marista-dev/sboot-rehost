@@ -1,8 +1,8 @@
 /*
- * pipeline.js - unified sboot-rehost execution pipeline (tracks 1 and 2).
+ * pipeline.js - unified sboot-rehost execution pipeline.
  *
- * The track is an argument, not an identity. One skeleton runs both; only the
- * goal ladder, the knowledge tables and the run script change.
+ * One chain, one skeleton. What varies between firmwares is the derived stage
+ * map: how many stages exist, which of them can execute, and where each loads.
  *
  *   [static-analyzer] derive facts
  *        |
@@ -26,17 +26,22 @@
  * Round count and elapsed time are never stop reasons. runtime_round_cap is a
  * runtime limit, not a verdict, and the run resumes where it left off.
  *
+ * One chain, one run. The container is loaded once and every stage after the
+ * first is reached by the firmware's own code, so there is no track parameter:
+ * `target` alone says how far up the chain to go (F1 / F2 / F3).
+ *
  * args: {
- *   workdir, track (1|2), target, model, plugin_dir,
- *   bootloader_path     (track 1; bl3_path also accepted),
+ *   workdir, target (F1|F2|F3), model, plugin_dir,
+ *   bootloader_path     (the bootloader container; bl3_path also accepted),
  *   soc_family, arch, bl_surface, has_super,
  *   runtime_round_cap   (default 120 - runtime limit, not a stop reason),
+ *   invoked_with        (the user's own words, recorded verbatim; see Analyze),
  * }
  */
 
 export const meta = {
   name: 'pipeline',
-  description: 'sboot-rehost 통합 파이프라인 — 도출 → 빌드 → (실행·분류·수정)* → 5/5 검증 → 키트',
+  description: 'sboot-rehost 통합 파이프라인 — 도출 → 빌드 → (실행·분류·수정)* → 6/6 검증 → 재현 키트',
   phases: [
     { title: 'Analyze', detail: 'static-analyzer 사전 도출 (하드 블로커 검사)' },
     { title: 'Build',   detail: 'machine 소스 생성 + ninja' },
@@ -55,12 +60,11 @@ function posix(value) {
 }
 
 const workdir   = posix(args?.workdir)
-const track     = Number(args?.track ?? 1)
 const model     = args?.model
 // bl3_path is the pre-0.10 name. BL3 is ARM/Exynos wording and reads wrong for a
 // MediaTek LK image, so the slot is bootloader_path now; both are accepted.
 const bootloader_path = posix(args?.bootloader_path ?? args?.bl3_path)
-const target    = String(args?.target ?? (track === 1 ? 'A' : 'K2')).toUpperCase()
+const target    = String(args?.target ?? 'F2').toUpperCase()
 const socFamily = String(args?.soc_family ?? 'generic').toLowerCase()
 const arch      = String(args?.arch ?? 'arm64').toLowerCase()
 const PLUGIN    = posix(args?.plugin_dir) ?? '${CLAUDE_PLUGIN_ROOT}'
@@ -68,7 +72,12 @@ const ROUND_CAP = Number(args?.runtime_round_cap ?? 120)
 // Wall-clock budget per round. It is a property of how long this firmware takes
 // to walk to its surface, not a constant: on S921N the prompt landed between 5.2
 // and 8.0 seconds of wall time, so the old fixed 8 made reaching it a coin flip.
-const RUN_TIMEOUT = Number(args?.run_timeout_s ?? 20)
+const RUN_TIMEOUT = Number(args?.run_timeout_s ?? 200)
+// What the user actually asked for, in their words. Recorded verbatim rather
+// than summarised: when a run stalls weeks later, the direction someone gave and
+// the reason they gave it are the first things missing from the log, and a
+// paraphrase of a prompt is not the prompt.
+const INVOKED_WITH = String(args?.invoked_with ?? '').trim()
 // How many times a round may be re-run when the input path never reached the
 // gate. That is a harness failure, so classifying it would spend a fixer on a
 // fault that does not exist - but retrying forever is its own trap, so it is
@@ -78,11 +87,15 @@ const STARVED_RETRIES = Number(args?.starved_retries ?? 2)
 // One accumulating record per firmware. The analyst appends to it, the
 // classifier and the fixers read it. Everything derived about this target lives
 // here so a finding made in round 5 is still available in round 40.
-const staticDoc = `${workdir}/${track === 2 ? 'KERNEL_STATIC.md' : 'STATIC.md'}`
+const staticDoc = `${workdir}/STATIC.md`
+// The derived stage map: which stages exist, which can execute, where each one
+// loads and where it starts. Build reads it to place the stages; the ladder is
+// built from it; a build-layer stop point is corrected against it.
+const stageMap  = `${workdir}/stage_map.json`
 
-// The bootloader's interactive surface is what track 1 actually targets. A UART
-// shell is only one kind: MediaTek LK has an output-only UART, so its reachable
-// surface is fastboot over USB. Undeclared means static-analyzer decides.
+// The bootloader's interactive surface. A UART shell is only one kind: MediaTek
+// LK has an output-only UART, so its reachable surface is fastboot over USB.
+// Undeclared means static-analyzer decides.
 const SURFACES = ['shell', 'fastboot']
 const declaredSurface = String(args?.bl_surface ?? '').toLowerCase()
 const surface = SURFACES.includes(declaredSurface) ? declaredSurface : 'shell'
@@ -92,84 +105,61 @@ if (!workdir || !model) {
   log('오류: pipeline.js 는 args.workdir 와 args.model 이 필요합니다.')
   return { error: 'missing_args' }
 }
-if (track === 1 && !bootloader_path) {
-  log('오류: 트랙 1 은 args.bootloader_path (구 bl3_path) 가 필요합니다.')
+if (!bootloader_path) {
+  log('오류: args.bootloader_path (구 bl3_path) 가 필요합니다 — 부트로더 컨테이너가 체인의 출발점입니다.')
   return { error: 'missing_bootloader_path' }
 }
 
 const slug = model.toLowerCase().replace(/[^a-z0-9]/g, '')
-const machine = track === 1 ? `${slug}-bootloader` : `${slug}-kernel`
+const machine = `${slug}-full`
 
-// The ladder is what the track/grade actually changes; the loop stays the same.
+// The ladder has as many stage rungs as this firmware has EXECUTABLE stages,
+// and that count is derived - `stage_map.json` decides it, not this file. A
+// container with three runnable stages gets three rungs; one with two gets two.
+// Fixing the count here is what made the old design vendor-specific.
 //
-// K3 is the point of track 2: driving a real vendor UFS controller until the
-// kernel enumerates partitions. The methodology sets minimum completion at
-// `partitions_up` (K3a); `super_mounted` is the capstone (K3b) and only exists
-// for firmware that ships a super image. Firmware with separate system/vendor
-// raw partitions can never print it, so keeping it in the ladder unconditionally
-// would strand such a run short of a goal it cannot reach by construction.
+// Above the stage rungs the chain is the same everywhere, because each rung is
+// defined by what the firmware DOES rather than by what it is called:
+//   <surface>       the bootloader's interactive surface is reachable
+//   medium_up       its own storage driver brought the boot medium up
+//   partitions      it enumerated the partition table from that medium
+//   verify_ok       its own verified boot passed on an intact image
+//   kernel_entry    it loaded and jumped to the kernel
+//   userspace       the kernel reached init
+//   partitions_up   the kernel's driver enumerated partitions on the SAME model
+//   super_mounted   only exists for firmware that ships a super image
 const hasSuper = args?.has_super === true
 
-// The ladder is a function of the surface, because static-analyzer may correct
-// the surface after this point and the goals must follow that correction rather
-// than force a re-run.
-//
-// Track 1 grades are depth of real bootloader function, and the first rung is
-// the interactive surface this firmware actually has - not "shell" by
-// assumption. The rungs above it mean the same thing on every surface:
-//   A  reach the surface and run its listing command  (help / getvar)
-//   B  other command handlers actually do their work
-//   C  the bootloader proceeds with its normal boot flow (autoboot)
-// Rungs that cannot be cleared unless the boot medium is readable.
-//
-// This is definitional, not vendor knowledge: "the bootloader proceeds with a
-// normal boot" means it loads the next stage from the medium, on S-Boot, LK and
-// aboot alike. So the RULE is universal here, while the EVIDENCE that the medium
-// is unreadable is derived per firmware (storage_tokens.txt).
-//
-// Track 1 deliberately does not implement a storage controller, so on this track
-// a firmware that reports its partition table missing has put this rung out of
-// reach - by our own track boundary, not by anything about the firmware. The
-// loop must say that rather than spend rounds prescribing memory windows for a
-// table that was never going to arrive.
-const STORAGE_DEPENDENT_RUNGS = ['autoboot']
+// Replaced the moment the analyst reports the derived map. Until then one
+// placeholder rung keeps the loop pointed at something rather than at nothing.
+let stageRungs = ['stage_entry']
 
+// The ladder is also a function of the surface, because static-analyzer may
+// correct the surface after this point and the goals must follow that correction
+// rather than force a re-run.
 function goalsFor(surfaceName) {
-  const ladders = {
-    1: {
-      A: [surfaceName],
-      B: [surfaceName, 'commands'],
-      C: [surfaceName, 'commands', 'autoboot'],
-    },
-    2: {
-      K1: ['userspace'],
-      K2: ['userspace', 'rootfs'],
-      K3: ['userspace', 'link_up', 'power_mode', 'scsi_attach', 'partitions_up']
-            .concat(hasSuper ? ['super_mounted'] : []),
-    },
-  }
-  return (ladders[track] || {})[target] || ladders[1].A
+  const f1 = stageRungs.concat([surfaceName])
+  const f2 = f1.concat(['medium_up', 'partitions', 'verify_ok', 'kernel_entry'])
+  const f3 = f2.concat(['userspace', 'partitions_up'],
+                       hasSuper ? ['super_mounted'] : [])
+  return ({ F1: f1, F2: f2, F3: f3 })[target] || f2
 }
 
 let activeSurface = surface
 let goals = goalsFor(activeSurface)
 let ladderArg = goals.join(',')
-// Fixers are per track. Track 1 stops at the bootloader's interactive surface;
-// a vendor storage controller is track 2's goal and has no business being
-// selected here. Without this filter the classifier could rank fixer-storage on
-// a track 1 round - the tables and the registry it reads describe both tracks -
-// and a bootloader run would drift into UFS work the grade never asked for.
-const FIXERS_BY_TRACK = {
-  1: ['fixer-memory', 'fixer-el3', 'fixer-bootflow'],
-  2: ['fixer-memory', 'fixer-el3', 'fixer-bootflow', 'fixer-kernel', 'fixer-storage'],
-}
-const KNOWN_FIXERS = FIXERS_BY_TRACK[track] ?? FIXERS_BY_TRACK[1]
 
-// Knowledge tables follow the same split, so the classifier is not offered stop
-// points that belong to the other track.
-const KNOWLEDGE = track === 2
-  ? 'knowledge/faults_kernel.md, knowledge/faults_storage.md, knowledge/kernel_gates.md'
-  : 'knowledge/faults_bootloader.md'
+// One chain, one fixer set. The old split existed because a bootloader run had
+// no storage model and a kernel run had no bootloader; here both are in the same
+// image, so every specialist is reachable and filtering one out would leave a
+// real stop point with no owner.
+const KNOWN_FIXERS = ['fixer-memory', 'fixer-el3', 'fixer-bootflow',
+                      'fixer-secureboot', 'fixer-storage', 'fixer-kernel']
+
+// One classification table for the whole chain. Its 위치 column is what keeps a
+// kernel class from being named while the run is still in the first stage.
+const KNOWLEDGE = 'knowledge/faults_unified.md, knowledge/faults_storage.md, ' +
+                  'knowledge/kernel_gates.md'
 
 // Last resort. Not in KNOWN_FIXERS: it is reached only after a specialist has
 // declined, never by ranking, so that the widest scope stays the exception.
@@ -220,7 +210,7 @@ function shell(label, phaseName, command, schema) {
  * has no table telling it where to look. */
 function runGeneralFixer(round, goal, why, plan, obs, cls, derivedTable) {
   return agent(
-    `Round ${round}, goal ${goal}, track ${track}. You are the last resort.\n` +
+    `Round ${round}, goal ${goal}, target ${target}. You are the last resort.\n` +
     `${why}\n` +
     `Classification: ${cls?.category ?? 'unknown'}   ` +
     `Evidence: ${JSON.stringify(cls?.evidence ?? {})}\n` +
@@ -263,7 +253,8 @@ function fingerprintText(obs) {
   `\n(last_far/last_elr 는 storm 의 마지막 지점입니다. 진단은 origin 으로 하세요.)`
 }
 
-function recordRoundCmd(round, goal, fp, category, fixer, changeKey, effect, analystFacts, noNewChange) {
+function recordRoundCmd(round, goal, fp, category, fixer, changeKey, effect,
+                       analystFacts, noNewChange, rationale) {
   const fields = [
     `round=${round}`,
     `goal=${shq(goal)}`,
@@ -284,6 +275,9 @@ function recordRoundCmd(round, goal, fp, category, fixer, changeKey, effect, ana
     `effect=${shq(effect)}`,
     `analyst_new_facts=${Number(analystFacts)}`,
     `fixer_no_new_change=${noNewChange === true}`,
+    // Why that change. record.py flags a round that names a fixer without it,
+    // because a round nobody can explain is a round nobody can build on.
+    ...(rationale ? [`rationale=${shq(String(rationale).slice(0, 500))}`] : []),
     `tokens_total=${budget.spent()}`,
   ].join(' ')
   return `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" round ${fields}`
@@ -315,6 +309,10 @@ const ANALYST_SCHEMA = {
     carve_is_full: { type: ['boolean', 'null'] },
     assets_ok: { type: ['boolean', 'null'] },
     bl_surface: { type: ['string', 'null'] },
+    // The derived stage map, as stage_map.json recorded it. The ladder is built
+    // from this, so a run that cannot report it cannot be sequenced.
+    stages: { type: ['array', 'null'] },
+    arch_supported: { type: ['boolean', 'null'] },
     storage_driver: { type: ['object', 'null'] },
     undetermined_count: { type: 'integer' },
     new_facts_count: { type: 'integer' },
@@ -485,7 +483,78 @@ const VERIFIER_SCHEMA = {
 // Phase 1 - Analyze
 // =============================================================================
 phase('Analyze')
-log(`[분석] 트랙 ${track} / 등급 ${target} — 목표 사다리: ${goals.join(' → ')}`)
+log(`[분석] 등급 ${target} — 목표 사다리: ${goals.join(' → ')} (스테이지 칸은 도출 후 확정)`)
+
+// Open the record before anything can fail, so a run that stops in the first
+// minute still says who asked for what.
+await shell('session-open', 'Analyze',
+  `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" session-start ` +
+  `${shq('/sboot-rehost:rehost-full')} ${shq(`target=${target} soc=${socFamily} arch=${arch}`)} || true\n` +
+  (INVOKED_WITH
+    ? `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" prompt ${shq(INVOKED_WITH)} ` +
+      `${shq('Analyze')} 0 || true\n` +
+      `printf '%s' ${shq(INVOKED_WITH)} | bash "${PLUGIN}/scripts/py.sh" record.py ` +
+      `"${workdir}" prompt --stdin=text phase=Analyze round=0 || true`
+    : `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" note ` +
+      `${shq('사용자 입력 원문이 전달되지 않았습니다 (invoked_with 미지정) — ' +
+             '이 실행의 지시 맥락은 기록되지 않습니다')} || true`),
+  OK_SCHEMA)
+
+// Precondition zero: is this even the current plugin?
+//
+// A session loads its skills and agents ONCE, at start. Pulling a newer plugin
+// afterwards does not change what the running session uses, so a stale session
+// runs old prompts against new scripts and the logs look entirely normal while
+// the behaviour is a previous release's. That is worse than a crash: the user
+// ends up debugging something that was fixed two versions ago.
+//
+// So this runs before anything else and refuses rather than warns.
+const ver = await shell('check-version', 'Analyze',
+  `bash "${PLUGIN}/scripts/check_version.sh" "${PLUGIN}"`,
+  {
+    type: 'object',
+    properties: {
+      ok: { type: 'boolean' },
+      state: { type: 'string' },
+      running: { type: ['string', 'null'] },
+      registered: { type: ['string', 'null'] },
+      available: { type: ['string', 'null'] },
+      problems: { type: 'array' },
+      notes: { type: 'array' },
+      hint: { type: 'string' },
+    },
+    required: ['ok'],
+  })
+
+if (ver && ver.ok === false) {
+  const problems = (ver.problems ?? []).join(' / ')
+  await shell('record-version-blocker', 'Analyze',
+    `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=BLOCKED_VERSION ` +
+    `detail=${shq(problems)} 2>/dev/null || true\n` +
+    `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" note ` +
+    `${shq(`버전 드리프트로 정지: ${problems}`)} 2>/dev/null || true`,
+    OK_SCHEMA)
+  log('★ 정지 — BLOCKED_VERSION: 이 세션이 최신 플러그인을 쓰고 있지 않습니다.')
+  log(`    실행 중 ${ver.running ?? '?'} · 세션이 로드한 것 ${ver.registered ?? '?'} · ` +
+      `이 컴퓨터의 최신 ${ver.available ?? '?'}`)
+  ;(ver.problems ?? []).forEach(p => log(`    · ${p}`))
+  log('')
+  ;(ver.hint ?? '').split('\n').forEach(line => log(`    ${line}`))
+  return {
+    success: false, stopped: true, stop_reason: 'BLOCKED_VERSION',
+    running: ver.running, registered: ver.registered, available: ver.available,
+    problems: ver.problems ?? [],
+    note: '옛 버전으로 실행하면 회차·로그·판정이 모두 옛 규칙을 따릅니다. ' +
+          '위 순서대로 갱신한 뒤 같은 명령을 다시 실행하십시오 — ' +
+          '워크스페이스와 INPUT.md 는 그대로 재사용됩니다.',
+  }
+}
+if (ver && Array.isArray(ver.notes) && ver.notes.length) {
+  ver.notes.forEach(t => log(`[버전] ${t}`))
+}
+if (ver && ver.state === 'dev') {
+  log(`[버전] 작업 사본(${ver.running})으로 실행 중입니다 — 캐시가 아니라 체크아웃이 기준입니다.`)
+}
 
 // Precondition: can this shell run the work at all?
 //
@@ -495,7 +564,7 @@ log(`[분석] 트랙 ${track} / 등급 ${target} — 목표 사다리: ${goals.j
 // budget. A shell that cannot execute the work is not a goal judgement - check
 // it once, up front, and stop with something the user can act on.
 const env = await shell('check-env', 'Analyze',
-  `bash "${PLUGIN}/scripts/check_env.sh" "${workdir}" ${track}`,
+  `bash "${PLUGIN}/scripts/check_env.sh" "${workdir}" ${target}`,
   {
     type: 'object',
     properties: {
@@ -528,55 +597,104 @@ if (!env || env.ok !== true) {
 
 const prior = await agent(
   `Run in mode=prior: derive every fact needed to build the machine model.\n` +
-  `track=${track}, target=${target}, soc_family=${socFamily}, arch=${arch}\n` +
+  `target=${target}, soc_family=${socFamily}, arch=${arch}\n` +
   `Input: ${workdir}/INPUT.md\n` +
-  (track === 1 ? `Bootloader image: ${bootloader_path}\n` : `Boot assets: ${workdir}/fw/\n`) +
+  `Bootloader container: ${bootloader_path}\n` +
+  `Boot assets (kernel side, if already staged): ${workdir}/fw/\n` +
   `Profile hints: profiles/${socFamily}.yaml (hints about WHERE to look, never values)\n` +
   (arch === 'arm32'
     ? `This bootloader is AArch32/Thumb - disassemble with ` +
       `scripts/carve_disasm.py --arch arm32.\n`
     : '') +
-  (track === 1
-    ? `\nDERIVE THE INTERACTIVE SURFACE FIRST` +
-      (surfaceDeclared ? ` (setup's hint: ${surface} - confirm or correct it)` : ' (no hint given)') +
-      `.\nA command table existing in the binary does NOT mean it is reachable. Establish, ` +
-      `as fact, whether an input path exists:\n` +
-      `  - UART: does the driver have a receive path (RBR read / rx polling), or is it ` +
-      `output-only?\n` +
-      `  - USB: which dispatchers exist (fastboot, download/DA, vendor), and do any of them ` +
-      `reference the console command table?\n` +
-      `Report bl_surface as "shell", "fastboot", or "none" when no surface has an input path. ` +
-      `"none" is a hard blocker - say so rather than inventing a route.\n\n` +
-      `DERIVE TWO MORE THINGS BEFORE THE BUILD - both cost rounds if left to the loop:\n` +
-      `  1. ENTRY PC. If the image is a container (TOC header + EPBL/BL2/BL33\n` +
-      `     segments), parse the header and give the BL33 segment's load and entry.\n` +
-      `     File offset 0 is the header, not code.\n` +
-      `  2. THE AUTOBOOT GATE'S INPUT PATTERN. The gate polls the console and\n` +
-      `     counts a run of one byte (usually CR, 0x0d) before it hands over to\n` +
-      `     the shell; miss it and the surface is unreachable no matter what else\n` +
-      `     is right. Disassemble the gate (the shell function's first bl) and\n` +
-      `     write ${workdir}/input_plan.json:\n` +
-      `       {"autoboot_interrupt": {"bytes": "\\r", "count": <N>,\n` +
-      `        "contiguous": <bool>, "empty_poll_budget": <N>, "one_shot": <bool>,\n` +
-      `        "gate_addr": "0x...", "evidence": "<disassembly line + bytes>"}}\n` +
-      `     Every property the harness needs must be its OWN FIELD. Prose in\n` +
-      `     "evidence" reaches a reader, not the code: a gate that fails on one\n` +
-      `     empty poll has to say empty_poll_budget 0, or the harness will let\n` +
-      `     the run of bytes be broken and the surface is lost with no sign why.\n` +
-      `     If you cannot derive N, write no file - the harness then uses a\n` +
-      `     documented default and says it was a default. Omitted optional fields\n` +
-      `     are read as the strictest case, which is the safe direction.\n`
-    : '') + `\n` +
+  `\nThis run rehosts ONE chain: the container is loaded once and every stage after\n` +
+  `the first is reached by the firmware's own code. Derive it in this order.\n\n` +
+
+  `1. STAGE MAP - run it, do not eyeball it:\n` +
+  `     bash "${PLUGIN}/scripts/py.sh" stage_map.py ${shq(bootloader_path)} \\\n` +
+  `       --arch ${arch} --profile ${socFamily} --out ${stageMap}\n` +
+  `   Exit 3 means this architecture has no entry-stub signature yet. That is\n` +
+  `   NOT "no stages": report arch_supported=false and stop - the caller raises\n` +
+  `   BLOCKED_ARCH.\n` +
+  `   Then READ the JSON and confirm each stage against the binary. For every\n` +
+  `   stage whose base says confidence != "derived", either find the literal\n` +
+  `   anchor yourself or report the base as 미확정. A base with no anchor is a\n` +
+  `   candidate, and building on a candidate costs a rebuild.\n` +
+  `   Return the confirmed list as "stages": each entry needs\n` +
+  `   {name, file_range, state: "exec"|"encrypted", load_base, entry_pc}.\n` +
+  `   The goal ladder is built from this, so a stage you cannot place is a\n` +
+  `   stage the loop cannot aim at.\n\n` +
+
+  `2. SKIP PLAN. For each encrypted stage, say which executable stage the\n` +
+  `   previous one must be redirected to, and PROVE the skip is safe: list the\n` +
+  `   absolute addresses the next stage reads before it writes anything, and\n` +
+  `   classify each as a hardware register (fine - the machine models it) or a\n` +
+  `   word the skipped stage wrote (a handoff that must be supplied, and that\n` +
+  `   supply is a documented bypass). If you cannot classify one, say 미확정 -\n` +
+  `   do not assume it is a register.\n\n` +
+
+  `3. HANDOFF SURFACE of the FIRST stage. It has no predecessor here, so\n` +
+  `   whatever the boot ROM left it must be modelled. Find the slots it calls\n` +
+  `   through (a constant address loaded, then an indirect call) and, for each,\n` +
+  `   derive the contract from the ARGUMENT SETUP at the call sites - not from\n` +
+  `   what the slot's position suggests. Report the count and each slot's\n` +
+  `   evidence. The count is small and bounded; modelling the whole boot ROM is\n` +
+  `   neither necessary nor possible.\n\n` +
+
+  `4. INTERACTIVE SURFACE` +
+  (surfaceDeclared ? ` (setup's hint: ${surface} - confirm or correct it)` : ' (no hint given)') +
+  `.\n   A command table existing in the binary does NOT mean it is reachable:\n` +
+  `   - UART: does the driver have a receive path (RBR read / rx polling)?\n` +
+  `   - USB: which dispatchers exist, and do any reference the command table?\n` +
+  `   Report bl_surface as "shell", "fastboot", or "none". "none" is a hard\n` +
+  `   blocker - say so rather than inventing a route.\n\n` +
+
+  `5. AUTOBOOT GATE INPUT PATTERN. The gate polls the console and counts a run\n` +
+  `   of one byte (usually CR, 0x0d) before handing over; miss it and the\n` +
+  `   surface is unreachable no matter what else is right. Disassemble the gate\n` +
+  `   (the shell function's first bl) and write ${workdir}/input_plan.json:\n` +
+  `     {"autoboot_interrupt": {"bytes": "\\r", "count": <N>,\n` +
+  `      "contiguous": <bool>, "empty_poll_budget": <N>, "one_shot": <bool>,\n` +
+  `      "gate_addr": "0x...", "evidence": "<disassembly line + bytes>"}}\n` +
+  `   Every property the harness needs must be its OWN FIELD. If you cannot\n` +
+  `   derive N, write no file - the harness then uses a documented default and\n` +
+  `   says it was a default.\n\n` +
+
+  `6. BOOT MEDIUM. The bootloader reads the next stage from it, so the model\n` +
+  `   must answer. Derive from the DTB (authoritative) the controller register\n` +
+  `   bases and its interrupt. Derive from the bootloader's own strings the\n` +
+  `   PARTITION NAMES it looks up - build_lu.py must synthesise the medium under\n` +
+  `   those names.\n` +
+  `   ⚠ Do NOT scan for 4-byte literals to find MMIO bases: AArch64 builds\n` +
+  `   constants with MOVZ/MOVK, so a literal scan finds coincidental byte\n` +
+  `   sequences and misses the real base. Confirm against the DTB.\n\n` +
+
+  `7. VERIFIED BOOT. Locate the bootloader's own verification (AVB or vendor):\n` +
+  `   where the key store lives, what the vbmeta partition is called, whether\n` +
+  `   hash/RSA are software in the image (then TCG runs them and no accelerator\n` +
+  `   model is needed) or a hardware block. Report where the rollback index is\n` +
+  `   read from. The images are genuinely signed, so verification is expected to\n` +
+  `   PASS unpatched - anything suggesting otherwise is a finding, not a licence\n` +
+  `   to patch.\n\n` +
+
+  `8. MILESTONE TOKENS for every rung of ${ladderArg}. Write\n` +
+  `   ${workdir}/milestone_tokens.txt as "<milestone>\\t<token>" lines, using\n` +
+  `   ONLY strings you located at a file offset in this firmware. The run script\n` +
+  `   checks each against the machine source, and anything the machine also\n` +
+  `   contains is treated as self-injection.\n\n` +
+
+  `9. KERNEL SIDE (needed for the upper rungs): boot image layout, whether a\n` +
+  `   ramdisk exists (ramdisk_size=0 means system-as-root - there is no\n` +
+  `   initramfs and userspace does not exist until storage works), DTB skeleton\n` +
+  `   (cpu / memory / GIC / UART / storage node), and the security gate sites.\n\n` +
+
   `First record the phase:\n` +
   `  bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Analyze (static-analyzer prior)"\n` +
   `  bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" start analyze\n\n` +
-  (track === 1
-    ? `Work through the track 1 checklist (carve verdict first) and write STATIC.md.`
-    : `Work through the track 2 checklist (assets, DTB skeleton, security gate sites) ` +
-      `and write KERNEL_STATIC.md.`) +
-  `\nAnything you cannot derive stays "미확정" with a confirm plan. Never borrow ` +
+  `Work through the nine items above and append everything to STATIC.md - one\n` +
+  `accumulating record for this firmware, never overwritten.\n` +
+  `Anything you cannot derive stays "미확정" with a confirm plan. Never borrow ` +
   `values from another device or build.\n\n` +
-  `Write STATIC.md / KERNEL_STATIC.md in natural Korean - the user reads them.\n` +
+  `Write STATIC.md in natural Korean - the user reads it.\n` +
   DOC_STYLE + `\n` +
   `When finished:\n` +
   `  bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" metric phase=Analyze ` +
@@ -585,16 +703,47 @@ const prior = await agent(
 )
 
 const blockers = []
-if (track === 1 && prior?.carve_is_full === false) {
-  blockers.push(['BLOCKED_CARVE', '부트로더 이미지가 carve 로 판정됨 (알려진 ASCII 부족)'])
+if (prior?.carve_is_full === false) {
+  blockers.push(['BLOCKED_CARVE', '부트로더 컨테이너가 carve 로 판정됨 (알려진 ASCII 부족)'])
 }
-if (track === 1 && String(prior?.bl_surface ?? '').toLowerCase() === 'none') {
+if (String(prior?.bl_surface ?? '').toLowerCase() === 'none') {
   blockers.push(['BLOCKED_NO_INPUT_PATH',
                  '어느 표면에도 인터랙티브 입력 경로가 없음 — UART 는 출력 전용이고 ' +
                  '어떤 USB dispatcher 도 명령 테이블을 참조하지 않음'])
 }
-if (track === 2 && prior?.assets_ok === false) {
-  blockers.push(['BLOCKED_ASSET', '부팅 자산을 확보하지 못함 (Image/DTB)'])
+// stage_map.py exits 3 for an architecture whose entry-stub signature is not
+// written yet. Reporting that as "no stages" would turn a missing tool into a
+// statement about the firmware, so it stops with its own code instead.
+if (prior?.arch_supported === false) {
+  blockers.push(['BLOCKED_ARCH',
+                 `${arch} 의 스테이지 진입 스텁 시그니처가 아직 정의되지 않았습니다 — ` +
+                 '스테이지를 도출할 수단이 없습니다. 펌웨어의 한계가 아니라 도구의 결손입니다'])
+}
+// The upper rungs need the kernel side. Missing assets do not block F1, so this
+// is only fatal when the target actually asks for them.
+if (target !== 'F1' && prior?.assets_ok === false) {
+  blockers.push(['BLOCKED_ASSET',
+                 `목표 ${target} 은 커널 자산이 필요한데 확보하지 못했습니다 (Image/DTB). ` +
+                 'F1 로 낮추면 부트로더 체인까지는 그대로 진행됩니다'])
+}
+
+// The ladder is built from the derived map, so it can only be built now. Until
+// this point the loop was aimed at a placeholder rung.
+const execStages = (prior?.stages ?? []).filter(x => x && x.state === 'exec')
+if (execStages.length) {
+  stageRungs = execStages.map((x, i) => `${x.name || `stage${i}`}_entry`)
+  goals = goalsFor(activeSurface)
+  ladderArg = goals.join(',')
+  const skipped = (prior?.stages ?? []).filter(x => x && x.state !== 'exec')
+  log(`[분석] 실행 가능 스테이지 ${execStages.length}개 → 사다리 ${goals.join(' → ')}`)
+  if (skipped.length) {
+    log(`[분석] 건너뛰는 스테이지 ${skipped.length}개: ` +
+        skipped.map(x => `${x.name}(${x.state})`).join(', ') +
+        ` — 각각 우회로 문서화되어야 합니다.`)
+  }
+} else if (prior?.arch_supported !== false) {
+  log('[분석] ⚠ 실행 가능 스테이지를 하나도 도출하지 못했습니다. ' +
+      '사다리가 자리표시자 한 칸으로 남습니다 — 첫 회차 지문으로 다시 판단하십시오.')
 }
 
 // static-analyzer may correct setup's surface hint; measurement wins over the hint.
@@ -602,7 +751,7 @@ if (track === 2 && prior?.assets_ok === false) {
 // INPUT.md would break the autonomy contract, and a corrected goal is a derived
 // fact, not a structural impossibility.
 const derivedSurface = String(prior?.bl_surface ?? '').toLowerCase()
-if (track === 1 && SURFACES.includes(derivedSurface) && derivedSurface !== activeSurface) {
+if (SURFACES.includes(derivedSurface) && derivedSurface !== activeSurface) {
   const before = activeSurface
   activeSurface = derivedSurface
   goals = goalsFor(activeSurface)
@@ -656,10 +805,10 @@ async function buildMachine(diagnosis) {
       `bypass entry to bypasses.md if the change is a bypass.\n\n`
     : '') +
   `Generate the machine source, integrate it into QEMU and build.\n` +
-  `track=${track}, model=${model}, machine name=${machine}\n\n` +
+  `model=${model}, machine name=${machine}, target=${target}\n\n` +
   `1. Record the phase: bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase ${again ? '"Rebuild"' : '"Build"'}\n` +
-  (track === 1 && arch === 'arm32'
-    ? `★ This bootloader is AArch32. templates/machine.c.tmpl models an AArch64\n` +
+  (arch === 'arm32'
+    ? `★ This bootloader is AArch32. templates/machine_full.c.tmpl models an AArch64\n` +
       `   machine and would produce a wrong machine rather than a failure, so do\n` +
       `   NOT use it. Author the machine for AArch32 from the derived facts\n` +
       `   (exception-vector entry, CP15 MMU/cache setup, 16550-style UART at the\n` +
@@ -667,29 +816,40 @@ async function buildMachine(diagnosis) {
       `   from derived facts alone, report build_ok=false saying an AArch32\n` +
       `   machine template is missing - do not guess.\n`
     : '') +
-  (track === 1
-    ? `★ ENTRY_PC is not LOAD_BASE. A vendor image is usually a container (TOC\n` +
-      `   header + EPBL/BL2/BL33 segments) that is loaded whole, so file offset 0\n` +
-      `   is the header: entering there executes the header as data and traps on\n` +
-      `   the first word. Use the BL33 reset entry derived in STATIC.md. If it is\n` +
-      `   undetermined, report build_ok=false and say so - do NOT fall back to the\n` +
-      `   load address, which costs several rounds and two rebuilds to undo.\n` +
-      `★ The machine must not create console input. No function may fill the RX\n` +
-      `   buffer except the chardev receive callback; the interrupt pattern and\n` +
-      `   the command come from scripts/uart_harness.py outside QEMU.\n`
-    : '') +
-  `2. Fill the template ` +
-  `${track === 1 ? (arch === 'arm32' ? '(no AArch32 template yet - see above)' : 'templates/machine.c.tmpl')
-                 : 'templates/machine_kernel.c.tmpl' + (target === 'K3' ? ' (plus templates/storage_hci.c.tmpl)' : '')} ` +
-  `with values derived in ${track === 1 ? 'STATIC.md' : 'KERNEL_STATIC.md'} and write ` +
-  `${workdir}/06_machine/${track === 1 ? 'machine.c' : 'machine_kernel.c'}.\n` +
+  `★ STAGE PLACEMENT. Load the container ONCE and memcpy each executable stage\n` +
+  `   to its own load base, exactly as ${stageMap} records them.\n` +
+  `   Do not carve the file, and do not load a stage the map marked encrypted.\n` +
+  `★ ENTRY_PC is not LOAD_BASE. File offset 0 is the container header: entering\n` +
+  `   there executes header bytes as instructions and traps on the first word.\n` +
+  `   Use the first stage's derived entry. If it is undetermined, report\n` +
+  `   build_ok=false and say so - do NOT fall back to the load address, which\n` +
+  `   costs several rounds and two rebuilds to undo.\n` +
+  `★ EXCEPTION LEVEL comes from the stage itself: whichever vbar_el* its entry\n` +
+  `   stub writes is the level it expects, and stage_map.json records that.\n` +
+  `   Set has_el3 from it. Do NOT default either way - a first stage that writes\n` +
+  `   vbar_el3 needs EL3, and the opposite default breaks it silently.\n` +
+  `★ SKIP REDIRECT. For each encrypted stage, redirect the previous stage's\n` +
+  `   entry to the next executable stage's entry, per the skip plan in STATIC.md.\n` +
+  `   Record each as a four-field bypass. Never synthesise a value to stand in\n` +
+  `   for a skipped stage - if a later stage needs one, that is a finding.\n` +
+  `★ The machine must not create console input. No function may fill the RX\n` +
+  `   buffer except the chardev receive callback; the interrupt pattern and the\n` +
+  `   command come from scripts/uart_harness.py outside QEMU.\n` +
+  `2. Fill ` +
+  `${arch === 'arm32' ? '(no AArch32 template yet - see above)'
+                      : 'templates/machine_full.c.tmpl plus templates/storage_hci.c.tmpl'} ` +
+  `with values derived in STATIC.md and write ` +
+  `${workdir}/06_machine/machine_full.c.\n` +
   `   Never invent a value that was not derived. Mark undetermined slots with a ` +
   `   comment instead of guessing.\n` +
-  (track === 2
-    ? `3. bash "${PLUGIN}/scripts/py.sh" patch_qemu_core.py  (idempotent SMC core patch)\n` +
-      `   bash "${PLUGIN}/scripts/py.sh" patch_kernel.py ${workdir}/fw/Image ${workdir}/fw/Image.patched\n` +
-      `   patch_kernel.py refuses to apply on a pre-image mismatch - report that as is.\n`
-    : '') +
+  `3. Synthesise the boot medium the bootloader reads the next stage from:\n` +
+  `   bash "${PLUGIN}/scripts/py.sh" build_lu.py "${workdir}" --out ${workdir}/fw/lu0.img\n` +
+  `   Its GPT partition names must be the ones derived from the bootloader's own\n` +
+  `   strings. A name we invented is a partition the firmware will never find.\n` +
+  `   bash "${PLUGIN}/scripts/py.sh" patch_qemu_core.py  (idempotent SMC core patch)\n` +
+  (target === 'F1' ? ''
+    : `   bash "${PLUGIN}/scripts/py.sh" patch_kernel.py ${workdir}/fw/Image ${workdir}/fw/Image.patched\n` +
+      `   patch_kernel.py refuses to apply on a pre-image mismatch - report that as is.\n`) +
   `4. Copy it into the QEMU tree as hw/arm/${machine.replace(/-/g, '_')}.c and register\n` +
   `   it in hw/arm/meson.build. That exact name matters: every later round syncs\n` +
   `   the workspace source to the tree with scripts/sync_machine.sh, which finds\n` +
@@ -752,9 +912,8 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   // cannot be weakened by a transcription slip.
   const obs = await shell(`run-${round}`, 'Loop',
     `TIMEOUT=${RUN_TIMEOUT} ` +
-    `bash "${PLUGIN}/scripts/run_round.sh" "${workdir}" ${track} ${machine} ${round} ` +
-    `${shq(goal)} ${shq(ladderArg)}` +
-    (track === 1 ? ` ${shq(bootloader_path)} help ${shq(activeSurface)}` : '') + `\n` +
+    `bash "${PLUGIN}/scripts/run_round.sh" "${workdir}" ${machine} ${round} ` +
+    `${shq(goal)} ${shq(ladderArg)} ${shq(bootloader_path)} help ${shq(activeSurface)}\n` +
     `\n# This prints ONE observation document, also saved to ${workdir}/observation.json.\n` +
     `# Relay it as-is. Do not merge, re-derive or adjust any field - above all\n` +
     `# stop and stop_reason, which the pipeline enforces against your route.`,
@@ -812,44 +971,26 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
       storageSeenAt = round
       if (storageVerdict === 'missing') {
         log(`[루프] 회차 ${round}: 펌웨어가 파티션표를 읽지 못했다고 보고했습니다 ` +
-            `(${obs?.storage_token ?? ''}). 트랙 1 은 스토리지 컨트롤러를 구현하지 않으므로 ` +
-            `이후 "${STORAGE_DEPENDENT_RUNGS.join(', ')}" 칸은 이 트랙에서 도달할 수 없습니다. ` +
-            `현재 목표까지는 그대로 진행합니다.`)
+            `(${obs?.storage_token ?? ''}). 이 플로우는 매체를 직접 모델하므로 이것은 ` +
+            `트랙 경계가 아니라 **우리가 합성한 매체의 결함**입니다 — ` +
+            `fixer-storage 가 담당합니다 (partition_table_unavailable).`)
       }
     }
   }
 
-  // The goal we are now on needs the medium, and the firmware told us it could
-  // not read it. No fixer on this track can change that - fixer-storage is not
-  // on the track's roster by design - so continuing would spend rounds on a rung
-  // that is out of reach for a reason that has nothing to do with the firmware.
-  if (track === 1 && STORAGE_DEPENDENT_RUNGS.includes(goal) && storageVerdict === 'missing') {
-    log(`[루프] ★ 목표 "${goal}" 은 부팅 매체를 읽어야 도달합니다. 회차 ${storageSeenAt} 에서 ` +
-        `펌웨어가 파티션표 부재를 보고했고, 트랙 1 에는 이를 고칠 수단이 없습니다.`)
-    await shell(`storage-blocker-${round}`, 'Loop',
-      `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" blocker code=BLOCKED_STORAGE ` +
-      `detail=${shq(`목표 "${goal}" 은 부팅 매체를 읽어야 하는데 회차 ${storageSeenAt} 콘솔에서 ` +
-                    `펌웨어가 파티션표 부재를 보고했습니다 (${obs?.storage_token ?? ''}). ` +
-                    `트랙 1 은 스토리지 컨트롤러를 구현하지 않으므로 이 칸은 트랙 경계 때문에 ` +
-                    `도달 불가입니다 — 펌웨어의 한계가 아닙니다.`)}\n` +
-      `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" note ` +
-      `${shq(`정지: BLOCKED_STORAGE — "${goal}" 은 트랙 1 범위 밖입니다. ` +
-             `도달한 칸까지는 유효하며, 이 칸이 필요하면 /sboot-rehost:rehost-kernel 로 ` +
-             `스토리지를 구현하거나 목표 등급을 낮춰 재개하십시오.`)}`,
-      OK_SCHEMA)
-    stopped = true; stopReason = 'BLOCKED_STORAGE'
-    break
-  }
+  // A missing partition table used to stop the run here, because a bootloader
+  // track had no storage model and nothing could have fixed it. This flow models
+  // the medium, so the same report now means the image WE synthesised is wrong -
+  // a fault with an owner, not a boundary. It goes to the classifier like any
+  // other observation, and BLOCKED_STORAGE no longer exists.
 
   log(`[루프] 회차 ${round} (목표 ${goal}) — 마일스톤 ${obs?.milestone ?? '?'}, ` +
       `콘솔 고유 ${obs?.console_uniq ?? 0} 줄, 예외 ${obs?.exceptions ?? '?'} 건, ` +
       `최초 ${obs?.origin_type ?? 'none'}@${obs?.origin_elr ?? 'none'}, ` +
       `정체 ${obs?.stall_count ?? 0} 회` +
       (obs?.injected ? ' ★ 자가주입 감지' : '') +
-      (track === 1
-        ? ` · 입력: ${obs?.prompt_seen ? '프롬프트 관측' : '프롬프트 미관측'}` +
-          `${obs?.rx_reported ? `, 펌웨어가 읽은 바이트 ${obs?.rx_served ?? '?'}` : ''}`
-        : '') +
+      ` · 입력: ${obs?.prompt_seen ? '프롬프트 관측' : '프롬프트 미관측'}` +
+      `${obs?.rx_reported ? `, 펌웨어가 읽은 바이트 ${obs?.rx_served ?? '?'}` : ''}` +
       (obs?.timeout_bound === true ? ' ★ 타임아웃 한계 (더 돌리면 더 나옴)' : ''))
 
   // Everything derived about this firmware so far. Read before the supervisor,
@@ -857,7 +998,7 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   // derived facts - and read again after an escalation, which may add rows.
   let analystNewFacts = -1
   let derived = await shell(`derived-peek-${round}`, 'Loop',
-    `bash "${PLUGIN}/scripts/py.sh" derived_facts.py "${workdir}" --track ${track} --peek`,
+    `bash "${PLUGIN}/scripts/py.sh" derived_facts.py "${workdir}" --peek`,
     DERIVED_SCHEMA)
   let derivedRows = (derived?.stop_points ?? [])
   const renderDerived = rows => rows.length
@@ -905,15 +1046,14 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     // S921N the harness fired the command without ever seeing the prompt in every
     // single round, including the two that reached the shell, and no artifact
     // said so. A surface that was never offered its input is not a firmware fact.
-    (track === 1
-      ? `INPUT PATH THIS ROUND - check this BEFORE naming a stop point.\n` +
+    (`INPUT PATH THIS ROUND - check this BEFORE naming a stop point.\n` +
         `  prompt observed: ${obs?.prompt_seen}   command sent: ${obs?.command_sent}\n` +
         (obs?.rx_reported
           ? `  the firmware read ${obs?.rx_served} of our bytes across ` +
             `${obs?.rx_polls} console polls\n`
           : `  the machine does not report RX consumption, so how much of our ` +
             `input the firmware actually took is unknown (rebuild picks up the ` +
-            `counters from templates/machine.c.tmpl)\n`) +
+            `counters from templates/machine_full.c.tmpl)\n`) +
         (obs?.input_starved
           ? `  ★ STARVED: the gate polled and got none of our bytes. This is the ` +
             `harness, not the firmware. Do not prescribe a fixer for it.\n`
@@ -922,20 +1062,19 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
         `BOOT MEDIUM: partition table = ${obs?.storage_partition_table ?? 'unknown'}` +
         (obs?.storage_partition_table === 'missing'
           ? ` (${obs?.storage_token ?? ''})\n` +
-            `  Track 1 does not implement a storage controller, so every failure ` +
-            `downstream of this - partition lookups, environment, panel/modem ` +
-            `images, loading the next stage - follows from OUR track boundary, ` +
-            `not from the firmware. Do NOT prescribe memory windows or fixers for ` +
-            `them. Only the interactive surface and its command handlers are in ` +
-            `scope on this track.\n`
-          : `\n`)
-      : '') +
+            `  The medium is MODELLED here, so this is not a boundary: the image ` +
+            `we synthesised is wrong. Route it to fixer-storage as ` +
+            `partition_table_unavailable and check the GPT signature offset ` +
+            `against the block size the controller reports. Every downstream ` +
+            `failure - partition lookups, environment, loading the next stage - ` +
+            `follows from this one, so do not name them separately.\n`
+          : `\n`)) +
     `Recent rounds: ${JSON.stringify(recent)}\n` +
     `Derived stop points (${staticDoc}):\n${derivedTable}\n` +
     `Machine sources: ${workdir}/06_machine/   Bypasses: ${workdir}/06_machine/bypasses.md\n` +
     `Machine premises in force: has_el3, entry EL, entry PC, load address, ` +
     `memory skeleton - all set at Build time, none of them reachable by a fixer.\n` +
-    `Fixers implemented on this track: ${KNOWN_FIXERS.join(', ')} ` +
+    `Fixers implemented: ${KNOWN_FIXERS.join(', ')} ` +
     `(domains in fixers/registry.yaml - read it before prescribing).\n` +
     `If the mechanism is understood but no implemented fixer covers it, route ` +
     `"${GENERAL_FIXER}" with a treatment_plan; it has no domain boundary and may ` +
@@ -1011,10 +1150,10 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
                     (gen.changes ?? []).map(c => `${c.file}: ${c.what}`).join(' / '),
                     obs?.summary ?? '') + `\n` +
       recordRoundCmd(round, goal, obs, 'unowned', GENERAL_FIXER, gen.change_key,
-                     'applied', analystNewFacts, false),
+                     'applied', analystNewFacts, false, gen?.rationale),
       OK_SCHEMA)
     roundLog.push({ round, goal, category: 'unowned', fixer: GENERAL_FIXER,
-                    change_key: gen.change_key })
+                    change_key: gen.change_key, rationale: gen.rationale })
     continue
   }
 
@@ -1150,10 +1289,29 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     goalIndex = reachedIndex + 1
     log(`[루프] ★ 목표 ${cleared.map(g => `"${g}"`).join(', ')} 도달 — ` +
         (goalIndex >= goals.length ? '사다리를 모두 통과했습니다.' : `다음 목표는 "${goals[goalIndex]}" 입니다.`))
+    // How this goal was actually cleared. Nothing else writes this: rounds.jsonl
+    // says what ran, but not which sequence of attempts ended at the milestone,
+    // and that is the part a later run - or another firmware - can reuse.
+    const spent = roundLog.filter(r => r.goal === goal)
+    const last = spent[spent.length - 1]
+    const tried = spent.length
+      ? spent.map(r => `${r.category ?? '?'}→${r.change_key ?? '-'}`).join(' · ')
+      : '변경 없이 도달 (이전 회차의 변경이 이 칸까지 열었습니다)'
+    const rangeText = spent.length
+      ? `${spent[0].round}-${spent[spent.length - 1].round}` : String(round)
+    const fixText = last?.change_key
+      ? `${last.change_key}${last.rationale ? ` — ${last.rationale}` : ''}`
+      : '직전 회차까지의 변경이 누적되어 도달'
+
     await shell(`goal-${round}`, 'Loop',
-      journalTryEnd(round, '목표 도달', `${obs?.milestone} 마일스톤을 커널·펌웨어 출력에서 확인`,
+      journalTryEnd(round, '목표 도달', `${obs?.milestone} 마일스톤을 펌웨어 출력에서 확인`,
                     '다음 목표로 진행', obs?.console ?? '') + `\n` +
-      recordRoundCmd(round, goal, obs, 'reached', null, null, 'progress', -1, false),
+      recordRoundCmd(round, goal, obs, 'reached', null, null, 'progress', -1, false) + `\n` +
+      `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" resolution ` +
+      `${shq(goal)} ${shq(tried)} ${shq(fixText)} ${shq(obs?.console ?? '')} || true\n` +
+      `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" resolution ` +
+      `stop=${shq(goal)} tried=${shq(tried)} fix=${shq(fixText)} ` +
+      `rounds=${shq(rangeText)} evidence=${shq(obs?.console ?? '')} || true`,
       OK_SCHEMA)
     continue
   }
@@ -1193,11 +1351,11 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     // A self-reported number cannot be contradicted, so re-deriving the same
     // address would count as "new" every round and exhaustion never arrives.
     const measured = await shell(`derived-${round}`, 'Loop',
-      `bash "${PLUGIN}/scripts/py.sh" derived_facts.py "${workdir}" --track ${track}\n` +
+      `bash "${PLUGIN}/scripts/py.sh" derived_facts.py "${workdir}"\n` +
       `# Move old evidence prose to 08_docs/ once the record gets large, keeping\n` +
       `# every derived ROW in the table. The analyst re-reads this file each\n` +
       `# escalation, so unbounded growth makes every later round cost more.\n` +
-      `bash "${PLUGIN}/scripts/py.sh" static_rotate.py "${workdir}" --track ${track} >/dev/null 2>&1 || true`,
+      `bash "${PLUGIN}/scripts/py.sh" static_rotate.py "${workdir}" >/dev/null 2>&1 || true`,
       DERIVED_SCHEMA)
     derived = measured
     derivedRows = (measured?.stop_points ?? derivedRows)
@@ -1215,17 +1373,18 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   // counter, so the classifier saw identical input every round and answered
   // "unknown" every round.
   const cls = await agent(
-    `Round ${round}, goal ${goal}, track ${track}.\n` +
+    `Round ${round}, goal ${goal}, target ${target}.\n` +
     `Fingerprint: ${fingerprintText(obs)}\n` +
     `(full file: ${workdir}/fingerprint.json, provenance gate injected=${obs?.injected})\n` +
     `Originating exception block: ${obs?.origin_block}\n` +
     `Match on the ORIGIN. A storm's trailing FAR walks with every run and is not ` +
     `the stop point; naming it produces a category no fixer can act on.\n` +
     `Console: ${obs?.console}\nSummary: ${obs?.summary}\nFull trace if needed: ${obs?.trace}\n` +
-    `Registry: fixers/registry.yaml - only these fixers exist on this track: ` +
+    `Registry: fixers/registry.yaml - only these fixers exist: ` +
     `${KNOWN_FIXERS.join(', ')}\n` +
-    `Knowledge tables for this track: ${KNOWLEDGE}. Do not match against the ` +
-    `other track's tables; a stop point that belongs to another track's goal is ` +
+    `Knowledge tables: ${KNOWLEDGE}. Do not match against the ` +
+    `a class from a chain position this run has not reached yet; a stop point ` +
+    `named ahead of where the run actually is is ` +
     `not this run's fault.\n` +
     `Derived stop points for THIS firmware (accumulated in ${staticDoc}):\n` +
     `${derivedTable}\n` +
@@ -1273,9 +1432,21 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   // unlike a round where nobody was asked at all.
   // The supervisor prescribes first: it read the machine sources and the derived
   // facts this round, which the classifier does not do. Its pick only counts if
-  // the fixer exists on this track.
+  // the fixer exists.
   const prescribed = KNOWN_FIXERS.includes(sup?.prescribed_fixer)
     ? sup.prescribed_fixer : null
+
+  // Naming a stop point is a claim that can be wrong, and the next round is the
+  // test: apply the owner's treatment and see whether the fingerprint moves.
+  // Recorded before the attempt so a claim that turns out wrong still leaves a
+  // trace - what was ruled out is as much a result as what worked.
+  await shell(`hypothesis-${round}`, 'Loop',
+    `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" hypothesis ` +
+    `${shq(`회차 ${round}: 정지점은 "${cls?.category ?? 'unknown'}" 이다` +
+           (cls?.why ? ` — ${cls.why}` : ''))} ` +
+    `${shq(`${prescribed ?? ranked[0]?.fixer ?? derivedOwner ?? 'fixer 미정'} 의 처방을 ` +
+           `적용한 뒤 다음 회차 지문이 움직이는지로 판정`)} || true`,
+    OK_SCHEMA)
 
   // The whole candidate list, in order of authority: the supervisor's
   // prescription (it read the sources and the derived facts this round), then
@@ -1385,10 +1556,10 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
                     (gen.changes ?? []).map(c => `${c.file}: ${c.what}`).join(' / '),
                     obs?.summary ?? '') + `\n` +
       recordRoundCmd(round, goal, obs, cls?.category, GENERAL_FIXER, gen.change_key,
-                     'applied', analystNewFacts, false),
+                     'applied', analystNewFacts, false, gen?.rationale),
       OK_SCHEMA)
     roundLog.push({ round, goal, category: cls?.category, fixer: GENERAL_FIXER,
-                    change_key: gen.change_key })
+                    change_key: gen.change_key, rationale: gen.rationale })
     continue
   }
 
@@ -1415,10 +1586,10 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     `#    identical fingerprints in rounds.jsonl and fake a stall.\n` +
     `if [ $GATE -eq 0 ]; then\n` +
     `  ` + recordRoundCmd(round, goal, obs, cls?.category, chosen, fix?.change_key,
-                          'applied', analystNewFacts, false) + `\n` +
+                          'applied', analystNewFacts, false, fix?.rationale) + `\n` +
     `else\n` +
     `  ` + recordRoundCmd(round, goal, obs, cls?.category, chosen, fix?.change_key,
-                          'reverted', analystNewFacts, false) + `\n` +
+                          'reverted', analystNewFacts, false, fix?.rationale) + `\n` +
     `fi\n` +
     `bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" metric phase=Loop round=${round} ` +
     `event=apply_end tokens_total=${budget.spent()}\n` +
@@ -1451,7 +1622,8 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
     break
   }
 
-  roundLog.push({ round, goal, category: cls?.category, fixer: chosen, change_key: fix?.change_key })
+  roundLog.push({ round, goal, category: cls?.category, fixer: chosen,
+                  change_key: fix?.change_key, rationale: fix?.rationale })
 }
 
 const reachedAll = goalIndex >= goals.length
@@ -1482,25 +1654,55 @@ if (stopped) {
   const depth = summary?.best_progress ?? {}
   log(`★ 정지 — ${stopReason}. 도달한 최고 마일스톤: ${summary?.best_milestone ?? '없음'}` +
       (depth?.uniq ? ` · 최고 부팅 깊이: 콘솔 고유 ${depth.uniq} 줄 (회차 ${depth.round ?? '-'})` : ''))
+
+  // A stop is a handover. What makes it one is that the next session can see
+  // where this got to, what was already tried and what is left - none of which
+  // survives in a log the reader has to reconstruct by hand.
+  await shell('write-resume', 'Loop',
+    `bash "${PLUGIN}/scripts/py.sh" make_resume.py "${workdir}" ` +
+    `--ladder ${shq(ladderArg)} ` +
+    `--command ${shq(`/sboot-rehost:rehost-full --target ${target}`)} || true\n` +
+    `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" note ` +
+    `${shq(`정지(${stopReason}) — RESUME.md 생성. 재개 전에 "지문 이동=불변" 행을 먼저 보십시오.`)} || true`,
+    OK_SCHEMA)
+  await shell('session-close-stop', 'Loop',
+    `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" session-end ` +
+    `${shq('/sboot-rehost:rehost-full')} ` +
+    `${shq(`정지 ${stopReason} · 도달 ${goalIndex}/${goals.length} · 회차 ${round}`)} || true`,
+    OK_SCHEMA)
+  log(`[정지] ${workdir}/RESUME.md 에 인계 내용을 적었습니다.`)
+
   return {
     success: false, stopped: true, stop_reason: stopReason,
     rounds_run: round, goals, reached_goals: goals.slice(0, goalIndex),
     best_milestone: summary?.best_milestone ?? null,
     best_progress: depth,
     tried_changes: summary?.tried_changes ?? [],
-    note: stopReason === 'BLOCKED_STORAGE'
-      ? '이 정지는 펌웨어의 한계가 아니라 트랙 경계입니다. 도달한 칸까지의 결과는 그대로 ' +
-        '유효하니 그 등급으로 보고하시고, 남은 칸이 필요하면 /sboot-rehost:rehost-kernel 로 ' +
-        '스토리지를 구현한 뒤 재개하십시오. REAL 로 표기하지 마세요.'
-      : 'REAL 로 표기하지 마세요. 정직한 미완이며 같은 명령으로 재실행하면 이어서 진행됩니다.',
+    resume_file: `${workdir}/RESUME.md`,
+    note: 'REAL 로 표기하지 마세요. 정직한 미완이며 같은 명령으로 재실행하면 이어서 ' +
+          `진행됩니다. 무엇을 시도했고 무엇이 남았는지는 ${workdir}/RESUME.md 에 있습니다.`,
   }
 }
 
 if (!reachedAll) {
+  // The round cap is where a handover matters most: the run ended without
+  // reaching the goal and with no stop reason to explain it, so without a resume
+  // document the next session starts by reconstructing what already happened.
+  await shell('resume-round-cap', 'Loop',
+    `bash "${PLUGIN}/scripts/py.sh" make_resume.py "${workdir}" ` +
+    `--ladder ${shq(ladderArg)} ` +
+    `--command ${shq(`/sboot-rehost:rehost-full --target ${target}`)} || true\n` +
+    `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" session-end ` +
+    `${shq('/sboot-rehost:rehost-full')} ` +
+    `${shq(`런타임 회차 한계(${ROUND_CAP}) · 도달 ${goalIndex}/${goals.length}`)} || true`,
+    OK_SCHEMA)
+  log(`[정지] 회차 한계 — ${workdir}/RESUME.md 에 인계 내용을 적었습니다.`)
   return {
     success: false, stopped: false, stop_reason: 'RUNTIME_ROUND_CAP',
     rounds_run: round, goals, reached_goals: goals.slice(0, goalIndex),
-    note: `런타임 회차 한계(${ROUND_CAP})입니다. 목표 도달 불가 판정이 아니며 재실행하면 이어집니다.`,
+    resume_file: `${workdir}/RESUME.md`,
+    note: `런타임 회차 한계(${ROUND_CAP})입니다. 목표 도달 불가 판정이 아니며 재실행하면 ` +
+          `이어집니다. 무엇을 시도했는지는 ${workdir}/RESUME.md 에 있습니다.`,
   }
 }
 
@@ -1511,21 +1713,20 @@ phase('Verify')
 
 const verifyCmd =
   `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Verify"\n` +
-  `bash "${PLUGIN}/scripts/py.sh" verify.py "${workdir}" --track ${track} --target ${target}` +
-  // The command the harness types. Item 4 fails if the machine sources contain
-  // it, on either surface: a machine that supplies its own input is verifying
-  // itself, whether the surface is a UART shell or a USB dispatcher.
-  (track === 1
-    ? ` --bl3 "${bootloader_path}" --surface ${activeSurface} ` +
-      `--input-token ${shq(activeSurface === 'fastboot' ? 'getvar:' : 'help')}`
-    : '')
+  `bash "${PLUGIN}/scripts/py.sh" verify.py "${workdir}" --target ${target}` +
+  // The command the harness types. The input item fails if the machine sources
+  // contain it, on either surface: a machine that supplies its own input is
+  // verifying itself, whether the surface is a UART shell or a USB dispatcher.
+  ` --container "${bootloader_path}" --surface ${activeSurface} ` +
+  `--input-token ${shq(activeSurface === 'fastboot' ? 'getvar:' : 'help')}`
 
 const verifier = await agent(
-  `This is stage 2 of the 5/5 verification.\n\n` +
+  `This is stage 2 of the 6/6 verification.\n\n` +
   `1. Run stage 1 (the script measurement) first:\n\`\`\`bash\n${verifyCmd}\n\`\`\`\n` +
   `   It writes ${workdir}/verdict_script.json.\n` +
-  `   For track 1 item 1 the script derives the expected PCs from STATIC.md; if it ` +
-  `   reports it could not find them, re-run with explicit --pc values you read yourself.\n\n` +
+  `   For the chain-trace item the script derives the expected per-stage PCs from ` +
+  `   STATIC.md / stage_map.json; if it reports it could not find them, re-run with ` +
+  `   explicit --pc values you read yourself.\n\n` +
   `2. Re-verify that measurement against the raw logs and bytes.\n` +
   `   - Lowering the verdict (REAL -> FORCED) is always yours to make. When in doubt, lower it.\n` +
   `   - Raising it (FORCED -> REAL) is only valid with byte-level evidence. Without ` +
@@ -1540,8 +1741,12 @@ const verifier = await agent(
 )
 
 const passes = verifier?.final_passes ?? 0
+// The verification has six items. Written once so the log, the README and the
+// session record cannot drift apart from each other.
+const VERIFY_ITEMS = 6
 const verdict = verifier?.final_verdict ?? 'FORCED'
-log(`[검증] 스크립트 ${verifier?.script_passes ?? '?'}/5 → 최종 ${passes}/5 (${verdict})`)
+log(`[검증] 스크립트 ${verifier?.script_passes ?? '?'}/${VERIFY_ITEMS} → ` +
+    `최종 ${passes}/${VERIFY_ITEMS} (${verdict})`)
 
 // =============================================================================
 // Phase 5 - Package
@@ -1553,7 +1758,7 @@ phase('Package')
 // estimate: which stop point cost the most rounds, which changes moved nothing,
 // and where the time went are all arithmetic on rounds.jsonl / metrics.jsonl.
 const analysis = await shell('analyze-run', 'Package',
-  `bash "${PLUGIN}/scripts/py.sh" analyze_run.py "${workdir}" --track ${track}\n` +
+  `bash "${PLUGIN}/scripts/py.sh" analyze_run.py "${workdir}"\n` +
   `# Writes ${workdir}/ANALYSIS.md (읽는 문서) and analysis.json (수치).\n` +
   `# Report the JSON it prints.`,
   {
@@ -1573,9 +1778,10 @@ log(`[분석] 회차 ${analysis?.rounds ?? '?'}건 · 정체 구간 ${analysis?.
 await agent(
   `Assemble the reproduction kit in ${workdir}/10_reproduce/.\n\n` +
   `Include:\n` +
-  `- README.md (INPUT.md summary, build and run steps, verdict ${passes}/5 ${verdict})\n` +
-  (track === 1 ? `- bootloader/ (copy of ${bootloader_path})\n`
-               : `- fw/ (Image.patched, *.dtb, initramfs reference)\n`) +
+  `- README.md (INPUT.md summary, build and run steps, verdict ${passes}/${VERIFY_ITEMS} ${verdict})\n` +
+  `- bootloader/ (copy of ${bootloader_path} - the whole container, not a carve)\n` +
+  `- fw/ (the synthesised boot medium lu0.img, plus Image.patched and *.dtb if staged)\n` +
+  `- stage_map.json (which stages ran, which were skipped and why)\n` +
   `- machine/ (sources from 06_machine plus bypasses.md)\n` +
   `- scripts/ (setup_env.sh, build and run scripts, uart_harness.py, input_plan.json)\n` +
   `- evidence/ (latest console and summary, input log and input_summary.json,\n` +
@@ -1589,18 +1795,26 @@ await agent(
   `  - 실제로 부팅을 전진시킨 변경 (7절)\n` +
   `Do not restate a number ANALYSIS.md does not contain, and do not soften one it does.\n\n` +
   (verdict === 'REAL'
-    ? `The verdict is REAL. State it as "5/5 통과, REAL 판정" and nothing stronger.\n`
+    ? `The verdict is REAL. State it as "6/6 통과, REAL 판정" and nothing stronger.\n`
     : `The verdict is FORCED. Do not write "REAL" or "성공" anywhere in the README.\n`) +
   DOC_STYLE +
   `\nFinally: bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Package 완료"`,
   { label: 'package', phase: 'Package' }
 )
 
+// Close the session block. Without this every JOURNAL session stays open and the
+// elapsed time is never computed, so a finished run reads like an abandoned one.
+await shell('session-close', 'Package',
+  `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" session-end ` +
+  `${shq('/sboot-rehost:rehost-full')} ` +
+  `${shq(`${verdict} (${passes}/${VERIFY_ITEMS}) · 도달 ${goalIndex}/${goals.length} · 회차 ${round}`)} || true`,
+  OK_SCHEMA)
+
 return {
   success: verdict === 'REAL',
   verdict,
   passes,
-  track, target, goals,
+  target, goals, stages: prior?.stages ?? [],
   reached_goals: goals.slice(0, goalIndex),
   rounds_run: round,
   rounds_detail: roundLog,
@@ -1614,6 +1828,6 @@ return {
     blockers: `${workdir}/blockers.jsonl`,
   },
   note: verdict === 'REAL'
-    ? '5/5 통과, REAL 판정입니다.'
-    : 'FORCED 입니다. 5/5 에 미달했으므로 REAL·성공으로 표기하지 마세요.',
+    ? '6/6 통과, REAL 판정입니다.'
+    : 'FORCED 입니다. 6/6 에 미달했으므로 REAL·성공으로 표기하지 마세요.',
 }
