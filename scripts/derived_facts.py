@@ -13,7 +13,7 @@ are new. Re-deriving the same stop point adds no row, so `new` is 0 and the
 exhaustion condition becomes a fact rather than a claim.
 
 Usage:
-  derived_facts.py <workdir> [--track 1|2] [--peek]
+  derived_facts.py <workdir> [--peek]
 
   --peek   report without recording, so a caller can look without consuming
 

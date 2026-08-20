@@ -210,7 +210,7 @@ J=$(python3 "$S/stop_conditions.py" "$W9")
 chk "사실 블로커 → 즉시 정지" "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop_reason"])')" "BLOCKED_KO"
 
 # =============================================================================
-hdr "7. 검증 5/5 (verify.py)"
+hdr "7. 검증 6/6 (verify.py)"
 VW=$(new_ws verify)
 printf 'Following commands are supported\x00' > "$VW/bl3.bin"
 printf 'Following commands are supported\n'   > "$VW/07_logs/console_1.txt"
@@ -218,7 +218,7 @@ printf 'qemu_chr_fe_write_all(s->chr,b,1);\n' > "$VW/06_machine/machine.c"
 printf '| shell_func | 0x9021f3dc |\n' > "$VW/STATIC.md"
 printf '0x9021f3dc: stp\n' > "$VW/07_logs/run_1.log"
 V=$(python3 "$S/verify.py" "$VW" --track 1 --bl3 "$VW/bl3.bin" --trace "$VW/07_logs/run_1.log" 2>/dev/null)
-chk "정상 → 5/5 REAL" "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["verdict"])')" "REAL"
+chk "정상 → 6/6 REAL" "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["verdict"])')" "REAL"
 printf 'const char*s="Following commands are supported";\nqemu_chr_fe_write_all(c,b,1);\n' > "$VW/06_machine/machine.c"
 V=$(python3 "$S/verify.py" "$VW" --track 1 --bl3 "$VW/bl3.bin" --trace "$VW/07_logs/run_1.log" 2>/dev/null)
 chk "자가주입 → FORCED" "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["verdict"])')" "FORCED"
@@ -500,7 +500,7 @@ grep -q 'needs_layer_review' "$S/run_round.sh"
 chk "run_round 가 신호를 병합"   "$?" "0"
 
 # build 층 정지점이 지식 테이블에 있는가
-grep -q "entry_el_mismatch" "$REPO/knowledge/faults_bootloader.md"
+grep -q "entry_el_mismatch" "$REPO/knowledge/faults_unified.md"
 chk "build 층 정지점 등재"       "$?" "0"
 grep -q "rebuild" "$REPO/agents/supervisor.md"
 chk "supervisor 가 rebuild 를 안다" "$?" "0"
@@ -873,7 +873,7 @@ chk "토큰 파일 없으면 unknown"  \
 # 규칙이 문서·지식표·등록부에 등재됐는가
 grep -q "BLOCKED_STORAGE" "$REPO/CLAUDE.md"
 chk "블로커 코드가 CLAUDE.md 에" "$?" "0"
-grep -q "partition_table_unavailable" "$REPO/knowledge/faults_bootloader.md"
+grep -q "partition_table_unavailable" "$REPO/knowledge/faults_unified.md"
 chk "정지점이 지식표에"          "$?" "0"
 grep -q "partition_table_unavailable" "$REPO/fixers/registry.yaml"
 chk "담당 없음으로 등록"         "$?" "0"

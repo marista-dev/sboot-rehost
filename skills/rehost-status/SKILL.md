@@ -14,14 +14,14 @@ disable-model-invocation: true
 
 | 파일 | 무엇을 |
 |---|---|
-| `INPUT.md` | track / model / target |
+| `INPUT.md` | model / target |
 | `PROGRESS.md` | 회차 한 줄 이력 |
 | `VERIFICATION.md` | 검증 P/5 + 항목별 |
 | `JOURNAL.md` | 마지막 세션 시각 |
 | **`rounds.jsonl`** | 회차 수, 최고 마일스톤, 분류 분포, 시도한 변경(change_key) |
 | **`metrics.jsonl`** | 소요 시간(elapsed_s), 누적 토큰(tokens_total) |
 | **`blockers.jsonl`** | 정지 사유 (있으면 왜 멈췄나) |
-| `verdict_script.json` | 스크립트 1 차 5/5 측정 |
+| `verdict_script.json` | 스크립트 1 차 6/6 측정 |
 | `10_reproduce/` | 재현 키트 존재 |
 | 트랙 1 `STATIC.md` / 트랙 2 `KERNEL_STATIC.md` | 도출 확정·미확정 수 |
 
@@ -35,7 +35,7 @@ sboot-rehost — 워크스페이스 (WORKROOT: <cwd>/rehost_workspaces)
 | 워크스페이스 | 트랙/등급 | 회차 | 최고 마일스톤 | 검증 | 정지 | 마지막 |
 |---|---|---|---|---|---|---|
 | ★ SM-A166B_..._1330 (active) | 2 / K3 | 47 | partitions_up (super 미마운트) | 4/5 FORCED | — | 07-21 12:20 |
-|   SM-S921N_..._2400 | 1 / A | 18 | shell | 5/5 REAL | — | 07-19 15:02 |
+|   SM-G977N_..._9820 | F1 | 18 | shell | 6/6 REAL | — | 08-20 15:02 |
 |   SM-X_..._9999 | 2 / K3 | 31 | link_up | 미실행 | EXHAUSTED | 07-20 09:11 |
 
 active: <id>
@@ -43,7 +43,7 @@ active: <id>
       /sboot-rehost:rehost-status workdir=<id> (상세) · /sboot-rehost:rehost-export (완료 시 키트)
 ```
 
-- **검증 열**: `P/5` (5/5=REAL, 그 외 FORCED). **부분 통과를 "완료" 로 쓰지 말 것.**
+- **검증 열**: `P/6` (6/6=REAL, 그 외 FORCED). **부분 통과를 "완료" 로 쓰지 말 것.**
 - **정지 열**: `blockers.jsonl` 또는 마지막 결과의 stop_reason
   (`BLOCKED_CARVE` / `BLOCKED_ASSET` / `BLOCKED_NO_INPUT_PATH` / `BLOCKED_KO` /
   `BLOCKED_BUILD` / `BLOCKED_ENV` / `BLOCKED_TEE` / `EXHAUSTED`).
@@ -57,7 +57,7 @@ active: <id>
 - 회차 수, 최근 5 회차 (지문·분류·fixer·효과)
 - **누적 소요 시간·토큰** (`metrics.jsonl` 집계)
 - **시도한 변경 목록** (`rounds.jsonl` 의 change_key — 재개 시 중복 방지 근거)
-- 5/5 항목별 PASS/FAIL (스크립트 1 차 / verifier 최종 둘 다, 다르면 어느 쪽이 이겼는지)
+- 6/6 항목별 PASS/FAIL (스크립트 1 차 / verifier 최종 둘 다, 다르면 어느 쪽이 이겼는지)
 - 재현 키트 유무
 
 ## 정직성

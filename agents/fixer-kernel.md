@@ -40,7 +40,7 @@ An entry added without `expected` is rolled back at the gate.
 
 ## Assigned faults and treatment
 
-Knowledge: `knowledge/faults_kernel.md`, `knowledge/kernel_gates.md`
+Knowledge: `knowledge/faults_unified.md`, `knowledge/kernel_gates.md`
 
 | fault | signature | one change |
 |---|---|---|

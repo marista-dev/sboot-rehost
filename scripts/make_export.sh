@@ -5,12 +5,12 @@
 # 문서(docs/*.md narrative)와 완료 확인·통지는 스킬이 담당.
 #
 # 사용법 (env 로 파라미터):
-#   WS=<workspace> TRACK=<1|2> DEST=<dest dir> QEMU=<prebuilt qemu> MACHINE=<machine name> \
+#   WS=<workspace> DEST=<dest dir> QEMU=<prebuilt qemu> MACHINE=<machine name> \
 #   [CPU=cortex-a76] [SMP=8] [MEM=4G] [KCMDLINE="..."] [INPUT_CMD=help] \
 #   [EUFS_LU_IMAGE=~/rehost/<id>/disk.img] [EUFS_LBS=4096] \
 #   bash make_export.sh
 set -e
-: "${WS:?WS 워크스페이스 필요}"; : "${TRACK:?TRACK 1|2 필요}"; : "${DEST:?DEST 필요}"
+: "${WS:?WS 워크스페이스 필요}"; : "${DEST:?DEST 필요}"
 : "${MACHINE:?MACHINE 필요}"
 CPU="${CPU:-cortex-a76}"; SMP="${SMP:-8}"; MEM="${MEM:-4G}"; INPUT_CMD="${INPUT_CMD:-help}"
 
@@ -27,7 +27,7 @@ fi
 # 측정치를 그대로 넘기면 받는 사람이 jsonl 을 직접 읽어야 한다. 어느 정지점이 회차를
 # 가장 많이 먹었고 어느 변경이 관측을 못 움직였는지는 기록에서 계산되는 값이므로,
 # 내보내기 시점에 한 번 계산해 문서로 넣는다.
-python3 "$(dirname "$0")/analyze_run.py" "$WS" --track "$TRACK" >/dev/null 2>&1 \
+python3 "$(dirname "$0")/analyze_run.py" "$WS" >/dev/null 2>&1 \
   || echo "  ★ 실행 분석 생성 실패 — jsonl 기록을 확인하세요"
 
 # ── evidence (기록·증거) ──
@@ -42,10 +42,10 @@ cp "$WS"/07_logs/console_*.txt "$WS"/07_logs/*.summary.txt "$WS"/07_logs/kboot_*
 # kit shows the console but not whether the surface was reached by real input.
 cp "$WS"/07_logs/input_*.txt "$WS"/input_summary.json "$DEST/evidence/" 2>/dev/null || true
 
-if [ "$TRACK" = "1" ]; then
+if true; then
   # ── 트랙 1: sboot 셸 ──
   cp "$WS"/02_unpacked/sboot.bin "$DEST/firmware/" 2>/dev/null || cp "$WS"/03_bl3/*.bin "$DEST/firmware/sboot.bin" 2>/dev/null || echo "  ★ sboot.bin 없음"
-  cp "$WS"/06_machine/machine.c "$DEST/machine/" 2>/dev/null || true
+  cp "$WS"/06_machine/machine_full.c "$DEST/machine/" 2>/dev/null || true
   cp "$WS"/06_machine/*.md "$DEST/machine/" 2>/dev/null || true   # 우회_패치_목록.md 등
   # The kit must reach the surface the same way the run did: the autoboot gate
   # is one-shot and wants a run of a derived byte, so the harness and the derived

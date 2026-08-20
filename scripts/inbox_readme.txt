@@ -6,4 +6,4 @@
 
 - 워크스페이스는 rehost_workspaces/<model>_<build>/ 로 격리 생성됩니다.
 - 여러 펌웨어를 넣어도 서로 덮어쓰지 않습니다.
-- 실행: 트랙 1 → /sboot-rehost:rehost-sboot,  트랙 2 → /sboot-rehost:rehost-kernel,  상태 → /sboot-rehost:rehost-status
+- 실행: /sboot-rehost:rehost-full,  상태: /sboot-rehost:rehost-status

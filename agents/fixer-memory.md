@@ -35,7 +35,7 @@ Assigned faults: `data_abort_unmapped`, `infinite_poll`, `unmapped_mmio`.
 
 ## Assigned faults and treatment
 
-Knowledge: `knowledge/faults_bootloader.md`, `knowledge/faults_kernel.md`
+Knowledge: `knowledge/faults_unified.md`, `knowledge/faults_unified.md`
 
 | fault | signature | one change |
 |---|---|---|

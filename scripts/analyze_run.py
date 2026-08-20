@@ -26,7 +26,7 @@ record is missing or ambiguous the report says so under "기록의 한계" inste
 filling the gap.
 
 Usage:
-  analyze_run.py <workdir> [--track 1|2] [--top N]
+  analyze_run.py <workdir> [--top N]
 
 Writes:
   <workdir>/ANALYSIS.md    the report people read

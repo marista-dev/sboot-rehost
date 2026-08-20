@@ -49,6 +49,24 @@ def read_version(d):
 
 running = read_version(plugin_dir) if plugin_dir else None
 
+# The marketplace catalogue carries its own copy of the version, and it is the
+# one the client reads when deciding whether an update exists. A bump in
+# plugin.json alone never reaches anybody - this drifted two releases behind
+# once already, silently.
+catalogue = None
+cat_path = os.path.join(plugin_dir or '', '.claude-plugin', 'marketplace.json')
+try:
+    with open(cat_path, encoding='utf-8') as fh:
+        for entry in (json.load(fh).get('plugins') or []):
+            if entry.get('name') == name:
+                catalogue = entry.get('version')
+except (OSError, json.JSONDecodeError):
+    pass
+if running and catalogue and semver(running) != semver(catalogue):
+    problems.append(
+        f"plugin.json({running}) 과 marketplace.json({catalogue}) 의 버전이 다릅니다"
+        f" — 카탈로그가 낮으면 갱신이 사용자에게 전달되지 않습니다")
+
 registered, install_path = None, None
 try:
     with open(registry, encoding="utf-8") as fh:

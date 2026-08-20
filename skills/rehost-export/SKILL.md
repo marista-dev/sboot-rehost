@@ -16,7 +16,7 @@ disable-model-invocation: true
 ## Step 0 — 완료 확인 (★ 미완이면 export 금지)
 
 INPUT.md 의 track 확인 후 그 트랙의 **목표 도달**을 검증:
-- **트랙 1**: `VERIFICATION.md` 가 **5/5 REAL** (진짜 셸 도달). 4/5 이하면 "아직 FORCED — export 불가" 안내 후 종료.
+- `VERIFICATION.md` 가 **6/6 REAL** 이어야 한다. 5/6 이하면 "아직 FORCED — export 불가" 안내 후 종료.
 - **트랙 2**: 목표 등급 도달. K1=`Run /init`, K2=`erofs dm-N mounted`, **K3=`sda: sda1..`(진짜 파티션)** —
   콘솔/VERIFICATION 로 확인. 미도달(예 K3 인데 partitions 미도달)이면 "미완 — export 불가" 안내 후 종료.
 
@@ -49,7 +49,7 @@ bash <PLUGIN>/scripts/make_export.sh
 `VERIFICATION.md` `ANALYSIS.md` `PROGRESS.md` `JOURNAL.md` `STATIC.md`/`KERNEL_STATIC.md`
 `INPUT.md` 콘솔·요약 로그 + 하니스 입력 기록(`input_*.txt`, `input_summary.json`) +
 **`metrics.jsonl`**(시간·토큰) **`rounds.jsonl`**(회차별 지문/분류/fixer/효과)
-`blockers.jsonl` `verdict_script.json`(스크립트 1 차 5/5 측정) `analysis.json`.
+`blockers.jsonl` `verdict_script.json`(스크립트 1 차 6/6 측정) `analysis.json`.
 
 **`ANALYSIS.md` 는 `make_export.sh` 가 `analyze_run.py` 를 돌려 만든다.** 시간·토큰 총량만
 넘기면 받는 사람이 jsonl 을 직접 읽어야 하므로, 기록에서 계산되는 것은 계산해서 넣는다:
@@ -82,7 +82,7 @@ bash <PLUGIN>/scripts/make_export.sh
   가장 많이 먹었는지, 정체 구간이 무엇으로 끝났는지, 어느 변경이 실제로 부팅을
   전진시켰는지, 왜 오래 걸렸는지. 논문·보고서에 그대로 옮길 수 있는 수준으로 쓴다.
 - `05_bypasses.md` — `06_machine/bypasses.md` (`[대상/이유/방법/부작용]`).
-- `06_verification.md` — 5/5 **2 단 검증** 결과: 스크립트 1 차(`verdict_script.json`) 와
+- `06_verification.md` — 6/6 **2 단 검증** 결과: 스크립트 1 차(`verdict_script.json`) 와
   verifier 2 차(`VERIFICATION.md`) 를 **둘 다** 싣고, 판정이 달랐다면 어느 쪽이 이겼고
   근거가 무엇인지 명시 (올리는 방향 override 는 byte 증거가 있어야 유효).
 
@@ -125,6 +125,6 @@ bash -c 'mkdir -p "<cwd>/rehost_exports"; printf "*\n" > "<cwd>/rehost_exports/.
 
 ## 정직성
 
-- **미완이면 export 금지** (트랙 1 5/5 미만, 트랙 2 목표 마일스톤 미도달). 완료로 위장 금지.
+- **미완이면 export 금지** (6/6 미만이거나 목표 단계 미도달). 완료로 위장 금지.
 - docs/evidence 는 실제 JOURNAL/VERIFICATION/콘솔 근거로만. 없는 결과 지어내지 말 것.
 - export 폴더는 항상 gitignore (펌웨어 저작권·대용량). 생성 위치를 반드시 사용자에게 안내.

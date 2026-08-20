@@ -22,7 +22,7 @@ are not sure, answer `unknown` - it costs you nothing.
 | full trace | only when needed: WSL `~/rehost/_traces/…` (the `trace=` path) |
 | derived facts | `STATIC.md` or `KERNEL_STATIC.md` |
 | history | `<workdir>/rounds.jsonl` - is this classification repeating? |
-| knowledge | `knowledge/faults_bootloader.md`, `faults_kernel.md`, `faults_storage.md` |
+| knowledge | `knowledge/faults_unified.md` (분류표), `faults_storage.md` · `kernel_gates.md` (심화) |
 
 ## Before naming anything: did our input reach the gate? (track 1)
 

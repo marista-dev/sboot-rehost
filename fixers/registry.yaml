@@ -92,8 +92,6 @@ unmapped_policy: escalate_to_static_analyzer
 #                          table it would be read from does not exist. Every
 #                          downstream failure (environment, panel, modem, next
 #                          stage) follows from that one fact. The pipeline records
-#                          BLOCKED_STORAGE only when the current goal actually
-#                          needs the medium; lower grades are unaffected.
 not_firmware: [harness_input_starved]
 
 # --- Build-layer stop points --------------------------------------------
@@ -130,7 +128,7 @@ build_layer: [stage_entry_el_mismatch, stage_decrypt_blocked]
   fixer-general:
     description: last resort, no domain boundary; edits any machine source, builds and runs
     handles: [unowned]
-    knowledge: [knowledge/faults_bootloader.md, knowledge/faults_kernel.md, knowledge/faults_storage.md]
+    knowledge: [knowledge/faults_unified.md, knowledge/faults_storage.md, knowledge/kernel_gates.md]
     tools: [capstone, ninja, qemu]
     edits: [any]
     reached_by: decline_only

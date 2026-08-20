@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""verify.py - measure the 5/5 verification in code (stage 1 verdict).
+"""verify.py - measure the 6/6 verification in code (stage 1 verdict).
 
 This is stage 1 of a two-stage check. The verifier agent re-examines the
 verdict_script.json produced here. That agent may freely lower the verdict
@@ -158,7 +158,7 @@ def code_literals(path):
     Item 3 asks whether the machine *prints* console text. Searching the whole
     file also hits analysis comments and `#include "qapi/error.h"`, which are
     not output at all - that produced false leaks on a workspace whose verdict
-    was genuinely 5/5. Strip comments and includes, then keep the literals.
+    was genuinely 6/6. Strip comments and includes, then keep the literals.
     """
     src = read_text(path)
     src = re.sub(r"/\*.*?\*/", " ", src, flags=re.S)      # block comments

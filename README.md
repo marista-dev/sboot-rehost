@@ -115,6 +115,7 @@ _inbox/ 에 펌웨어 배치
 | 문서 | 내용 |
 |---|---|
 | [CLAUDE.md](CLAUDE.md) | 운영 규칙 정본 |
+| [온보딩](docs/onboarding/README.md) | 처음 읽는 순서 |
 | [구성 요소](docs/components.md) | 파일별 역할 |
 
 ## 지원 대상

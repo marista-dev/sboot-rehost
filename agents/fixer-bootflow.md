@@ -27,7 +27,7 @@ Korean**, keeping addresses and encodings verbatim.
 
 ## Assigned faults and treatment
 
-Knowledge: `knowledge/faults_bootloader.md`
+Knowledge: `knowledge/faults_unified.md`
 
 | fault | signature | one change |
 |---|---|---|
