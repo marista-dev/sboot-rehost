@@ -7,6 +7,51 @@
 
 ---
 
+## 0.20.0 — 2026-08-23
+
+**0.19.0 이 두 번에 걸쳐 나갔다.** 버전을 박은 커밋 뒤로 커밋 3개가 같은 번호로 46개
+파일을 바꿨다. 0.19.0 을 이미 받아간 환경은 그 수정을 받을 수 없다. 이 릴리스는 그
+내용을 정식 번호로 내보내고, 같은 일이 다시 일어나지 않게 막는다.
+
+### 통합 명령으로 남은 정리 (0.19.0 이후 전달되지 않았던 것)
+
+- `rehost-setup` 이 트랙 1/2 를 묻고 `INPUT.md` 에 `track` 을 쓰고 있었다. 등급(F1/F2/F3)만
+  묻도록 재작성했고 `track` 슬롯을 없앴다. **에이전트가 실제로 읽는 파일이라 이 하나로
+  통합 이후에도 옛 질문이 나왔다.**
+- `static-analyzer` 의 트랙별 체크리스트를 스테이지 지도 우선의 단일 체크리스트로 교체.
+- `fault-classifier` · `supervisor` · `fixer-*` · `make_export.sh` · `setup_env.sh` ·
+  `profiles/*` · `templates/*` 의 트랙 표현 제거.
+- 옛 모델을 설명하던 `run_qemu.sh` · `run_kernel.sh` · `machine.c.tmpl` ·
+  `machine_kernel.c.tmpl` 삭제. 남겨두면 다음 개편에서 또 참조된다.
+- `KERNEL_STATIC.md` 를 `STATIC.md` 하나로 통합. 등급 이름 K3a/K3b 를 실제 마일스톤
+  이름(`partitions_up` · `super_mounted`)으로 교체.
+
+### 릴리스 검문 (`scripts/check_release.sh`)
+
+버전을 올리지 않은 채 동작 표면이 바뀌면 종료코드 1 로 막는다.
+
+- 검사 1 — `plugin.json` 과 `marketplace.json` 의 version 일치. 카탈로그가 낮으면 클라이언트가
+  갱신을 보지 못한다 (0.17.0 에 두 판 묶여 있던 사례).
+- 검사 2 — 현재 version 을 박은 커밋 이후 `agents` · `fixers` · `hooks` · `knowledge` ·
+  `profiles` · `scripts` · `skills` · `templates` · `workflows` · `CLAUDE.md` ·
+  `.claude-plugin` 이 바뀌었는가.
+- 문서·시험은 대상이 아니다. 오타 하나에 릴리스를 강요하면 규칙이 지켜지지 않는다.
+- `tests/smoke.sh` 20절에 편입. **막는 것뿐 아니라 버전을 올리면 다시 통과하는 것까지**
+  가짜 저장소로 확인한다 — 언제나 통과하는 검문은 검문이 아니다.
+
+### 알려진 문제 — `tests/smoke.sh` 가 통합 이전 규약을 쓴다
+
+`run_round.sh` 의 `track` 인자가 없어지고 `run_full.sh` 의 콘솔 전달 방식이 바뀌었는데
+시험 하네스가 따라오지 않았다. 가짜 QEMU 가 옛 CLI 를 흉내내 콘솔을 0바이트로 만들고,
+그 결과 13개 절 48개 항목이 실패한다. **제품 코드의 결함이 아니다** — `run_round.sh` 를
+통합 서명으로 직접 호출하면 유효한 `observation.json` 을 낸다.
+
+또한 0.19.0 에서 추가된 `stage_map.py` · `build_lu.py` · `verify_full` · `check_version.sh` ·
+`make_resume.py` 에는 smoke 커버리지가 없다. 나머지 항목은 legacy `--track` 경로를 지난다.
+통합 경로의 시험은 다음 판의 작업이다.
+
+---
+
 ## 0.19.0 — 2026-08-20
 
 **트랙 2종을 통합 체인 하나로 대체한다. 부트로더가 커널을 직접 적재한다.**
