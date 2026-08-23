@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-patch_kernel.py — 트랙 2 §5.1 커널 보안게이트 우회 패처 (일반).
+patch_kernel.py — 커널 보안게이트 우회 패처 (일반).
 static-analyzer 가 도출한 사이트 테이블로 <Image> -> <Image.patched> 생성.
 멱등 + pre-image 검증 (틀린 오프셋은 fail-loud, silent 패치 금지).
 

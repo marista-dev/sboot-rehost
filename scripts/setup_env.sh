@@ -18,8 +18,8 @@ sudo apt-get install -y \
     libglib2.0-dev libpixman-1-dev libslirp-dev \
     python3 python3-pip python3-venv \
     socat unzip wget curl tar lz4 file \
-    flex bison device-tree-compiler   # 트랙 2: 커널/DTB (dtc=fdtdump, flex/bison=QEMU dtc)
-# 트랙 2 K3 (dm-linear/모듈 로드 캡스톤) 은 aarch64 크로스툴체인 추가 필요 —
+    flex bison device-tree-compiler   # 커널/DTB (dtc=fdtdump, flex/bison=QEMU dtc)
+# rootfs 단계(dm-linear/모듈 로드)는 aarch64 크로스툴체인이 추가로 필요 —
 # 무루트 확보는 worked example 의 get_xtool.sh (공식 Ubuntu .deb apt-get download) 참고.
 
 # ---- 2) pip ----
@@ -74,4 +74,4 @@ which meson && meson --version || true
 
 echo
 echo "OK: 환경 셋업 완료."
-echo "다음 단계: Claude Code 에서 /sboot-rehost:rehost-bootloader (트랙 1) 또는 /sboot-rehost:rehost-kernel (트랙 2) 호출"
+echo "다음 단계: Claude Code 에서 /sboot-rehost:rehost-full 호출"

@@ -32,7 +32,7 @@ python3 "$(dirname "$0")/analyze_run.py" "$WS" >/dev/null 2>&1 \
 
 # ── evidence (기록·증거) ──
 # 사람이 읽는 기록(JOURNAL/PROGRESS/VERIFICATION/ANALYSIS) + 기계가 읽는 측정치(*.jsonl) 둘 다.
-for f in VERIFICATION.md ANALYSIS.md PROGRESS.md JOURNAL.md STATIC.md STUBS.md KERNEL_STATIC.md INPUT.md \
+for f in VERIFICATION.md ANALYSIS.md PROGRESS.md JOURNAL.md STATIC.md STUBS.md INPUT.md RESUME.md \
          metrics.jsonl rounds.jsonl blockers.jsonl verdict_script.json analysis.json \
          fingerprint.json observation.json; do
   [ -f "$WS/$f" ] && cp "$WS/$f" "$DEST/evidence/"
@@ -42,11 +42,14 @@ cp "$WS"/07_logs/console_*.txt "$WS"/07_logs/*.summary.txt "$WS"/07_logs/kboot_*
 # kit shows the console but not whether the surface was reached by real input.
 cp "$WS"/07_logs/input_*.txt "$WS"/input_summary.json "$DEST/evidence/" 2>/dev/null || true
 
-if true; then
-  # ── 트랙 1: sboot 셸 ──
-  cp "$WS"/02_unpacked/sboot.bin "$DEST/firmware/" 2>/dev/null || cp "$WS"/03_bl3/*.bin "$DEST/firmware/sboot.bin" 2>/dev/null || echo "  ★ sboot.bin 없음"
-  cp "$WS"/06_machine/machine_full.c "$DEST/machine/" 2>/dev/null || true
-  cp "$WS"/06_machine/*.md "$DEST/machine/" 2>/dev/null || true   # 우회_패치_목록.md 등
+# 부트로더 컨테이너 + 합성 매체. 커널은 부트로더가 매체에서 읽으므로 따로 넘기지 않는다.
+cp "$WS"/03_bootloader/*.bin "$DEST/firmware/" 2>/dev/null \
+  || cp "$WS"/02_unpacked/sboot.bin "$DEST/firmware/" 2>/dev/null \
+  || echo "  경고: 부트로더 컨테이너를 찾지 못했습니다"
+cp "$WS"/fw/lu0.img "$DEST/firmware/" 2>/dev/null || echo "  경고: 합성 매체(lu0.img) 없음"
+cp "$WS"/stage_map.json "$WS"/lu_manifest.json "$DEST/" 2>/dev/null || true
+cp "$WS"/06_machine/machine_full.c "$WS"/06_machine/*hci*.c "$WS"/06_machine/*hci*.h "$DEST/machine/" 2>/dev/null || true
+cp "$WS"/06_machine/*.md "$DEST/machine/" 2>/dev/null || true   # bypasses.md 등
   # The kit must reach the surface the same way the run did: the autoboot gate
   # is one-shot and wants a run of a derived byte, so the harness and the derived
   # plan travel with it. A kit that only pipes the command in cannot pass that
@@ -80,34 +83,6 @@ echo
 echo "-- 콘솔 --"; tail -40 "\$DIR/out/console.txt"
 echo "-- 입력 경로 --"; cat "\$DIR/out/input_summary.json"
 RUN
-else
-  # ── 트랙 2: 커널 + UFS ──
-  cp "$WS"/fw/Image.patched "$WS"/fw/Image "$DEST/firmware/" 2>/dev/null || true
-  cp "$WS"/fw/*.dtb "$WS"/fw/*.cpio* "$WS"/fw/initramfs* "$DEST/firmware/" 2>/dev/null || true
-  cp "$WS"/06_machine/machine_kernel.c "$WS"/06_machine/*ufs*.c "$WS"/06_machine/*ufs*.h "$DEST/machine/" 2>/dev/null || true
-  cp "$WS"/06_machine/*.md "$DEST/machine/" 2>/dev/null || true
-  # 패치 스크립트 (플러그인 것 복사 — 받는 사람이 재빌드 시)
-  P="$(dirname "$0")"
-  cp "$P/patch_kernel.py" "$P/patch_qemu_core.py" "$P/run_kernel.sh" "$DEST/scripts/" 2>/dev/null || true
-  # 디스크/rootfs 는 대용량 — 참조만 남기고 심볼릭/안내 (실이미지는 스킬이 판단해 복사)
-  EUFS_LINE=""
-  [ -n "${EUFS_LU_IMAGE:-}" ] && EUFS_LINE="EUFS_LU_IMAGE=\"\$DIR/firmware/\$(basename "$EUFS_LU_IMAGE")\" EUFS_LBS=${EUFS_LBS:-4096}"
-  cat > "$DEST/run.sh" <<RUN
-#!/usr/bin/env bash
-# turnkey — 빌드 없이 커널 부팅 (WSL2/Linux x86_64). bash run.sh
-set +e; DIR="\$(cd "\$(dirname "\$0")" && pwd)"
-QEMU="\$DIR/bin/qemu-system-aarch64"; IMG="\$DIR/firmware/Image.patched"
-DTB="\$(ls "\$DIR"/firmware/*.dtb 2>/dev/null | head -1)"
-IRD="\$(ls "\$DIR"/firmware/*.cpio* "\$DIR"/firmware/initramfs* 2>/dev/null | head -1)"
-[ -x "\$QEMU" ] || { echo "★ bin/qemu 없음 — bash scripts/build.sh"; exit 1; }
-[ -f "\$IMG" ]  || { echo "★ firmware/Image.patched 없음"; exit 1; }
-"\$QEMU" --version >/dev/null 2>&1 || { echo "★ 공유 라이브러리 부족 — bash setup.sh 먼저"; exit 1; }
-echo "== $MACHINE — 커널 직부팅 (트랙 2) =="
-$EUFS_LINE timeout 200 "\$QEMU" -M $MACHINE -cpu $CPU -smp $SMP -m $MEM -nographic \\
-  -kernel "\$IMG" \${DTB:+-dtb "\$DTB"} \${IRD:+-initrd "\$IRD"} \\
-  ${KCMDLINE:+-append "$KCMDLINE"} -serial mon:stdio
-RUN
-fi
 
 # ── 공용: setup.sh (공유 라이브러리) / build.sh (프리빌트 없을 때 재빌드) / .gitignore ──
 cat > "$DEST/setup.sh" <<'SETUP'

@@ -23,8 +23,8 @@ You are a bare-metal firmware reverse engineering analyst. Your output is
 
 ## The one record per firmware
 
-`STATIC.md` (track 1) / `KERNEL_STATIC.md` (track 2) is the single accumulating
-record for this target. **Append to it, never rewrite it** - a fact derived in
+`STATIC.md` is the single accumulating record for this target - one file, whatever
+grade the run targets. **Append to it, never rewrite it** - a fact derived in
 round 5 must still be there in round 40.
 
 In escalation mode, finishing your analysis is only half the job. The finding has
@@ -55,7 +55,7 @@ explained:
 
 ## Output language
 
-`STATIC.md` and `KERNEL_STATIC.md` are read by the user, so **write them in
+`STATIC.md` is read by the user, so **write it in
 natural Korean**. Keep hex values, symbol names and disassembly verbatim.
 
 ## Modes
@@ -70,9 +70,53 @@ for example "what instruction sits at ELR 0x… and who called it?".
 
 ---
 
-## Track 1 (bootloader shell) - `prior` checklist
+## `prior` checklist - the chain
 
-Tools: `scripts/carve_disasm.py` (capstone wrapper), `strings`, `xxd`, `grep -abo`.
+One container, one chain. Work top to bottom: the stage map first, because the
+goal ladder is built from it and nothing below can be placed without it.
+
+Tools: `scripts/stage_map.py` (stage map), `scripts/carve_disasm.py` (capstone
+wrapper), `strings`, `xxd`, `grep -abo`, `fdtdump`.
+
+### 0) Stage map (do this before anything else)
+
+```bash
+bash scripts/py.sh stage_map.py <container> --arch <arch> --profile <family> \
+  --out <workdir>/stage_map.json
+```
+
+Exit code 3 means this architecture has no entry-stub signature yet. That is
+**not** "no stages": report `arch_supported=false` so the caller can stop with
+`BLOCKED_ARCH`.
+
+Then read the JSON back and confirm each stage against the binary:
+
+- A stage whose `base.confidence` is not `derived` has **no literal anchor**.
+  Find one yourself or report the base as 미확정. A candidate base costs a
+  rebuild when it turns out wrong, and pointer containment alone has already
+  picked a wrong base on real firmware.
+- The anchor test: convert an in-image pointer (a BSS or stack literal) to a file
+  offset and check it lands exactly where the file's zero padding begins.
+- Report the confirmed list as `stages`: `{name, file_range, state, load_base,
+  entry_pc}` per stage.
+
+### 0b) Skip plan
+
+For every stage the map marked `encrypted`, say which executable stage the
+previous one must be redirected to, and **prove the skip is safe**: list the
+absolute addresses the next stage reads before it writes anything, and classify
+each as a hardware register (fine - the machine models it anyway) or a word the
+skipped stage wrote (a handoff that must be supplied, and supplying it is a
+documented bypass). If you cannot classify one, say 미확정 - do not assume it is
+a register.
+
+### 0c) Handoff surface of the first stage
+
+The first stage has no predecessor here, so whatever the boot ROM left it must be
+modelled. Find the slots it calls through - a constant address loaded, then an
+indirect call - and derive each slot's contract from the **argument setup at the
+call sites**, not from what the slot's position suggests. Report the count and
+the evidence per slot. Only the slots that are actually called need modelling.
 
 ### 1) Carve verdict (do this first)
 ```bash
@@ -188,7 +232,7 @@ count in the file would look derived and stop anyone from questioning it.
 ### 12c) Partition table availability — write `storage_tokens.txt`
 
 Grade C means the bootloader carries on into a normal boot, and that requires
-reading the boot medium: the partition table first, then the next stage. Track 1
+reading the boot medium: the partition table first, then the next stage. The chain
 does not implement a storage controller, so on this track the medium is a stub
 and the table cannot load. That is a **track boundary, not a firmware fault**,
 and the loop has to be able to tell the two apart - otherwise it spends rounds
@@ -256,7 +300,7 @@ input path. `none` is a hard blocker - say so rather than inventing a route.
 Forcing the listing command through a trampoline is FORCED, not a reachable
 surface.
 
-### 14) Milestone tokens (required for grades B and C)
+### 14) Milestone tokens (required for every rung above the first)
 
 Write `<workdir>/milestone_tokens.txt` with the console strings that prove each
 rung, one per line as `<milestone>\t<token>`:
@@ -280,11 +324,12 @@ Write the results and the disassembly evidence into `STATIC.md`.
 
 ---
 
-## Track 2 (kernel + storage) - `prior` checklist
+## `prior` checklist - the kernel side
 
-Methodology: `methodology/track2_kernel_storage.md` sections 2, 4 and 5.
+Needed for grades F2 and F3. For F1 the bootloader chain is the whole target, so
+missing assets are recorded but do not block.
 
-### 1) Boot asset check
+### K1) Boot asset check
 | asset | check |
 |---|---|
 | `Image` | gzip magic `1f 8b`, or raw kernel magic `ARMd` (0x644d5241) at 0x38 |
@@ -292,10 +337,10 @@ Methodology: `methodology/track2_kernel_storage.md` sections 2, 4 and 5.
 | initrd | gzip cpio |
 | super / rootfs | EROFS magic `0xe0f5e1e2`, or sparse needing `simg2img` |
 
-Missing or mismatched assets mean `assets_ok=false`, which is a **hard blocker**.
-Point the user at `scripts/extract_boot_assets.sh`.
+Missing or mismatched assets mean `assets_ok=false`. That blocks F2 and above;
+F1 proceeds unaffected. Point the user at `scripts/extract_boot_assets.sh`.
 
-### 2) DTB to machine skeleton
+### K2) DTB to machine skeleton
 Read with `fdtdump` and attach the node path to every value:
 
 | value | node |
@@ -312,7 +357,7 @@ in the DTB trip a `gicv3_set_irq` assert. When cmdline carries
 `kvm-arm.mode=protected`, state as a fact that HVC belongs to the kernel's own
 pKVM and the SMC shim must not intercept it.
 
-### 3) Kernel security gate sites
+### K3) Kernel security gate sites
 Search the `Image` (gunzip first if needed) by symbol and string xref:
 
 | gate | how to find it |
@@ -327,9 +372,9 @@ Report each site as `(file_off, expected_word, new_word, why)`. **Confirm
 `expected_word` with capstone** and attach it. A gate you cannot locate is
 "undetermined - derive later from the panic symbol".
 
-### 4) Storage driver provenance (decides K3 vs K3*)
+### K4) Storage driver provenance
 
-A missing vendor `.ko` does **not** by itself mean K3 is unreachable. Many
+A missing vendor `.ko` does **not** by itself mean the goal is unreachable. Many
 kernels compile the vendor storage driver in (`CONFIG_SCSI_UFS_*=y`), so no
 module exists by design while the real vendor driver is still present and will
 still drive a modelled controller.
@@ -345,26 +390,26 @@ strings <Image> | grep -iE 'ufshcd|ufs-exynos|exynos-ufs|ufs_qcom|Power mode cha
 
 | finding | verdict | what it means |
 |---|---|---|
-| vendor `.ko` present | **K3** | load the real module against the modelled HCI |
-| no `.ko`, but driver strings/symbols in `Image` | **K3\*** | driver is built in; model the real HCI and the built-in vendor driver drives it |
+| vendor `.ko` present | module | load the real module against the modelled HCI |
+| no `.ko`, but driver strings/symbols in `Image` | **built-in** | model the real HCI; the built-in vendor driver drives it |
 | no `.ko` and no driver in `Image` | **`BLOCKED_KO`** | genuinely unreachable - report as a hard blocker |
 
 Report this as `storage_driver: { form: "module" | "builtin" | "absent", evidence: … }`.
 Only `absent` is a blocker. Declaring a blocker on `builtin` would refuse a run
 that is actually reachable, which is the worst kind of stop.
 
-### 5) Rootfs topology (decides the K3 capstone)
+### K5) Rootfs topology (decides the final rung)
 
 Whether `super_mounted` is even reachable depends on the image layout:
 
 | finding | consequence |
 |---|---|
 | `super.img` present (dm-linear, usually EROFS) | capstone `super_mounted` applies |
-| separate `system`/`vendor` raw images (often ext4) | **no capstone** - K3 completes at `partitions_up` |
+| separate `system`/`vendor` raw images (often ext4) | **no final rung** - completes at `partitions_up` |
 
 Report `has_super: true/false` with the evidence (which image files exist).
 
-Write the results into `KERNEL_STATIC.md`.
+Append the results to `STATIC.md`.
 
 ---
 
@@ -417,5 +462,6 @@ stop condition, so inflating it means the loop never terminates.
 
 - `new_facts_count` counts only what **this call** newly determined. Report 0 when
   that is the truth.
-- `carve_is_full=false` (track 1) and `assets_ok=false` (track 2) are hard
-  blockers; the pipeline records them as fact and stops.
+- `carve_is_full=false`, `bl_surface="none"` and `arch_supported=false` are hard
+  blockers; the pipeline records them as fact and stops. `assets_ok=false` blocks
+  only F2 and above.

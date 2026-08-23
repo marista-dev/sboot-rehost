@@ -94,7 +94,7 @@ boot_medium:
     - the first stage parses GPT itself - an "EFI PART" constant assembled with
       MOVZ/MOVK is direct evidence, and its `+0x28` read is PartitionEntryLBA
     - the vendor UFS driver is usually built into the kernel (=y), so no .ko
-      exists by design - that is K3*, not a blocker
+      exists by design - the driver is built in, which is not a blocker
 
 kernel:
   uart_earlycon: exynos4210          # confirm against the DTB /chosen node

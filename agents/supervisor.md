@@ -26,7 +26,7 @@ never edit.
   limit. At 50 rounds or 200, if a move remains, continue.
 - When `stop_conditions.py` reports `stop=true`, **stop**. Its grounds are one of:
   - `BLOCKED_*` - a hard blocker observed as fact (carve, missing assets, missing
-    K3 vendor `.ko`, build error, TEE frontier)
+    vendor `.ko`, build error, TEE)
   - `EXHAUSTED` - moves exhausted: the fingerprint stalled or oscillates, the
     analyst produced no new facts, and every fixer has no untried change left
 - **You cannot overturn that verdict.** If you route anywhere but `stop` while
@@ -59,7 +59,7 @@ came from **our machine code, not the firmware or kernel** (honesty rule 7,
 self-injection). It does not count as reaching anything. The milestone has
 already been dropped, so trust the file as given and route to `fault-classifier`.
 
-## Check the input path before you name a firmware problem (track 1)
+## Check the input path before you name a firmware problem
 
 `fingerprint.json` has an `input` block from `scripts/uart_harness.py` plus the
 machine's RX counters. A bootloader's autoboot gate is one-shot: if our pattern

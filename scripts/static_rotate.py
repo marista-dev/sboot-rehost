@@ -2,7 +2,7 @@
 """static_rotate.py - keep the derivation record usable as it grows.
 
 Every escalation appends a `### round N 재도출` subsection with its evidence to
-STATIC.md / KERNEL_STATIC.md. That is the right thing to write - the evidence is
+STATIC.md. That is the right thing to write - the evidence is
 what makes a row trustworthy - but the file is read again by the analyst on every
 later round, so on a long run it grows past 300 KB and each round costs more than
 the one before. On the S921N run rounds went from six minutes to twenty while the
@@ -14,7 +14,7 @@ being archived are promoted into the main table first, so nothing derived is
 lost - archiving without promoting would silently delete facts.
 
 Usage:
-  static_rotate.py <workdir> [--track 1|2] [--max-bytes N] [--keep N]
+  static_rotate.py <workdir> [--max-bytes N] [--keep N]
 
 Output: JSON on stdout. A no-op is reported as rotated=false, never as an error.
 """
@@ -89,7 +89,8 @@ def is_row(line):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("workdir")
-    parser.add_argument("--track", type=int, default=1)
+    # Accepted and ignored: there is one record per firmware now.
+    parser.add_argument("--track", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--max-bytes", type=int, default=120000,
                         help="rotate only once the record is larger than this")
     parser.add_argument("--keep", type=int, default=3,
@@ -97,7 +98,7 @@ def main():
     args = parser.parse_args()
 
     path = os.path.join(
-        args.workdir, "KERNEL_STATIC.md" if args.track == 2 else "STATIC.md")
+        args.workdir, "STATIC.md")
     result = {"source": path, "rotated": False, "promoted": 0, "archived": 0}
 
     if not os.path.exists(path):

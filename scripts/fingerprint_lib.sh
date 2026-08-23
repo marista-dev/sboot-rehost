@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fingerprint_lib.sh - fingerprint extraction shared by run_qemu.sh and run_kernel.sh.
+# fingerprint_lib.sh - fingerprint extraction shared by run_full.sh and run_full.sh.
 # Sourced, never executed.
 #
 # Why this file exists

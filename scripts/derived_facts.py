@@ -7,7 +7,7 @@ self-reported number that nothing can contradict, so the same address gets
 "newly derived" every round and the loop never ends.
 
 The analyst appends its findings to one record per firmware - the `## 도출된 정지점`
-table in STATIC.md / KERNEL_STATIC.md. This script parses that table, remembers
+table in STATIC.md. This script parses that table, remembers
 every signature it has already seen in derived_facts.jsonl, and reports how many
 are new. Re-deriving the same stop point adds no row, so `new` is 0 and the
 exhaustion condition becomes a fact rather than a claim.
@@ -121,13 +121,14 @@ def read_seen(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("workdir")
-    parser.add_argument("--track", type=int, default=1)
+    # Accepted and ignored: there is one record per firmware now.
+    parser.add_argument("--track", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--peek", action="store_true",
                         help="report without recording")
     args = parser.parse_args()
 
     static = os.path.join(
-        args.workdir, "KERNEL_STATIC.md" if args.track == 2 else "STATIC.md")
+        args.workdir, "STATIC.md")
     ledger = os.path.join(args.workdir, "derived_facts.jsonl")
 
     rows = parse_table(static)

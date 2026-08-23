@@ -15,9 +15,9 @@
 | 모델 | {{MODEL}} |
 | SoC | {{SOC}} |
 | 빌드 | {{BUILD}} |
-| 자산 md5 | {{MD5}} (트랙 1: BL3 / 트랙 2: Image) |
+| 컨테이너 md5 | {{MD5}} |
 | 자산 크기 | {{SIZE}} bytes |
-| 목표 등급 | {{TARGET}} (트랙 1: A/B/C / 트랙 2: K1/K2/K3) |
+| 목표 등급 | {{TARGET}} (F1 / F2 / F3) |
 | 작업 디렉터리 | {{WORKDIR}} |
 | QEMU | 10.2.2 |
 | 시작 일자 | {{DATE}} |
@@ -55,10 +55,10 @@
 
 ## 최종 검증 (CLAUDE.md 6항목)
 
-**트랙 1**: PC 트레이스 셸 도달 ☐ / 출력 토큰 100% BL3 존재 ☐ / 소스 negative ☐ /
+체인 PC 트레이스 ☐ / 출력 바이트 대조 ☐ / 소스 반증 ☐ /
 UART 단일 경로 ☐ / 우회 목록 4 항 ☐
 
-**트랙 2**: `Run /init` ☐ / 커널 메시지 (erofs dm-N · sda1 · Power mode) ☐ /
+검증 양방향 ☐ / 스토리지 이중 구동 ☐ /
 소스 negative ☐ / 드라이버 진짜 구동 (UTRD/Query/SCSI) ☐ / 우회 목록 4 항 ☐
 
 6/6 = REAL. 5/6 이하 = FORCED.

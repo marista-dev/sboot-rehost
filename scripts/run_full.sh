@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 . "$(dirname "$0")/wsl_bridge.sh"
 . "$(dirname "$0")/fingerprint_lib.sh"
-# run_qemu.sh - Track 1 (bootloader shell): one round of execution.
+
 # Extracts the raw fingerprint and enforces the provenance gate.
 # Called by workflows/pipeline.js once per round.
 #
@@ -207,7 +207,7 @@ fp_run_verdict "$RUN_RC" "$LOG" "$CSZ" "$ERRF"
 } > "$SUM" 2>/dev/null || true
 
 # --- Milestone + provenance gate ---
-# Track 1 reaches its goal when the console shows text the BOOTLOADER owns, on
+# A goal is reached when the console shows text the FIRMWARE owns, on
 # whichever interactive surface this firmware actually has.
 #
 # The tokens are data, not a constant: a UART shell prints a prompt and a command
@@ -262,7 +262,7 @@ fi
 # Injection is dominant: a contaminated console credits nothing at all.
 [ "$INJECTED" = "true" ] && REACHED=""
 
-# Highest rung wins, in track 1 ladder order.
+# Highest rung wins, in ladder order.
 for m in "$SURFACE" commands autoboot; do
     case " $REACHED " in *" $m "*) MILESTONE="$m" ;; esac
 done
@@ -270,7 +270,7 @@ MILESTONES_JSON=$(python3 -c 'import sys,json;print(json.dumps(sys.argv[1].split
 
 # --- Storage readiness (partition table) -------------------------------------
 # Grade C means the bootloader carries on into a normal boot, which requires
-# reading the boot medium. Track 1 does not implement a storage controller, so on
+# reading the boot medium. The medium is modelled here, so
 # this track the medium is a stub and the table cannot load - a track boundary,
 # not a firmware fault. Recording which one it was keeps the loop from
 # prescribing memory windows for a partition table that was never going to come.

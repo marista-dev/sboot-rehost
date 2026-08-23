@@ -1,6 +1,6 @@
 ---
 name: rehost-export
-description: 완성된 리호스팅을 "빌드 없이 바로 실행" 가능한 공유 키트로 내보낸다. active(또는 workdir=<id>) 워크스페이스의 트랙 목표 완료를 확인한 뒤, examples/ 구조처럼 프리빌트 QEMU + 펌웨어/디스크 이미지 + machine 소스 + 스크립트 + docs + evidence 를 rehost_exports/<model>_<build>/track<N>/ 에 조립. 이 폴더는 항상 gitignore. 생성 위치를 사용자에게 안내.
+description: 완성된 리호스팅을 "빌드 없이 바로 실행" 가능한 공유 키트로 내보낸다. active(또는 workdir=<id>) 워크스페이스의 목표 등급 완료를 확인한 뒤, examples/ 구조처럼 프리빌트 QEMU + 펌웨어/디스크 이미지 + machine 소스 + 스크립트 + docs + evidence 를 rehost_exports/<model>_<build>/<target>/ 에 조립. 이 폴더는 항상 gitignore. 생성 위치를 사용자에게 안내.
 disable-model-invocation: true
 ---
 
@@ -8,24 +8,24 @@ disable-model-invocation: true
 `/sboot-rehost:rehost-export` 를 부르면, **다른 사람이 빌드 없이 바로 실행**할 수 있는 키트를 만든다.
 
 - 대상: active(또는 `workdir=<id>`) 워크스페이스.
-- 산출: `<cwd>/rehost_exports/<model>_<build>/track<N>/` (한 펌웨어에 track1·track2 폴더가 각각).
+- 산출: `<cwd>/rehost_exports/<model>_<build>/<target>/` (등급별로 폴더가 하나씩).
 - **이 폴더들은 항상 gitignore** (프리빌트 QEMU·펌웨어 대용량/저작권).
 
 ---
 
 ## Step 0 — 완료 확인 (★ 미완이면 export 금지)
 
-INPUT.md 의 track 확인 후 그 트랙의 **목표 도달**을 검증:
+INPUT.md 의 `target` 확인 후 그 등급의 **목표 도달**을 검증:
 - `VERIFICATION.md` 가 **6/6 REAL** 이어야 한다. 5/6 이하면 "아직 FORCED — export 불가" 안내 후 종료.
-- **트랙 2**: 목표 등급 도달. K1=`Run /init`, K2=`erofs dm-N mounted`, **K3=`sda: sda1..`(진짜 파티션)** —
-  콘솔/VERIFICATION 로 확인. 미도달(예 K3 인데 partitions 미도달)이면 "미완 — export 불가" 안내 후 종료.
+- 등급별 최종 칸: **F1**=부트로더 표면, **F2**=`kernel_entry`, **F3**=`rootfs` 마운트.
+  콘솔/VERIFICATION 로 확인. 미도달이면 "미완 — export 불가" 안내 후 종료.
 
-완료면: `bash <PLUGIN>/scripts/journal.sh <WS> session-start "/sboot-rehost:rehost-export" "키트 생성 track <N>"`.
+완료면: `bash <PLUGIN>/scripts/journal.sh <WS> session-start "/sboot-rehost:rehost-export" "키트 생성 <target>"`.
 
 ## Step 1 — 대상 경로 결정
 
 - `model`/`build` = INPUT.md 슬롯. firmware key = `<model>_<build>` (build 미상이면 `<model>_<id>`).
-- `DEST = <cwd>/rehost_exports/<firmware>/track<track>/`. 이미 있으면 갱신 전 확인(덮어쓰기 경고).
+- `DEST = <cwd>/rehost_exports/<firmware>/<target>/`. 이미 있으면 갱신 전 확인(덮어쓰기 경고).
 
 ## Step 2 — 키트 조립 (기계적)
 
@@ -33,11 +33,11 @@ INPUT.md 의 track 확인 후 그 트랙의 **목표 도달**을 검증:
 `scripts/make_export.sh` 호출 (env 로 파라미터):
 
 ```
-WS=<workspace> TRACK=<1|2> DEST=<dest> \
+WS=<workspace> DEST=<dest> \
 QEMU=~/qemu-build/qemu-10.2.2/build/qemu-system-aarch64 \
 MACHINE=<INPUT machine name> CPU=<cpu> \
-[KCMDLINE="<트랙2 cmdline>"] [INPUT_CMD=help] \
-[EUFS_LU_IMAGE=<트랙2 K3 디스크> EUFS_LBS=4096] \
+[INPUT_CMD=help] \
+[EUFS_LU_IMAGE=<합성 매체 lu0.img> EUFS_LBS=4096] \
 bash <PLUGIN>/scripts/make_export.sh
 ```
 
@@ -46,7 +46,7 @@ bash <PLUGIN>/scripts/make_export.sh
 `evidence/` + turnkey `run.sh`·`setup.sh`·`.gitignore` 생성.
 
 `evidence/` 에는 **사람이 읽는 기록과 기계가 읽는 측정치가 둘 다** 들어간다:
-`VERIFICATION.md` `ANALYSIS.md` `PROGRESS.md` `JOURNAL.md` `STATIC.md`/`KERNEL_STATIC.md`
+`VERIFICATION.md` `ANALYSIS.md` `PROGRESS.md` `JOURNAL.md` `STATIC.md` `stage_map.json` `RESUME.md`
 `INPUT.md` 콘솔·요약 로그 + 하니스 입력 기록(`input_*.txt`, `input_summary.json`) +
 **`metrics.jsonl`**(시간·토큰) **`rounds.jsonl`**(회차별 지문/분류/fixer/효과)
 `blockers.jsonl` `verdict_script.json`(스크립트 1 차 6/6 측정) `analysis.json`.
@@ -65,15 +65,15 @@ bash <PLUGIN>/scripts/make_export.sh
 | 10 | 왜 오래 걸렸나 — 관측·비용·근거 3 항으로 |
 | 11 | 기록 자체의 한계 (번호 중복, 누락된 측정) |
 
-**대용량 이미지(트랙 2 K3 super/disk)**: make_export 가 자동으로 못 넣은 것은 직접 `firmware/` 로
+**대용량 이미지(super/disk)**: make_export 가 자동으로 못 넣은 것은 직접 `firmware/` 로
 복사 (또는 너무 크면 `firmware/README.txt` 에 "본인 disk.img 를 여기 두세요" 안내 + run.sh 가 `EUFS_LU_IMAGE` 참조).
 
 ## Step 3 — 문서 생성 (docs/ + README + HOW-TO-RUN)
 
 워크스페이스의 JOURNAL/PROGRESS/bypasses/VERIFICATION + `rounds.jsonl`/`metrics.jsonl` 을
 근거로 `DEST/docs/` 에 서술:
-- `01_what-was-built.md` — 무엇을 리호스트했나 (트랙·등급·도달 지점).
-- `02_boot-chain.md` — 부팅 체인 상 이 트랙의 진입점.
+- `01_what-was-built.md` — 무엇을 리호스트했나 (등급·도달 지점).
+- `02_boot-chain.md` — 부팅 체인에서 어느 스테이지를 실행했고 어디를 건너뛰었나.
 - `03_trial-and-error.md` — JOURNAL 의 시행착오(원인/분석/해결) + `rounds.jsonl` 의
   분류 분포·시도한 변경 목록 요약.
 - `04_timeline.md` — JOURNAL 세션 시각 + **`ANALYSIS.md` 2·3 절**(단계별 소요·비용,
@@ -112,14 +112,14 @@ bash -c 'mkdir -p "<cwd>/rehost_exports"; printf "*\n" > "<cwd>/rehost_exports/.
 
 ```
 == export 완료 ==
-생성 위치:  <cwd>/rehost_exports/<firmware>/track<N>/     (git 미추적)
+생성 위치:  <cwd>/rehost_exports/<firmware>/<target>/     (git 미추적)
 포함:  bin/qemu-system-aarch64 (프리빌트) · firmware/ · machine/ · scripts/ · docs/ · evidence/ · run.sh
 바로 실행(받는 사람):  cd <경로> && bash run.sh     (오류 시 bash setup.sh 먼저)
 공유:  이 폴더를 zip/복사로 전달 (git 에는 안 올라감).
-같은 펌웨어의 다른 트랙:  그 트랙 워크스페이스를 active 로 두고 /sboot-rehost:rehost-export → track<다른N>/ 에 생성.
+같은 펌웨어를 다른 등급으로:  그 워크스페이스를 active 로 두고 /sboot-rehost:rehost-export.
 ```
 
-`journal.sh <WS> session-end "/sboot-rehost:rehost-export" "키트 -> rehost_exports/<firmware>/track<N>"`.
+`journal.sh <WS> session-end "/sboot-rehost:rehost-export" "키트 -> rehost_exports/<firmware>/<target>"`.
 
 ---
 

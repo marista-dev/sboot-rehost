@@ -5,7 +5,7 @@
 Round count and elapsed time are never stop reasons; there is no round limit.
 
   BLOCKED_*   a hard blocker recorded as fact in blockers.jsonl
-              (carve / missing assets / missing K3 vendor .ko / build error / TEE)
+              (carve / missing assets / missing vendor driver / build error / TEE)
   EXHAUSTED   moves exhausted - only when ALL THREE hold at once:
                 fingerprint stalled or oscillating
                 AND the static-analyzer escalation produced zero new facts

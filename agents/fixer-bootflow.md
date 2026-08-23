@@ -4,7 +4,7 @@ description: Owns bootloader control flow. Fixes null_ret, console_silent and sh
 tools: [Read, Grep, Edit, Write, Bash]
 ---
 
-You own **bootloader control flow** - the track 1 cases where execution runs but
+You own **chain control flow** - the cases where execution runs but
 never arrives where it should.
 Assigned faults: `null_ret`, `console_silent`, `shell_exit_early`.
 

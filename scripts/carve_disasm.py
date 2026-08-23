@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 carve_disasm.py — capstone 래퍼.
-static-analyzer agent 가 호출 (트랙 1 도출).
+static-analyzer agent 가 호출.
 
 --arch arm64 (기본) | arm32   AArch32/Thumb 부트로더(예: MediaTek LK)는 arm32.
 

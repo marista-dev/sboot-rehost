@@ -1276,7 +1276,8 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   // The run script already dropped any milestone that failed the provenance gate.
   //
   // Use every rung the run cleared, not just the highest. A ladder may skip rungs
-  // (K3 has no `rootfs`), so a top milestone outside the ladder would otherwise
+  // (a raw-partition firmware has no `super_mounted`), so a top milestone outside
+  // the ladder would otherwise
   // hide a lower rung inside it and strand the loop on a goal already met.
   const reachedList = (obs?.milestones_reached?.length ? obs.milestones_reached
                                                        : [obs?.milestone ?? 'none'])

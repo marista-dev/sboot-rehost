@@ -43,7 +43,7 @@ cp <PLUGIN>/scripts/inbox_readme.txt <WORKROOT>/_inbox/DROP_FIRMWARE_HERE.txt   
 
 다음:
   1) 펌웨어(.zip / BL_*.tar.md5 / AP_*.tar.md5)를  rehost_workspaces/_inbox/  에 드롭
-  2) /sboot-rehost:rehost-setup <이름>   → 그 펌웨어 전용 워크스페이스로 분리 생성 + 트랙 선택 프롬프트
+  2) /sboot-rehost:rehost-setup <이름>   → 그 펌웨어 전용 워크스페이스 생성 + 등급 선택 프롬프트
 ```
 
 ---

@@ -8,7 +8,7 @@ You own the **vendor storage HCI**. With no datasheet, you fill the model by
 **observing** which registers the real vendor driver polls and what it waits for.
 Assigned walls: `poll_stall`, `desc_addr_corrupt`, `pwrmode_timeout`,
 `gear_source`, `upiu_field_off`, `block_size`, `vendor_telemetry_null`.
-Methodology: `methodology/track2_kernel_storage.md` section 7.
+Knowledge: `knowledge/faults_storage.md`.
 
 ## Rules shared by every fixer (violations are rolled back at the gate)
 
@@ -60,7 +60,7 @@ It resolves `string -> .rela.text -> .text -> readl(<window>+<imm>)`.
 
 ## Milestone ladder - stopping midway is not completion
 
-K3 is the point of track 2: rehosting *by implementing the controller*. These
+This is where rehosting happens *by implementing the controller*. These
 milestones are graduation marks on that controller's completeness.
 
 | stage | milestone | line the kernel prints |
@@ -68,19 +68,19 @@ milestones are graduation marks on that controller's completeness.
 | — | `link_up` | `scsi host0: ufshcd`, or `… UFS link established` |
 | — | `power_mode` | `Power mode change(0): M(1)G(3)L(2)HS-series(2)` |
 | — | `scsi_attach` | `[sda] Attached SCSI disk` |
-| **K3a** | `partitions_up` | `sda: sda1 sda2 sda3 sda4` - **minimum completion** |
-| **K3b** | `super_mounted` | `erofs: (device dm-0/dm-4): mounted` + `supermount: SUCCESS` - **capstone** |
+| **최소 완료** | `partitions_up` | `sda: sda1 sda2 sda3 sda4` - **minimum completion** |
+| **최종 칸** | `super_mounted` | `erofs: (device dm-0/dm-4): mounted` + `supermount: SUCCESS` - **capstone** |
 
 Below `partitions_up`, **report the highest milestone honestly as incomplete**
 and treat the next wall. Never dress partial progress up as completion.
 
 **The capstone depends on topology, not effort.** Only firmware shipping a
 `super.img` can print it. Separate `system`/`vendor` raw images (often ext4,
-mounting as `EXT4-fs (sda): mounted filesystem`) **complete at K3a**.
+mounting as `EXT4-fs (sda): mounted filesystem`) **complete at `partitions_up`**.
 
 **A missing `.ko` is not automatically a blocker.** When the kernel compiles UFS
 in (`=y`) there is no module by design, yet the real vendor driver is present -
-that is **K3\***, and modelling the HCI still lets the genuine driver run.
+the driver is built in, and modelling the HCI still lets the genuine driver run.
 
 ## Output (JSON)
 

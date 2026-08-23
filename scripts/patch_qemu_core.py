@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""patch_qemu_core.py — 트랙 2 §5.3 faithful SMC 코어 3 패치 (QEMU 10.2.2 target/arm).
+"""patch_qemu_core.py — faithful SMC 코어 3 패치 (QEMU 10.2.2 target/arm).
 멱등. 전부 cpu->interrupt_handler != NULL 로 게이트 → virt 등 타 머신 무영향.
 
   1) cpu.h           : ARMCPU 에 `void (*interrupt_handler)(CPUState*)` 추가.

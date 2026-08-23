@@ -17,14 +17,14 @@ are not sure, answer `unknown` - it costs you nothing.
 | input | path |
 |---|---|
 | fingerprint | `<workdir>/fingerprint.json` - raw observation, do not alter |
-| console | `07_logs/console_N.txt` (track 1) or `kboot_N.txt` (track 2) |
+| console | `07_logs/console_N.txt` |
 | summary | `07_logs/run_N.summary.txt` or `kboot_N.summary.txt` - key stop points |
 | full trace | only when needed: WSL `~/rehost/_traces/…` (the `trace=` path) |
-| derived facts | `STATIC.md` or `KERNEL_STATIC.md` |
+| derived facts | `STATIC.md` · `stage_map.json` |
 | history | `<workdir>/rounds.jsonl` - is this classification repeating? |
 | knowledge | `knowledge/faults_unified.md` (분류표), `faults_storage.md` · `kernel_gates.md` (심화) |
 
-## Before naming anything: did our input reach the gate? (track 1)
+## Before naming anything: did our input reach the gate?
 
 `fingerprint.json` carries an `input` block written by `scripts/uart_harness.py`
 and the machine's RX counters. Read it first.
@@ -40,10 +40,11 @@ refused it. On S921N every single round fired the command without ever seeing th
 prompt, including the two rounds that reached the shell, and nothing recorded it -
 so the difference was invisible for the whole run.
 
-## And: is the boot medium readable? (track 1)
+## And: is the boot medium readable?
 
 `fingerprint.json` carries `storage.partition_table`: `ok`, `missing`, or
-`unknown`. Track 1 models the medium as a stub, so `missing` is the expected
+`unknown`. The medium is modelled here, so `missing` means the synthesised image
+is wrong - route it to `fixer-storage`. It used to be the expected
 state, and it cascades - the environment, panel, modem and next-stage loads all
 fail after it.
 
@@ -96,7 +97,7 @@ that is a polling hang, not an abort.
 
 ## Names (the registry and knowledge tables are authoritative)
 
-| track 1 (bootloader) | track 2 kernel | track 2 storage |
+| bootloader stages | kernel | storage |
 |---|---|---|
 | `data_abort_unmapped` | `kernel_oops` | `poll_stall` |
 | `infinite_poll` | `security_gate` | `desc_addr_corrupt` |
@@ -137,7 +138,7 @@ category.
 | 1 (bootloader) | the surface — `shell` or `fastboot` — then `commands`, then `autoboot` |
 | 2 (kernel) | `userspace`, `rootfs`, `link_up`, `power_mode`, `scsi_attach`, `partitions_up`, `super_mounted` |
 
-Track 1's first rung is whichever surface this bootloader actually has, so a
+The first surface rung is whichever surface this bootloader actually has, so a
 MediaTek LK run reports `fastboot` where an S-Boot run reports `shell`.
 
 But when `fingerprint.json` has `source_gate.injected == true`, **nothing was

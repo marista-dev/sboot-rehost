@@ -74,6 +74,20 @@ GPT 디스크를 만든다(보호 MBR · 주/백업 헤더 · 엔트리 배열 C
 판단하므로, `plugin.json` 만 올리면 사용자에게 아무것도 전달되지 않는다.
 `check_version.sh` 가 두 파일의 버전이 어긋나면 정지하도록 했다.
 
+### 플러그인 전반의 정합
+
+개편이 파이프라인에만 반영되고 주변 파일은 옛 모양을 설명한 채 남아 있었다. 그중 둘은
+동작에 직접 영향을 줬다.
+
+- **`rehost-setup`** 이 트랙 1/2 를 프롬프트로 묻고 `INPUT.md` 에 `track` 을 썼다.
+  이제 등급(F1/F2/F3)만 묻고 실행 명령도 `rehost-full` 하나만 안내한다.
+- **`verifier`** 가 5항목으로 판정했다. 6항목 실행을 잘못된 기준에 대고 보고했을 것이다.
+
+그 밖에 `static-analyzer` 의 트랙별 체크리스트를 스테이지 지도 우선의 단일 체크리스트로
+바꾸고, `make_export.sh` 의 죽은 트랙 2 분기를 제거했으며, `run_qemu.sh` · `run_kernel.sh` ·
+`machine.c.tmpl` · `machine_kernel.c.tmpl` 을 삭제했다. `KERNEL_STATIC.md` 는 `STATIC.md`
+하나로 합쳤다.
+
 ### 그 밖에
 
 - `fixer-secureboot` 신설 — 부트로더 자체 서명 검증. **검증을 패치로 무력화하지 않는다.**

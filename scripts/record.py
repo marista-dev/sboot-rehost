@@ -45,7 +45,7 @@ Examples:
   record.py "$WD" round round=12 goal=link_up fp_far=0x12860010 \\
             category=pwrmode_timeout fixer=fixer-storage effect=progress \\
             rationale="FAR 이 PMU 창 안이라 그 창만 매핑"
-  record.py "$WD" blocker code=BLOCKED_KO detail="target=K3 인데 벤더 .ko 가 없습니다"
+  record.py "$WD" blocker code=BLOCKED_KO detail="벤더 .ko 가 없고 커널 빌트인도 아닙니다"
   printf '%s' "$USER_PROMPT" | record.py "$WD" prompt --stdin=text phase=Run round=12
   record.py "$WD" resolution stop=smc_undef tried=3 rounds=12-15 \\
             fix="SiP 0xc2001014 를 shim 에 추가" evidence=07_logs/console_15.txt

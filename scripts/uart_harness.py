@@ -34,7 +34,7 @@ run that could not reach the surface has to look like one.
 
 Knowing when to refill
 ----------------------
-The machine can report RX consumption on stderr (see machine.c.tmpl,
+The machine can report RX consumption on stderr (see machine_full.c.tmpl,
 REHOST_RX_REPORT). When those lines are present the harness refills only once the
 buffer has actually drained, so the gate gets its run of bytes without burying
 the later command under a hundred empty command lines. When they are absent -
@@ -67,7 +67,7 @@ MIN_RESEND = 0.3            # gap between two refills; polling is faster than ty
 QUIET_RESEND = 0.4          # fallback: console silent this long -> firmware is waiting
 MAX_REFILLS = 40            # bound on how much we may pour in; reported when hit
 
-# The machine's out-of-band consumption report (machine.c.tmpl rehost_rx_report).
+# The machine's out-of-band consumption report (machine_full.c.tmpl rehost_rx_report).
 # It goes to stderr, never to the console, so it cannot contaminate the guest
 # output that verification reads. Single-letter fields: s served, e empty,
 # p status polls, q still queued - short enough that no console token can
@@ -166,7 +166,7 @@ class Guest:
     def _pump_stderr(self):
         """Parse the RX report, then pass every line through untouched.
 
-        run_qemu.sh redirects this process's stderr into qemu_<n>.stderr.txt and
+        run_full.sh redirects this process's stderr into qemu_<n>.stderr.txt and
         the machine's diagnostics are read from there, so consuming the pipe
         without forwarding would delete them. QEMU's own startup errors are also
         how a run that never began gets diagnosed.

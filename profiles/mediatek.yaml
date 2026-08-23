@@ -82,7 +82,7 @@ boot_medium:
   hci_kind: ufs                      # some devices are eMMC; confirm from the DTB
   notes:
     - UFS is usually built into the kernel (=y), so no vendor .ko exists by
-      design - that is K3*, not a blocker
+      design - the driver is built in, which is not a blocker
     - super.img on these devices is an Android sparse super, not a GPT disk;
       a LUN with a synthesised GPT is required for partition enumeration
     - the HCI interrupt must be level-triggered, not a pulse

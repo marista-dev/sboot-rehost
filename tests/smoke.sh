@@ -298,7 +298,7 @@ while [ $# -gt 0 ]; do case "$1" in -serial) OUT="${2#file:}"; shift 2;; -D) LOG
 [ -n "$OUT" ] && echo boot > "$OUT"; [ -n "$LOG" ] && echo trace > "$LOG"
 EOF
 chmod +x "$BIN/fake-qemu-args"
-QEMU="$BIN/fake-qemu-args" bash "$S/run_kernel.sh" "$ZW" test-kernel 1 >/dev/null 2>&1
+QEMU="$BIN/fake-qemu-args" bash "$S/run_full.sh" "$ZW" test-kernel 1 >/dev/null 2>&1
 if grep -q '\-initrd' /tmp/qemu_args_seen.txt 2>/dev/null; then bad "0 바이트 initramfs 가 QEMU 로 전달됨"; else ok "0 바이트 initramfs 는 전달 안 함"; fi
 rm -f /tmp/qemu_args_seen.txt
 
@@ -793,11 +793,11 @@ chk "관측 문서에 입력 경로 사실" \
     "True True False"
 
 # 머신은 입력을 만들지 않는다 — 템플릿 회귀
-grep -q "rx_seed" "$REPO/templates/machine.c.tmpl"
+grep -q "rx_seed" "$REPO/templates/machine_full.c.tmpl"
 chk "템플릿에 자가 시드 없음"    "$?" "1"
-grep -q "qemu_chr_fe_accept_input" "$REPO/templates/machine.c.tmpl"
+grep -q "qemu_chr_fe_accept_input" "$REPO/templates/machine_full.c.tmpl"
 chk "accept_input 호출 있음"     "$?" "0"
-grep -q "{{ENTRY_PC}}" "$REPO/templates/machine.c.tmpl"
+grep -q "{{ENTRY_PC}}" "$REPO/templates/machine_full.c.tmpl"
 chk "진입 PC 가 로드주소와 별개 슬롯" "$?" "0"
 
 # 검증 항목 4 — shell 표면에서도 자가입력을 잡는가

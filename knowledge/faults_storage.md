@@ -1,11 +1,11 @@
-# Knowledge table - track 2 K3 (vendor storage HCI) walls
+# Knowledge table - vendor storage controller walls
 
 The trap table for `fixer-storage`. **A new wall is one new row here.**
-Methodology: `methodology/track2_kernel_storage.md` section 7.
+Classification table: `knowledge/faults_unified.md`.
 
-## What K3 is for
+## What this is for
 
-K3 is **the point of track 2**: rehosting *by implementing the controller*. The
+This is where rehosting happens *by implementing the controller*. The
 goal is not "mount a rootfs" - it is **driving the real vendor UFS controller**
 far enough that the kernel enumerates partitions. Every milestone below is a
 graduation mark on that controller's completeness, not a separate objective.
@@ -16,7 +16,7 @@ model from that observation.
 
 **The vendor driver need not be a `.ko`.** Kernels that compile UFS in
 (`CONFIG_SCSI_UFS_*=y`) have no module by design, yet the real vendor driver is
-present and will drive a modelled controller - that case is **K3\***. Only
+present and will drive a modelled controller. Only
 "no `.ko` **and** no driver in the kernel image" is a genuine blocker.
 
 Log sources: the kernel console plus the storage model's own `qemu_log` (vendor
@@ -47,18 +47,18 @@ window reads and writes, UTRD/UPIU transactions).
 | `DME_PEER_GET` | 0x03 |
 | `DME_PEER_SET` | 0x04 |
 
-## Milestone ladder - the K3 completion bar
+## Milestone ladder - the completion bar
 
 | stage | milestone | line the kernel prints | walls to clear |
 |---|---|---|---|
 | — | `link_up` | `scsi host0: ufshcd`, or `… UFS link established` | PHY calibration (`poll_stall`) |
 | — | `power_mode` | `Power mode change(0): M(1)G(3)L(2)HS-series(2)` | `desc_addr_corrupt`, `pwrmode_timeout`, `gear_source` |
 | — | `scsi_attach` | `[sda] Attached SCSI disk` | Query device, `vendor_telemetry_null` |
-| **K3a** | **`partitions_up`** | `sda: sda1 sda2 sda3 sda4` | `upiu_field_off`, `block_size`, `prdt_stride` |
-| **K3b** | `super_mounted` | `erofs: (device dm-0/dm-4): mounted` plus `supermount: SUCCESS` | async probe timing |
+| **최소 완료** | **`partitions_up`** | `sda: sda1 sda2 sda3 sda4` | `upiu_field_off`, `block_size`, `prdt_stride` |
+| **최종 칸** | `super_mounted` | `erofs: (device dm-0/dm-4): mounted` plus `supermount: SUCCESS` | async probe timing |
 
-**`partitions_up` (K3a) is minimum completion; `super_mounted` (K3b) is the
-capstone - the full UFS controller.** Below K3a the controller is unfinished:
+**`partitions_up` is minimum completion; `super_mounted` is the
+final rung - the full UFS controller.** Below `partitions_up` the controller is unfinished:
 report the highest milestone honestly and treat the next wall. Never dress
 partial progress up as completion.
 
@@ -66,7 +66,7 @@ partial progress up as completion.
 ships a `super.img` (dm-linear, usually EROFS) can print that line. Firmware with
 separate `system`/`vendor` raw images - often ext4, mounting as
 `EXT4-fs (sda): mounted filesystem` / `VFS: Mounted root (ext4 filesystem)` -
-**completes at K3a** and never has a capstone. Keeping `super_mounted` as a
+**completes at `partitions_up`** and never has a final rung. Keeping `super_mounted` as a
 required rung there would demand a goal that cannot exist.
 
 ## When the value lives in code - `.ko` disassembly (ask static-analyzer)
@@ -96,4 +96,4 @@ and **fakes a pass** (honesty rule 1). **Model constant ready values only.**
   outside the storage model.
 - **Doubt constants, field positions and block sizes**; re-check them against the
   spec or the on-disk signature rather than intuition.
-- **Document every `.ko` bypass.** Replacing real driver code defeats the point of K3.
+- **Document every `.ko` bypass.** Replacing real driver code defeats the point.

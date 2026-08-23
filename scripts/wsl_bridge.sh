@@ -9,7 +9,7 @@
 #   those are prose, so a "remember to prefix the command" rule would be a
 #   convention rather than a mechanism, and conventions rot silently. Every path
 #   into this plugin ends at scripts/, so guarding here covers all of them and
-#   the callers keep saying `bash .../run_qemu.sh` exactly as before.
+#   the callers keep saying `bash .../run_full.sh` exactly as before.
 #
 # Why `wsl.exe -e` and not `wsl.exe -lc "..."`:
 #   -e passes argv straight through, so nothing is re-parsed by a second shell.

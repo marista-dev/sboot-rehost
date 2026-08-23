@@ -51,7 +51,7 @@ contaminates everything downstream.
 | `hvc_pkvm` | hangs after HVC with `kvm-arm.mode=protected` in cmdline | **remove the HVC interception** from the shim; the kernel's own pKVM must handle it |
 | `fpu_trap` | `Taking exception 2` with an FP/SVE instruction at ELR | set `cpacr_el1 = 0x300000` in the reset hook (widen to 0x333000 if already present) |
 
-When a track 1 fix needs the BL3 `smc` neutralised in place, use a 4-byte patch:
+When a fix needs an `smc` neutralised in place, use a 4-byte patch:
 
 | instruction | encoding |
 |---|---|

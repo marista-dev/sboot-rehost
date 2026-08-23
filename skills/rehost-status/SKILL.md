@@ -1,6 +1,6 @@
 ---
 name: rehost-status
-description: rehost_workspaces/ 의 모든 펌웨어 워크스페이스 목록 + 각 워크스페이스의 진행 상태(트랙/등급/회차/최고 마일스톤/검증 P5/정지 사유)를 한 화면으로 요약. metrics.jsonl·rounds.jsonl 로 소요 시간·토큰·시도한 변경도 집계. active 워크스페이스 표시. workdir=<id> 주면 그 워크스페이스만 상세.
+description: rehost_workspaces/ 의 모든 펌웨어 워크스페이스 목록 + 각 워크스페이스의 진행 상태(등급/회차/최고 마일스톤/검증/정지 사유)를 한 화면으로 요약. metrics.jsonl·rounds.jsonl 로 소요 시간·토큰·시도한 변경도 집계. active 워크스페이스 표시. workdir=<id> 주면 그 워크스페이스만 상세.
 disable-model-invocation: true
 ---
 
@@ -23,7 +23,8 @@ disable-model-invocation: true
 | **`blockers.jsonl`** | 정지 사유 (있으면 왜 멈췄나) |
 | `verdict_script.json` | 스크립트 1 차 6/6 측정 |
 | `10_reproduce/` | 재현 키트 존재 |
-| 트랙 1 `STATIC.md` / 트랙 2 `KERNEL_STATIC.md` | 도출 확정·미확정 수 |
+| `STATIC.md` | 도출 확정·미확정 수 |
+| `stage_map.json` | 실행 가능 스테이지 수 · 건너뛴 스테이지 |
 
 집계는 `jq` 또는 python 한 줄로 (`rounds.jsonl` 은 한 줄 = 한 회차).
 
@@ -32,14 +33,14 @@ disable-model-invocation: true
 ```
 sboot-rehost — 워크스페이스 (WORKROOT: <cwd>/rehost_workspaces)
 
-| 워크스페이스 | 트랙/등급 | 회차 | 최고 마일스톤 | 검증 | 정지 | 마지막 |
+| 워크스페이스 | 등급 | 회차 | 최고 마일스톤 | 검증 | 정지 | 마지막 |
 |---|---|---|---|---|---|---|
-| ★ SM-A166B_..._1330 (active) | 2 / K3 | 47 | partitions_up (super 미마운트) | 4/5 FORCED | — | 07-21 12:20 |
+| ★ SM-G977N_..._9820 (active) | F2 | 47 | kernel_entry | 5/6 FORCED | — | 08-21 12:20 |
 |   SM-G977N_..._9820 | F1 | 18 | shell | 6/6 REAL | — | 08-20 15:02 |
-|   SM-X_..._9999 | 2 / K3 | 31 | link_up | 미실행 | EXHAUSTED | 07-20 09:11 |
+|   SM-X_..._9999 | F2 | 31 | medium_up | 미실행 | EXHAUSTED | 08-20 09:11 |
 
 active: <id>
-다음: /sboot-rehost:rehost-kernel (active 실행) · /sboot-rehost:rehost-setup <이름> (새 펌웨어)
+다음: /sboot-rehost:rehost-full (active 실행) · /sboot-rehost:rehost-setup <이름> (새 펌웨어)
       /sboot-rehost:rehost-status workdir=<id> (상세) · /sboot-rehost:rehost-export (완료 시 키트)
 ```
 
@@ -63,7 +64,7 @@ active: <id>
 ## 정직성
 
 - 파일이 없으면 "미실행". 부분 통과는 `P/5 PASS, 실패 항목: …` 로 명시 ("거의 완료" 금지).
-- 트랙 2 K3 는 **`partitions_up` 미도달이면 "미완"** — 최고 마일스톤을 그대로 표기.
+- 목표 등급의 마지막 칸에 도달하지 못했으면 **"미완"** — 최고 마일스톤을 그대로 표기.
 - **회차가 많다는 것 자체는 문제가 아니다.** "30 회차 넘었으니 그만" 같은 권고를 하지 말 것.
   멈출 이유는 구조상 도달 불가뿐이고, 그 판정은 `stop_conditions.py` 가 이미 내린다.
 - 정체·진동이 보이면 사실만 전한다: "최근 N 회차 지문 동일 — 다음 실행에서 도출

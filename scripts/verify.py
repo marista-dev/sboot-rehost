@@ -6,27 +6,25 @@ verdict_script.json produced here. That agent may freely lower the verdict
 (REAL -> FORCED) but may only raise it (FORCED -> REAL) when it can show
 byte-level evidence.
 
-Track 1 (bootloader shell) items:
+Legacy track 1 items (kept so an old workspace still verifies):
   1. PC trace        shell_func / exec_command address appears in the trace
   2. output byte-match  every console token exists inside the BL3 binary
   3. source negative    the machine .c contains none of the output strings
   4. single UART path   qemu_chr_fe_write appears exactly once
   5. bypass record      every entry has all four fields
 
-Track 2 (kernel + storage) items:
+Legacy track 2 items:
   1. boot progress   `Run /init`
-  2. kernel evidence per grade. For K3 this is the UFS controller completion
-     bar, not "any storage line" - see K3_STAGES.
+  2. kernel evidence per grade - see K3_STAGES.
   3. source negative the machine .c (+HCI) contains none of those strings
-  4. real driver     UTRD/Query/SCSI transactions in the trace (N/A unless K3)
+  4. real driver     UTRD/Query/SCSI transactions in the trace
   5. bypass record   four fields
 
 Item names and evidence strings stay in Korean on purpose: they are copied
 straight into VERIFICATION.md, which the user reads.
 
 Usage:
-  verify.py <workdir> --track 1 --bl3 <bl3.bin> [--pc 0x...]
-  verify.py <workdir> --track 2 --target K3
+  verify.py <workdir> --target F2 --container <container.bin>
 
 Output: JSON on stdout + <workdir>/verdict_script.json
 """
@@ -185,7 +183,9 @@ def check_source_negative(sources, console_bytes):
                   f"(주석·#include 는 출력이 아니므로 제외)")
 
 
-# --- track 1 -----------------------------------------------------------------
+# --- legacy: pre-0.19.0 track 1 ------------------------------------------------
+# Kept so a workspace created before the chain was unified still verifies. New
+# runs never reach this - verify_full is the current path.
 def verify_track1(workdir, args):
     console_path = args.console or find_console(workdir, 1)
     trace_path = args.trace or find_trace(workdir, 1)
@@ -263,7 +263,7 @@ def verify_track1(workdir, args):
     return items, console_path, trace_path, sources
 
 
-# --- track 2 -----------------------------------------------------------------
+# --- legacy: pre-0.19.0 track 2 ------------------------------------------------
 # Rootfs and link-up wording differ by firmware: EROFS over dm-linear on a super
 # image, or plain ext4 on a raw block device; ufshcd core or the vendor glue
 # driver. Accept either rather than encoding one device's shape as universal.
@@ -277,7 +277,8 @@ LINK_UP_PATTERNS = [
     r"ufs\w*[^\n]*: UFS link established",
 ]
 
-# K3 is the point of track 2: driving a real vendor UFS controller far enough
+# Legacy grade names, kept so an old workspace still verifies: driving a real
+# vendor UFS controller far enough
 # that the kernel enumerates partitions. The methodology sets the bar at
 # partitions_up (minimum completion); super_mounted is the capstone and only
 # applies to firmware that ships a super image.
@@ -366,9 +367,9 @@ def k3_stage_report(haystack):
     if any_match(K3_STAGES["super_mounted"], haystack):
         cleared.append("super_mounted")
     if "super_mounted" in cleared:
-        stage = "K3b (캡스톤 — 완전한 UFS 컨트롤러)"
+        stage = "최종 칸 (완전한 컨트롤러 — super 마운트)"
     elif "partitions_up" in cleared:
-        stage = "K3a (최소 완료 — 파티션 열거)"
+        stage = "최소 완료 (파티션 열거)"
     else:
         stage = "미완 (UFS 컨트롤러 미완성)"
     return {"stage": stage, "cleared": cleared}
@@ -511,9 +512,9 @@ def main():
     parser.add_argument("--console", default=None)
     parser.add_argument("--trace", default=None)
     parser.add_argument("--pc", action="append",
-                        help="track 1 item 1 expected PC; derived from STATIC.md when omitted")
+                        help="expected stage entry PC; derived from STATIC.md / stage_map.json when omitted")
     parser.add_argument("--surface", default="shell", choices=("shell", "fastboot"),
-                        help="track 1 interactive surface; selects item 4")
+                        help="the bootloader's interactive surface")
     parser.add_argument("--input-token", default=None,
                         help="the command the host injects; must not appear in the "
                              "machine sources (fastboot default: getvar:)")
@@ -532,7 +533,7 @@ def main():
             read_bytes(console).decode("utf-8", errors="replace") + "\n" + read_text(trace))
     elif args.track == 1:
         if not args.bl3:
-            print("verify: track 1 requires --bl3", file=sys.stderr)
+            print("verify: legacy track 1 requires --bl3", file=sys.stderr)
             sys.exit(1)
         items, console, trace, sources = verify_track1(args.workdir, args)
         storage = None
