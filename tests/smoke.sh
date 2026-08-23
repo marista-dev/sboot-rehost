@@ -939,6 +939,55 @@ python3 "$S/analyze_run.py" "$EW" --track 1 >/dev/null 2>&1
 chk "기록이 없어도 생성"        "$?" "0"
 
 
+# =============================================================================
+printf '\n\033[1m== 20. 릴리스 일관성 ==\033[0m\n'
+# 버전을 올리지 않고 내용을 내보내면, 그 번호를 이미 받은 환경은 수정을 못 받는다.
+# 0.19.0 에서 실제로 그렇게 됐다 (46개 파일이 같은 번호로 나감).
+
+chk "저장소가 검문을 통과"      "$(bash "$S/check_release.sh" >/dev/null 2>&1; echo $?)" "0"
+
+PV=$(python3 -c 'import json;print(json.load(open(".claude-plugin/plugin.json"))["version"])')
+MV=$(python3 -c 'import json;print(json.load(open(".claude-plugin/marketplace.json"))["plugins"][0]["version"])')
+chk "plugin=marketplace 버전"    "$PV" "$MV"
+grep -q "^## $PV" CHANGELOG.md
+chk "CHANGELOG 에 항목이 있음"   "$?" "0"
+
+# 검문이 실제로 잡는지 — 가짜 저장소로 위반을 만든다. 통과만 확인하면
+# 언제나 통과하는 검문과 구별되지 않는다.
+mk_repo() {   # $1=plugin 버전 $2=marketplace 버전
+  local R="$ROOT/rel_$3"; mkdir -p "$R/.claude-plugin" "$R/skills"
+  ( cd "$R"
+    git init -q . 2>/dev/null; git config user.email t@t; git config user.name t
+    printf '{"version": "%s"}\n' "$1" > .claude-plugin/plugin.json
+    printf '{"plugins":[{"version": "%s"}]}\n' "$2" > .claude-plugin/marketplace.json
+    echo one > skills/a.md
+    git add -A >/dev/null; git commit -qm v1 >/dev/null )
+  echo "$R"
+}
+RS="$S/check_release.sh"
+
+R1=$(mk_repo 1.0.0 1.0.0 clean)
+chk "깨끗한 저장소는 통과"      "$(REPO="$R1" bash "$RS" >/dev/null 2>&1; echo $?)" "0"
+
+# 같은 버전으로 동작 표면을 바꾸면 막혀야 한다
+( cd "$R1" && echo two > skills/a.md && git add -A >/dev/null && git commit -qm drift >/dev/null )
+chk "버전 없는 변경을 막음"      "$(REPO="$R1" bash "$RS" >/dev/null 2>&1; echo $?)" "1"
+REPO="$R1" bash "$RS" 2>&1 | grep -q 'skills/a.md'
+chk "바뀐 파일을 지목함"        "$?" "0"
+
+# 버전을 올리면 다시 통과해야 한다 (막기만 하면 릴리스가 불가능해진다)
+( cd "$R1" && sed -i '' 's/1\.0\.0/1.1.0/g' .claude-plugin/*.json && git add -A >/dev/null && git commit -qm v2 >/dev/null )
+chk "버전을 올리면 통과"        "$(REPO="$R1" bash "$RS" >/dev/null 2>&1; echo $?)" "0"
+
+# 문서만 바뀐 것은 릴리스를 강요하지 않는다
+( cd "$R1" && mkdir -p docs && echo d > docs/x.md && git add -A >/dev/null && git commit -qm doc >/dev/null )
+chk "문서 변경은 통과"          "$(REPO="$R1" bash "$RS" >/dev/null 2>&1; echo $?)" "0"
+
+# 카탈로그가 낮으면 갱신이 사용자에게 닿지 않는다 (0.17.0 사례)
+R2=$(mk_repo 1.0.0 0.9.0 drift)
+chk "카탈로그 드리프트를 막음"   "$(REPO="$R2" bash "$RS" >/dev/null 2>&1; echo $?)" "1"
+
+
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
 echo "작업 폴더: $ROOT"
 [ "$FAIL" -eq 0 ]
