@@ -1,6 +1,11 @@
-# SM-S921N (Exynos 2400) — 트랙 1 Worked Example
+# SM-S921N (Exynos 2400) — 참고 자료 (v0.20.0 이전 산출물)
 
-`/sboot-rehost:rehost-bootloader` (트랙 1) 가 처음부터 끝까지 동작했을 때 도달하는 최종 상태.
+> **통합 체인의 모델이 아니다.** 폐기된 트랙 1 이 도달했던 상태이며, BL3 를 carve 해
+> 단독 적재하고(`has_el3=false`, 진입 = BL3) **UFS 를 모델하지 않은 채 스토리지 경로를
+> 우회**한다. 현재 목표(BL1 부터 연속 실행 + 실제 매체 구동)와 방향이 반대다.
+>
+> 남겨둔 이유는 **실제로 동작한 유일한 머신 소스**이기 때문이다. Exynos UART 모델과
+> 주소 도출값은 재사용할 수 있다. 아래 검증 5/5 는 당시 기준이며 현재는 6/6 이다.
 
 ## 파일
 
@@ -33,4 +38,4 @@ diff -u EXPECTED_OUTPUT.txt /tmp/console.txt
 
 본 worked example 의 모든 출력 문자열은 BL3 ROM (sboot_bl3_full.bin,
 md5 1bf5599c…) 안에 file offset 으로 존재. 머신 코드에는 동일 문자열 없음.
-검증 5/5 통과. 자세한 내역은 [../../methodology/worked_example.md](../../methodology/worked_example.md).
+당시 기준 검증 5/5 통과 (현재 기준은 6/6 — 항목 4 양방향 검증과 항목 5 스토리지 이중 구동이 추가됐다).
