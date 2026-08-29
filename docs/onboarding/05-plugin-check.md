@@ -11,23 +11,22 @@
 |---|---|---|
 | 플러그인 이름 | `sboot-rehost` | `.claude-plugin/plugin.json` |
 | 마켓플레이스 | `sboot-rehost-marketplace` | `.claude-plugin/marketplace.json` |
-| 저장소 버전 | `0.25.1` | `plugin.json` |
+| 저장소 버전 | `0.25.2` | `plugin.json` |
 | 명령 접두사 | `/sboot-rehost:` | 플러그인 이름에서 파생 |
 
 ---
 
 ## 2. 가장 먼저 확인할 것: 세션이 쓰는 버전
 
-**Claude Code 세션은 시작 시점에 로드한 플러그인 버전을 계속 쓴다.** 저장소나 캐시를 최신으로
-갱신해도 이미 실행 중인 세션이 쓰는 것은 **로드 시점의 버전**이다.
+**세션은 시작 시점에 로드한 버전을 계속 쓴다.** 저장소나 캐시를 갱신해도 실행 중인
+세션이 쓰는 것은 로드 시점의 것이다.
 
-이것이 위험한 이유는 실패가 눈에 띄지 않기 때문이다. 루프는 돌고 로그는 정상으로 보이는데
-동작은 이전 릴리스의 것이다. 결과적으로 두 버전 전에 고쳐진 문제를 다시 디버깅하게 된다.
-
-### 파이프라인이 먼저 막는다
-
-`/sboot-rehost:start` 는 다른 무엇보다 먼저 버전을 확인하고, 어긋나면 `BLOCKED_VERSION`
-으로 **정지한다.** 경고하고 진행하지 않는다.
+- 실패가 눈에 띄지 않는다. 루프는 돌고 로그는 정상인데 동작이 이전 릴리스의 것이다
+- 결과적으로 두 버전 전에 고쳐진 문제를 다시 디버깅하게 된다
+- `/sboot-rehost:start` 는 무엇보다 먼저 버전을 확인하고 어긋나면 `BLOCKED_VERSION`
+  으로 **정지한다.** 경고만 하고 진행하지 않는다
+- `/sboot-rehost:init` 은 **옛 버전 캐시를 실제로 지운다.** 다만 이미 로드된 것은
+  지워도 바뀌지 않으므로, 옛 버전을 로드 중이면 거기서 멈추고 재시작을 요구한다
 
 ```bash
 bash scripts/check_version.sh "$PLUGIN_DIR"
@@ -41,11 +40,10 @@ bash scripts/check_version.sh "$PLUGIN_DIR"
 | `registered` | **세션이 실제로 로드한 버전** (스킬·에이전트의 출처) |
 | `available` | 이 컴퓨터에 있는 최신 버전 |
 
-`registered` 가 `available` 보다 낮으면 스킬과 에이전트가 이전 세대의 것이다.
-`running` 과 `registered` 가 다르면 스크립트와 프롬프트가 서로 다른 세대일 수 있다.
-
-판정이 불가능한 경우(작업 사본 실행, 캐시 없음)는 **막지 않고 사유를 기록한다.**
-판별 불가에 정지를 걸면 개발 중인 체크아웃에서 도구 자체가 실행되지 않는다.
+- `registered` < `available` 이면 스킬과 에이전트가 이전 세대의 것이다
+- `running` ≠ `registered` 면 스크립트와 프롬프트가 서로 다른 세대일 수 있다
+- 판정 불가(작업 사본 실행, 캐시 없음)는 **막지 않고 사유를 기록한다.** 판별 불가에
+  정지를 걸면 개발 중인 체크아웃에서 도구가 실행되지 않는다
 
 ### 수동 확인
 
@@ -102,7 +100,7 @@ VS Code 확장이면 `/plugins` → Marketplaces 탭 → 해당 마켓플레이�
 ## 5. 구성 요소 확인
 
 ```bash
-V=0.25.1
+V=0.25.2
 R=~/.claude/plugins/cache/sboot-rehost-marketplace/sboot-rehost/$V
 ls $R/skills/    # init start status export  (넷뿐이어야 한다)
 ls $R/agents/    # static-analyzer supervisor fault-classifier fixer-* verifier
@@ -128,4 +126,6 @@ ls $R/scripts/   # check_version.sh stage_map.py build_lu.py run_full.sh ...
 | ninja | 머신 재빌드 |
 | python3 + capstone | 정적 도출 |
 | dtc 또는 fdtdump | DTB 파싱 (F2 이상) |
+| lz4 | BL 패키지의 `.lz4` 해제 |
+| simg2img | sparse 이미지를 raw 로 (F2 이상) |
 | WSL | 셸이 Windows 인 경우 |
