@@ -988,6 +988,63 @@ R2=$(mk_repo 1.0.0 0.9.0 drift)
 chk "카탈로그 드리프트를 막음"   "$(REPO="$R2" bash "$RS" >/dev/null 2>&1; echo $?)" "1"
 
 
+# =============================================================================
+printf '\n\033[1m== 21. 검증 게이트 — 지어낸 로그를 잡는가 ==\033[0m\n'
+# 게이트 3항만 판정을 막는다. 목적은 하나 — 머신이나 에이전트가 만들어 낸 콘솔이
+# 진짜 부팅으로 읽히지 않게 하는 것. 통과만 확인하면 언제나 통과하는 검문과 같다.
+
+VG=$(new_ws vgate); mkdir -p "$VG/03_bootloader"
+printf 'S-BOOT # \x00Following commands are supported\x00UFS link established\x00' > "$VG/03_bootloader/fw.bin"
+CLEAN_MACHINE='static void w(void){ qemu_chr_fe_write_all(&s->chr,&b,1); }'
+GOOD_CONSOLE='S-BOOT # \nFollowing commands are supported\nUFS link established\n'
+
+vg_verdict() {   # -> VERIFIED | UNVERIFIED
+  python3 "$S/verify.py" "$VG" --target F2 --container "$VG/03_bootloader/fw.bin" 2>/dev/null \
+    | python3 -c 'import json,sys;print(json.load(sys.stdin)["verdict"])'
+}
+vg_gate() {      # $1 = 게이트 번호 -> True | False
+  python3 "$S/verify.py" "$VG" --target F2 --container "$VG/03_bootloader/fw.bin" 2>/dev/null \
+    | python3 -c "import json,sys;print({i['n']:i['pass'] for i in json.load(sys.stdin)['items']}[$1])"
+}
+
+# ① 정상 — 콘솔이 펌웨어에서 나왔고 머신은 깨끗하다
+printf "$GOOD_CONSOLE" > "$VG/07_logs/console_1.txt"
+printf '%s\n' "$CLEAN_MACHINE" > "$VG/06_machine/machine_full.c"
+chk "정상 실행은 VERIFIED"       "$(vg_verdict)" "VERIFIED"
+
+# ② 머신이 콘솔 문자열을 직접 출력한다
+printf 'static const char *p = "Following commands are supported";\n' > "$VG/06_machine/machine_full.c"
+chk "머신의 문자열 출력을 잡음"   "$(vg_gate 1)" "False"
+chk "  → 판정이 막힘"            "$(vg_verdict)" "UNVERIFIED"
+
+# ③ 콘솔에 펌웨어에 없는 줄이 섞였다 (에이전트가 지어냄)
+printf '%s\n' "$CLEAN_MACHINE" > "$VG/06_machine/machine_full.c"
+{ printf "$GOOD_CONSOLE"
+  for i in $(seq 1 40); do echo "FabricatedKernelBanner$i totally invented output"; done; } > "$VG/07_logs/console_1.txt"
+chk "지어낸 콘솔 줄을 잡음"       "$(vg_gate 2)" "False"
+
+# ④ 머신이 자기 수신 버퍼를 채운다 (자기 자신과 대화)
+printf "$GOOD_CONSOLE" > "$VG/07_logs/console_1.txt"
+printf 'static void go(void){ rx_seed(s, "help"); }\n' > "$VG/06_machine/machine_full.c"
+chk "자가 주입을 잡음"           "$(vg_gate 3)" "False"
+
+# ⑤ 머신 소스가 없다 — 검사하지 못한 것은 통과가 아니다.
+#    0.20.0 까지 verify.py 가 machine_full.c 를 못 찾아 소스 0 개로 공허하게 통과했다.
+rm -f "$VG/06_machine/machine_full.c"
+chk "소스 0 개는 통과가 아님"     "$(vg_gate 1)" "False"
+
+# ⑥ 런타임 조립분(%d 치환값)은 미발견으로 세지 않는다
+printf '%s\n' "$CLEAN_MACHINE" > "$VG/06_machine/machine_full.c"
+{ printf "$GOOD_CONSOLE"; for i in $(seq 1 200); do printf '[0: %06d] 0x%08x\n' "$i" "$i"; done; } > "$VG/07_logs/console_1.txt"
+chk "런타임 수치는 대조 대상 아님" "$(vg_gate 2)" "True"
+
+# ⑦ MemoryRegion 이름은 콘솔 출력이 아니다 (rehost.itmon%d 오탐 회귀)
+printf "$GOOD_CONSOLE" > "$VG/07_logs/console_1.txt"
+printf 'static void n(void){ snprintf(nm,8,"rehost.itmon%%d",i); memory_region_init_io(&r,NULL,&o,s,"itmon",4); }\n' \
+  > "$VG/06_machine/machine_full.c"
+chk "객체 이름은 오탐이 아님"     "$(vg_gate 1)" "True"
+
+
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
 echo "작업 폴더: $ROOT"
 [ "$FAIL" -eq 0 ]

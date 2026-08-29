@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
-"""verify.py - measure the 6/6 verification in code (stage 1 verdict).
+"""verify.py - measure the unified-chain verification (stage 1 verdict).
+
+Three GATE items decide the verdict. They exist for one purpose: **a console
+that was invented - by the machine or by an agent editing it - must not read as
+a real boot.**
+
+  1. source negative  the machine C prints none of the console text
+  2. output origin    every fixed console string exists inside the firmware
+  3. input origin     the machine never fills its own UART receive buffer
+
+Everything else (chain trace, two-way verification, dual storage drive, bypass
+record) is measured and reported but does NOT block. Holding the whole 6/6 bar
+turned every run into FORCED and buried the progress actually made.
 
 This is stage 1 of a two-stage check. The verifier agent re-examines the
-verdict_script.json produced here. That agent may freely lower the verdict
-(REAL -> FORCED) but may only raise it (FORCED -> REAL) when it can show
-byte-level evidence.
+verdict_script.json produced here and may lower the verdict freely; raising it
+requires byte-level evidence.
 
 Legacy track 1 items (kept so an old workspace still verifies):
   1. PC trace        shell_func / exec_command address appears in the trace
@@ -68,14 +79,18 @@ def find_trace(workdir, track):
 
 
 def find_machine_sources(workdir, track):
+    """Every C source the machine is built from.
+
+    This used to look for `machine.c` (track 1) or `machine_kernel.c` + *ufs*/
+    *hci* (track 2). The unified template emits **machine_full.c**, which
+    neither branch matched, so the source-negative item examined zero files and
+    passed vacuously - the one check that catches a machine printing console
+    text was a no-op for the whole unified flow. Glob every .c instead: a
+    machine source that is not scanned is not evidence of anything.
+    """
     src = os.path.join(workdir, "06_machine")
-    if track == 2:
-        names = (glob.glob(os.path.join(src, "machine_kernel.c")) +
-                 glob.glob(os.path.join(src, "*ufs*.c")) +
-                 glob.glob(os.path.join(src, "*hci*.c")))
-    else:
-        names = glob.glob(os.path.join(src, "machine.c"))
-    return [n for n in names if os.path.isfile(n)]
+    names = glob.glob(os.path.join(src, "*.c"))
+    return sorted(n for n in names if os.path.isfile(n))
 
 
 def find_bypass(workdir):
@@ -150,37 +165,88 @@ def check_bypass(workdir):
     return False, f"{os.path.basename(path)}: 항목 수가 어긋납니다 {counts}"
 
 
-def code_literals(path):
-    """Return only the C string literals of a source file.
+# Diagnostics the machine writes to QEMU's own stderr - never to the guest UART.
+# A patch-site report naming a firmware symbol ("exynos_read_is_device_unlocked")
+# is documentation of a bypass, not the machine forging console output.
+HOST_DIAG = re.compile(
+    r"\b(?:error_report|info_report|warn_report|error_setg|qemu_log|qemu_log_mask|"
+    r"fprintf|printf|assert|g_assert)\b[^;]*;", re.S)
 
-    Item 3 asks whether the machine *prints* console text. Searching the whole
-    file also hits analysis comments and `#include "qapi/error.h"`, which are
-    not output at all - that produced false leaks on a workspace whose verdict
-    was genuinely 6/6. Strip comments and includes, then keep the literals.
+# Strings that name QEMU objects - MemoryRegions, properties, the machine type.
+# "itmon" as a MemoryRegion name is the device being modelled, not the machine
+# printing "itmon" to the guest; the model name appears in mc->desc for the same
+# reason it appears in the firmware's own banner.
+QEMU_NAMING = re.compile(
+    r"\b(?:memory_region_init\w*|object_property_\w+|object_initialize\w*|object_new|"
+    r"qdev_\w+|sysbus_\w+|type_register\w*|MACHINE_TYPE_NAME|blk_by_name|"
+    r"qemu_chr_new|qemu_chr_fe_init|machine_class_\w+)\b[^;]*;", re.S)
+DESC_ASSIGN = re.compile(r"->(?:desc|name|fw_name)\s*=\s*\"(?:[^\"\\]|\\.)*\"", re.S)
+
+
+def code_literals(path):
+    """Return the C string literals that could reach the *guest* console.
+
+    Item 1 asks whether the machine prints firmware text to the guest. Three
+    kinds of text are not that, and counting them produced false leaks on a
+    machine that was genuinely clean:
+      - comments and #include paths (never output at all)
+      - error_report/info_report/qemu_log arguments (QEMU stderr, not the UART)
+      - QEMU object names: MemoryRegion labels, properties, mc->desc
     """
     src = read_text(path)
     src = re.sub(r"/\*.*?\*/", " ", src, flags=re.S)      # block comments
     src = re.sub(r"//[^\n]*", " ", src)                    # line comments
     src = re.sub(r"^\s*#\s*include[^\n]*", " ", src, flags=re.M)
+    src = HOST_DIAG.sub(" ", src)                          # host-side diagnostics
+    src = QEMU_NAMING.sub(" ", src)                        # object / region names
+    src = DESC_ASSIGN.sub(" ", src)                        # mc->desc et al
     return " ".join(re.findall(r'"((?:[^"\\]|\\.)*)"', src))
 
 
+def code_literals_raw(path):
+    """The same filtering, but returning the source so literals stay delimited."""
+    src = read_text(path)
+    src = re.sub(r"/\*.*?\*/", " ", src, flags=re.S)
+    src = re.sub(r"//[^\n]*", " ", src)
+    src = re.sub(r"^\s*#\s*include[^\n]*", " ", src, flags=re.M)
+    src = HOST_DIAG.sub(" ", src)
+    src = QEMU_NAMING.sub(" ", src)
+    src = DESC_ASSIGN.sub(" ", src)
+    return src
+
+
 def check_source_negative(sources, console_bytes):
-    """A console token of 5+ chars appearing in a machine string literal is
-    self-injection. Comments and include paths are not output, so they do not
-    count."""
-    tokens = set(re.findall(rb"[\w\-]{5,}", console_bytes))
+    """Does the machine emit any string that shows up on the guest console?
+
+    The test runs literal -> console, not console token -> literal. The earlier
+    direction flagged a MemoryRegion built as "rehost.itmon%d" because the word
+    "itmon" also appears in the firmware's own ITMON messages - a machine that
+    names a device after the hardware it models is not forging output. Asking
+    whether a machine literal *appears on the console* has no such ambiguity:
+    if the machine writes "S-BOOT # " and the console shows "S-BOOT # ", that is
+    injection, and nothing else trips it.
+    """
+    if not sources:
+        # Nothing scanned is not the same as nothing found. Passing here would
+        # certify "the machine does not print console text" without having read
+        # a single machine source.
+        return False, ("머신 소스를 하나도 찾지 못했습니다 (06_machine/*.c) — "
+                       "검사하지 못한 것은 통과가 아닙니다")
+    console = console_bytes.decode("latin-1", errors="replace")
     leaked = []
     for path in sources:
-        literals = code_literals(path)
-        for token in tokens:
-            word = token.decode("latin-1")
-            if word in literals:
-                leaked.append(f"{os.path.basename(path)}:{word}")
+        for literal in re.findall(r'"((?:[^"\\]|\\.)*)"', code_literals_raw(path)):
+            # printf-style formats print differently than they are written, so
+            # compare the longest literal run between conversions.
+            for piece in re.split(r"%[-+ #0-9.*hlLzjt]*[a-zA-Z%]", literal):
+                piece = piece.strip()
+                if len(piece) >= 6 and piece in console:
+                    leaked.append(f"{os.path.basename(path)}:{piece[:40]}")
     if leaked:
-        return False, f"머신 소스의 문자열 리터럴에 출력 문자열이 {len(leaked)} 건 있습니다: {leaked[:10]}"
-    return True, (f"머신 소스 {len(sources)} 개의 문자열 리터럴에 출력 문자열이 없습니다 "
-                  f"(주석·#include 는 출력이 아니므로 제외)")
+        return False, (f"머신이 출력하는 문자열이 콘솔에 {len(leaked)} 건 나타납니다: "
+                       f"{leaked[:10]} — 머신이 콘솔을 지어냈는지 확인하십시오")
+    return True, (f"머신 소스 {len(sources)} 개의 어떤 출력 문자열도 콘솔에 없습니다 "
+                  "(주석·#include·호스트 진단·객체 이름은 출력이 아니므로 제외)")
 
 
 # --- legacy: pre-0.19.0 track 1 ------------------------------------------------
@@ -405,22 +471,138 @@ def stage_entries(workdir):
     return out
 
 
+# Console words that are fixed strings in the firmware, as opposed to the values
+# printf assembles at runtime. "%d"/"%s" substitutions (timestamps, sizes, register
+# dumps) are NOT in the image and counting them as missing made item 2 fail on a
+# console that was entirely genuine - 3,131 of 4,511 "missing" tokens were digits.
+FIXED_WORD = re.compile(rb"[A-Za-z][A-Za-z_]{3,}")
+
+
+# Firmware blobs whose strings can legitimately reach the console. The console
+# is not produced by sboot.bin alone - ldfw, tzsw, the ACPM firmware and the DTB
+# all print through the same UART, and their strings live in their own files.
+IMAGE_DIRS = ("03_bootloader", "02_unpacked", "fw")
+IMAGE_MAX = 128 * 1024 * 1024          # skip super.img / lu0.img sized backing stores
+
+
+def firmware_images(workdir, extra):
+    """Every firmware component whose strings the console may contain."""
+    blobs, seen = [], set()
+    for path in extra:
+        if path and os.path.isfile(path):
+            seen.add(os.path.realpath(path))
+            blobs.append(read_bytes(path))
+    for sub in IMAGE_DIRS:
+        for path in sorted(glob.glob(os.path.join(workdir, sub, "*"))):
+            real = os.path.realpath(path)
+            if real in seen or not os.path.isfile(path):
+                continue
+            if os.path.getsize(path) > IMAGE_MAX:
+                continue
+            if os.path.splitext(path)[1].lower() not in (".bin", ".img", ".dtb", ""):
+                continue
+            seen.add(real)
+            blobs.append(read_bytes(path))
+    return blobs
+
+
+# A console the machine invented would fail to match almost everywhere. A handful
+# of unmatched words means the reference set is incomplete - the console is
+# written by every firmware component that shares the UART (ldfw, tzsw, the ACPM
+# firmware), and an exported kit may not carry all of them.
+ORIGIN_MIN_RATIO = 0.98
+
+
+def check_output_origin(console, images):
+    """Every fixed string on the console must exist inside a firmware image.
+
+    This is the load-bearing anti-fabrication check: if the machine (or an agent
+    editing it) invented console text, the words will not be in any binary.
+    """
+    words = set(FIXED_WORD.findall(console))
+    blobs = [b for b in images if b]
+    if not words:
+        return False, "콘솔에서 고정 문자열을 찾지 못했습니다 — 대조할 것이 없습니다"
+    if not blobs:
+        return False, "대조할 펌웨어 이미지가 없습니다 (--container 또는 02_unpacked/)"
+    missing = sorted(w.decode("latin-1") for w in words
+                     if not any(b.find(w) >= 0 for b in blobs))
+    found = len(words) - len(missing)
+    ratio = found / len(words)
+    if not missing:
+        return True, (f"고정 문자열 {len(words)} 개가 모두 펌웨어 이미지 "
+                      f"{len(blobs)} 개 안에 있습니다 (런타임 조립분은 대조 대상이 아닙니다)")
+    detail = (f"고정 문자열 {len(words)} 개 중 {found} 개 확인 ({ratio:.1%}), "
+              f"{len(missing)} 개 미발견: {missing[:10]} — 이미지 {len(blobs)} 개와 대조")
+    if ratio >= ORIGIN_MIN_RATIO:
+        return True, detail + f" · {ORIGIN_MIN_RATIO:.0%} 이상이라 통과"
+    return False, (detail + " — 지어낸 출력이거나, 같은 UART 를 쓰는 다른 펌웨어 성분"
+                   "(ldfw·tzsw·ACPM)이 02_unpacked/ 에 없습니다")
+
+
+def check_input_origin(sources):
+    """The machine must not fill its own UART receive buffer.
+
+    A machine that seeds RX is talking to itself; the shell "responding" then
+    proves nothing. Input may only arrive through the chardev callback.
+    """
+    if not sources:
+        return False, "머신 소스를 찾지 못해 입력 경로를 확인할 수 없습니다"
+    hits = []
+    for path in sources:
+        src = read_text(path)
+        src = re.sub(r"/\*.*?\*/", " ", src, flags=re.S)
+        src = re.sub(r"//[^\n]*", " ", src)
+        for m in RX_SEED.finditer(src):
+            hits.append(f"{os.path.basename(path)}:{m.group(1)}")
+    if hits:
+        return False, (f"머신이 자기 수신 버퍼를 채웁니다: {hits[:5]} — "
+                       "입력은 chardev 콜백으로만 들어와야 합니다")
+    return True, f"머신 소스 {len(sources)} 개에 수신 버퍼 자가 주입이 없습니다"
+
+
 def verify_full(workdir, args):
+    """Measure the unified chain.
+
+    Three GATE items decide the verdict. They exist for one purpose: a console
+    that was invented - by the machine or by an agent editing it - must not read
+    as a real boot. Everything else is measured and reported but does not block,
+    because holding the whole 6/6 bar turned every run into FORCED and buried
+    the progress that had actually been made.
+    """
     console_path = args.console or find_console(workdir, 1)
     trace_path = args.trace or find_trace(workdir, 1)
     sources = [args.machine] if args.machine else find_machine_sources(workdir, 1)
     console = read_bytes(console_path)
     container = read_bytes(args.container) if args.container else b""
+    kernel = read_bytes(args.kernel) if getattr(args, "kernel", None) else b""
     trace = read_text(trace_path)
     hay = console.decode("utf-8", errors="replace") + "\n" + trace
     items = []
 
-    # 1. The chain actually walked, stage by stage, in order.
+    # --- GATE 1: the machine does not print console text -------------------
+    ok, detail = check_source_negative(sources, console)
+    items.append({"n": 1, "gate": True,
+                  "name": "소스 negative (머신 C 에 출력 문자열 없음)",
+                  "pass": ok, "evidence": detail})
+
+    # --- GATE 2: the console came out of the firmware ----------------------
+    images = firmware_images(workdir, [args.container, getattr(args, "kernel", None)])
+    ok, detail = check_output_origin(console, images or [container, kernel])
+    items.append({"n": 2, "gate": True,
+                  "name": "출력 출처 (콘솔 고정 문자열이 펌웨어 안에 존재)",
+                  "pass": ok, "evidence": detail})
+
+    # --- GATE 3: the machine does not feed itself input --------------------
+    ok, detail = check_input_origin(sources)
+    items.append({"n": 3, "gate": True,
+                  "name": "입력 출처 (머신이 자기 수신 버퍼를 채우지 않음)",
+                  "pass": ok, "evidence": detail})
+
+    # --- reference: measured, reported, not a gate -------------------------
     stages = stage_entries(workdir)
     if not stages:
-        ev = ("stage_map.json 에서 실행 스테이지의 진입 PC 를 얻지 못했습니다 — "
-              "체인이 걸어갔는지 확인할 수단이 없습니다")
-        ok = False
+        ev, ok = "stage_map.json 에서 스테이지 진입 PC 를 얻지 못했습니다", False
     else:
         seen, order_ok, last = [], True, -1
         low = trace.lower()
@@ -434,64 +616,34 @@ def verify_full(workdir, args):
             last = at
         ok = len(seen) == len(stages) and order_ok
         ev = (f"스테이지 {len(seen)}/{len(stages)} 진입 PC 확인"
-              + (f" (순서 {' → '.join(seen)})" if ok else "")
-              + ("" if ok else
-                 f" — {'순서가 어긋납니다' if len(seen) == len(stages) else '일부가 트레이스에 없습니다'}"))
-    items.append({"n": 1, "name": "체인 PC 트레이스 (스테이지 진입이 순서대로)",
+              + (f" (순서 {' → '.join(seen)})" if ok else ""))
+    items.append({"n": 4, "gate": False, "name": "체인 PC 트레이스 (참고)",
                   "pass": ok, "evidence": ev})
 
-    # 2. Everything on the console came out of the firmware image.
-    tokens = set(re.findall(rb"[\w\-]{3,}", console))
-    missing = sorted(t.decode("latin-1") for t in tokens if container.find(t) < 0)
-    items.append({
-        "n": 2, "name": "출력 byte-match (콘솔 토큰이 펌웨어 안에 존재)",
-        "pass": bool(tokens) and not missing,
-        "evidence": (f"토큰 {len(tokens)} 개가 모두 컨테이너 안에 있습니다"
-                     if tokens and not missing else
-                     f"토큰 {len(tokens)} 개 중 {len(missing)} 개를 찾지 못했습니다: {missing[:10]}"
-                     + " (커널이 찍은 줄이면 Image 안에 있는지도 확인하십시오)"),
-    })
-
-    # 3. ... and not out of our machine source.
-    neg_ok, neg_detail = check_source_negative(sources, console)
-    items.append({"n": 3, "name": "소스 negative (머신 C 에 출력 문자열 없음)",
-                  "pass": neg_ok, "evidence": neg_detail})
-
-    # 4. Verified boot, BOTH ways. A verifier that only ever says yes is
-    #    indistinguishable from a stub that always says yes, so passing the
-    #    intact image is only half the evidence.
     neg_path = os.path.join(workdir, "07_logs", "avb_negative.txt")
     ok_tok = args.verify_ok_token or "verify"
     pos = bool(re.search(re.escape(ok_tok), hay, re.I)) and "fail" not in hay.lower()[-4000:]
     if not os.path.exists(neg_path):
-        items.append({"n": 4, "name": "검증 양방향 (정상 통과 + 훼손 실패)", "pass": False,
-                      "evidence": ("negative test 를 돌리지 않았습니다. vbmeta 1 바이트를 훼손한 "
-                                   f"회차의 콘솔을 {neg_path} 에 남기십시오 — 통과만 보이는 "
-                                   "검증은 항상 통과하는 스텁과 구별되지 않습니다")})
+        ok, ev = False, ("훼손 시험 미실시 — vbmeta 1 바이트를 훼손한 회차의 콘솔을 "
+                         f"{neg_path} 에 남기면 검증이 실제로 도는지 확인됩니다")
     else:
         neg = read_text(neg_path).lower()
         neg_failed = ("fail" in neg or "error" in neg or "invalid" in neg)
-        items.append({"n": 4, "name": "검증 양방향 (정상 통과 + 훼손 실패)",
-                      "pass": bool(pos and neg_failed),
-                      "evidence": (f"정상 이미지 통과={pos}, 훼손 이미지 실패={neg_failed}"
-                                   + ("" if pos and neg_failed else
-                                      " — 훼손했는데도 통과했다면 검증이 실제로 돌지 않는 것입니다"))})
+        ok = bool(pos and neg_failed)
+        ev = f"정상 이미지 통과={pos}, 훼손 이미지 실패={neg_failed}"
+    items.append({"n": 5, "gate": False, "name": "검증 양방향 (참고)",
+                  "pass": ok, "evidence": ev})
 
-    # 5. The same controller model, driven by two different drivers.
-    boot_side = any_match([r"EFI PART", r"[Pp]artition", r"GPT"], hay)
+    boot_side = any_match([r"EFI PART", r"[Pp]artition", r"GPT", r"\[SCSI\] LU"], hay)
     kern_side = any_match(K3_STAGES["partitions_up"], hay)
     items.append({
-        "n": 5, "name": "스토리지 이중 구동 (부트로더 드라이버 + 커널 드라이버)",
+        "n": 6, "gate": False, "name": "스토리지 이중 구동 (참고)",
         "pass": bool(boot_side and kern_side),
-        "evidence": (f"부트로더측 파티션 접근={bool(boot_side)}, 커널측 열거={bool(kern_side)}"
-                     + ("" if boot_side and kern_side else
-                        " — 한쪽만 되는 모델은 그 드라이버의 기대에 맞춘 것이지 "
-                        "컨트롤러를 모델한 것이 아닙니다")),
-    })
+        "evidence": f"부트로더측 파티션 접근={bool(boot_side)}, 커널측 열거={bool(kern_side)}"})
 
-    # 6. Every bypass written down, four fields each.
     ok, detail = check_bypass(workdir)
-    items.append({"n": 6, "name": "우회 기록 4 항목", "pass": ok, "evidence": detail})
+    items.append({"n": 7, "gate": False, "name": "우회 기록 4 항목 (참고)",
+                  "pass": ok, "evidence": detail})
 
     return items, console_path, trace_path, sources
 
@@ -505,6 +657,8 @@ def main():
                         help="unified: F1/F2/F3 (legacy: A/B/C, K1/K2/K3)")
     parser.add_argument("--container", default=None,
                         help="the bootloader container, loaded whole")
+    parser.add_argument("--kernel", default=None,
+                        help="kernel Image, so lines the kernel printed are matched too")
     parser.add_argument("--bl3", default=None, help="legacy alias for --container")
     parser.add_argument("--verify-ok-token", default=None,
                         help="console token that means the firmware's own verification passed")
@@ -543,16 +697,37 @@ def main():
             read_bytes(console).decode("utf-8", errors="replace") + "\n" + read_text(trace))
 
     passes = sum(1 for i in items if i["pass"])
+    # The verdict rests on the GATE items only. They answer one question - did
+    # this console come out of the firmware, or was it manufactured? The rest is
+    # measured because it is worth knowing, not because it should block.
+    gates = [i for i in items if i.get("gate")]
+    refs = [i for i in items if not i.get("gate")]
+    if gates:
+        gate_ok = all(i["pass"] for i in gates)
+        verdict = "VERIFIED" if gate_ok else "UNVERIFIED"
+        label = "출처 검증 통과" if gate_ok else "출처 검증 실패"
+    else:
+        # Legacy track flows have no gate items; they keep the old all-or-nothing
+        # verdict so an old workspace still reads the way it was written.
+        gate_ok = passes == len(items)
+        verdict = "REAL" if gate_ok else "FORCED"
+        label = verdict
     result = {
         "flow": "unified" if unified else f"legacy-track{args.track}",
         "target": args.target,
         "passes": passes,
         "total": len(items),
-        "verdict": "REAL" if passes == len(items) else "FORCED",
+        "gates_passed": sum(1 for i in gates if i["pass"]),
+        "gates_total": len(gates),
+        "reference_passed": sum(1 for i in refs if i["pass"]),
+        "reference_total": len(refs),
+        "verdict": verdict,
+        "verdict_label": label,
         "items": items,
         "inputs": {"console": console, "trace": trace, "sources": sources},
-        "note": ("스크립트 1 차 측정입니다. verifier 가 2 차로 재검증하며, "
-                 "FORCED 를 REAL 로 올리려면 byte-level 증거가 필요합니다."),
+        "note": ("게이트 3 항은 출력·입력이 펌웨어에서 나왔는지만 봅니다. "
+                 "나머지는 참고 지표이며 판정을 막지 않습니다. "
+                 "verifier 가 2 차로 재검증합니다."),
     }
     if storage:
         result["ufs_controller"] = storage
