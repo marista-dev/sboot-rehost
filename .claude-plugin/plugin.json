@@ -1,7 +1,7 @@
 {
   "name": "sboot-rehost",
   "description": "Firmware rehosting helper for QEMU - ONE continuous chain: the bootloader container is loaded once and every stage after the first is reached by the firmware's own code, through to the kernel mounting rootfs. No -kernel/-dtb/-initrd handoff. Encrypted or absent stages are skipped by redirecting to the next executable stage, and every skip is documented. Runs autonomously (decisions journaled; user prompts and resolutions recorded so a stalled run can be resumed). Static analysis -> stage map -> machine generation -> fault loop -> 6/6 honesty verification. Works across mobile SoCs (Samsung Exynos, MediaTek, ...).",
-  "version": "0.25.2",
+  "version": "0.25.3",
   "author": {
     "name": "sboot-rehost contributors"
   },
