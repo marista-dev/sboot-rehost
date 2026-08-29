@@ -29,6 +29,17 @@
 
 ---
 
+### 환경 준비
+
+| 파일 | 역할 |
+|---|---|
+| `setup_env.sh` | 의존성 설치와 QEMU 10.2.2 빌드. 약 18분이 걸리므로 `init` 이 배경으로 실행한다 |
+| `extract_boot_assets.sh` | 펌웨어 패키지에서 부팅 자산을 꺼낸다 |
+| `wsl_bridge.sh` | 셸이 Windows 면 WSL 로 전환한다 |
+| `py.sh` | 파이썬 스크립트를 일관된 인터프리터로 실행한다 |
+
+---
+
 ## 2. 에이전트 (`agents/`)
 
 | 이름 | 역할 | 소스 수정 |
@@ -111,11 +122,14 @@ QEMU 에 **커널·DTB·initrd 를 넘기지 않는다.** 부트로더 컨테이
 
 | 스크립트 | 역할 |
 |---|---|
+| `purge_cache.sh` | 옛 버전 캐시를 지운다. `init` 의 첫 단계이며, 세션이 옛 버전을 로드 중이면 종료코드 1 로 막는다 |
 | `check_version.sh` | 로드된 플러그인 버전 확인 (첫 게이트) |
-| `check_env.sh` | QEMU·ninja·capstone·dtc·WSL 확인 |
+| `check_env.sh` | QEMU, ninja, capstone, dtc, lz4, simg2img, WSL 확인 |
 | `check_change.sh` | 변경 1건 검문 (diff + 우회 기록) + 회차별 스냅샷 |
 | `revert_change.sh` | 반증된 우회를 해당 회차 변경만 역패치 |
 | `sync_machine.sh` | 워크스페이스 소스를 QEMU 트리에 반영 |
+| `check_release.sh` | 버전을 올리지 않은 배포를 막는다. `pre-push` 훅이 호출한다 |
+| `install_git_hooks.sh` | `pre-push` 릴리스 검문을 켠다 |
 | `stop_conditions.py` | 정지 조건 계산 |
 | `patch_kernel.py` | 커널 패치 (사전 이미지 불일치면 적용 거부) |
 | `patch_qemu_core.py` | QEMU 코어 SMC 패치 (멱등) |
@@ -129,7 +143,7 @@ QEMU 에 **커널·DTB·initrd 를 넘기지 않는다.** 부트로더 컨테이
 
 | 스크립트 | 역할 |
 |---|---|
-| `verify.py` | 6항목 측정 → `verdict_script.json` |
+| `verify.py` | 게이트 3항 + 참고 지표 측정 → `verdict_script.json` |
 | `verify_byte_match.py` | 콘솔 토큰의 파일 오프셋 대조 |
 
 | # | 항목 |
@@ -150,10 +164,10 @@ QEMU 에 **커널·DTB·initrd 를 넘기지 않는다.** 부트로더 컨테이
 
 | 스크립트 | 산출 |
 |---|---|
-| `journal.sh` | `JOURNAL.md` — 세션·회차·판단·사용자 입력·가설·해결 경위 |
+| `journal.sh` | `JOURNAL.md` 에 세션, 회차, 판단, 사용자 입력, 가설, 해결 경위를 남긴다 |
 | `record.py` | `metrics` · `rounds` · `blockers` · `prompts` · `resolutions` (JSONL) |
-| `make_resume.py` | `RESUME.md` — 정지 시 인계 문서 |
-| `analyze_run.py` | `ANALYSIS.md` · `analysis.json` — 소요·비용·정체·해결 경위 |
+| `make_resume.py` | 정지했을 때 인계 문서인 `RESUME.md` 를 만든다 |
+| `analyze_run.py` | 소요, 비용, 정체 구간, 해결 경위를 `ANALYSIS.md` 와 `analysis.json` 으로 낸다 |
 | `make_export.sh` | 재현 키트 |
 
 - 시각은 반드시 실제 `date` 출력을 쓴다.
@@ -170,7 +184,7 @@ QEMU 에 **커널·DTB·initrd 를 넘기지 않는다.** 부트로더 컨테이
 | `knowledge/faults_unified.md` | 정지점 분류표 (체인 위치별) |
 | `knowledge/faults_storage.md` | 스토리지 컨트롤러 상세 |
 | `knowledge/kernel_gates.md` | 커널 보안 게이트 패치 지점 도출 절차 |
-| `profiles/*.yaml` | SoC 탐색 힌트 — **값이 아니라 어디를 볼지** |
+| `profiles/*.yaml` | SoC 탐색 힌트. **값이 아니라 어디를 볼지만 적는다** |
 | `templates/machine_full.c.tmpl` | 통합 머신 템플릿 |
 | `templates/storage_hci.c.tmpl` | 스토리지 컨트롤러 템플릿 |
 
@@ -198,7 +212,7 @@ QEMU 에 **커널·DTB·initrd 를 넘기지 않는다.** 부트로더 컨테이
 | `input_plan.json` | 입력 게이트 패턴 |
 | `fingerprint.json` | 마지막 회차 지문 |
 | `observation.json` | 마지막 회차 관측 문서 |
-| `verdict_script.json` | 6항목 측정 |
+| `verdict_script.json` | 게이트 3항 + 참고 지표 측정값 |
 | `VERIFICATION.md` | verifier 최종 판정 |
 | `06_machine/bypasses.md` | 우회 기록 |
 | `RESUME.md` | 정지 시 인계 문서 |

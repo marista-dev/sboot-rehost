@@ -7,13 +7,13 @@
 | 01 | [리호스팅 개요](01-rehosting-overview.md) | 리호스팅이란 무엇이고, 부팅 체인의 어디를 어디까지 실행하는가 |
 | 02 | [통합 체인 실행](02-unified-chain.md) | 스테이지 도출, 건너뛰기, 머신이 제공하는 것, 서명 검증 |
 | 03 | [부팅 매체와 스토리지](03-boot-medium.md) | 매체 합성, 컨트롤러 모델, 이중 검증 |
-| 04 | [회차 루프와 정직성](04-loop-and-honesty.md) | 루프, 실행 지문, 계층, 정지 판정, 6항목 검증 |
+| 04 | [회차 루프와 정직성](04-loop-and-honesty.md) | 루프, 실행 지문, 계층, 정지 판정, 검증 |
 | 05 | [설치와 버전 확인](05-plugin-check.md) | 로드된 버전 확인, 갱신 절차, 실행 환경 |
 
 ## 빠른 시작
 
 ```
-/sboot-rehost:init                  설치 후 1회 — QEMU 빌드 + 폴더 (약 18분)
+/sboot-rehost:init                  설치 후 1회. 옛 캐시를 지우고 QEMU 를 빌드합니다
 _inbox/ 에 펌웨어 배치
 /sboot-rehost:start [F1|F2|F3]      인식부터 검증까지 자율 진행
 /sboot-rehost:status                진행 확인
