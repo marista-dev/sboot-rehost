@@ -70,6 +70,33 @@ UART**, not a substitute for it.
 
 Apply a byte patch **only when the original 4 bytes match the expected pre-image**.
 
+## Filling a handoff gap — three pieces of evidence, or `unknown`
+
+Skipping an encrypted stage is the design. Supplying what that stage should have
+left behind is where a run turns into fiction, so it is gated. Before you write a
+value into a handoff slot you must have **all three**:
+
+| # | Evidence | Why it is required |
+|---|---|---|
+| 1 | **The reading instruction's address** (capstone) | Proves the firmware reads that word at all, and shows what it does with it |
+| 2 | **The observation** — the trace line where that read executed, or the console line where the check failed | Proves the read happens on *this* path, not on one you never reach |
+| 3 | **The side effect** — what stops being verified once you fill it | Goes in `bypasses.md`; this is the field a later round reads first when progress stalls |
+
+**Missing any one of the three: return `unknown` and let static-analyzer derive
+it.** A value that fits the check but was not derived sends the firmware down a
+branch it would never take on real hardware, passes this run, and reproduces on
+no other firmware. That is worse than stopping.
+
+Two rules that follow from this:
+
+- **Fill only the field the check reads.** If a magic check compares four bytes,
+  supply four bytes - not a plausible-looking structure around them. Everything
+  beyond the checked field is invention, and the side-effect line must say the
+  rest is empty.
+- **Never fill a hardware register this way.** If the read target is an MMIO
+  register, the skipped stage did not write it - the machine simply has not
+  modelled it. That is `fixer-memory`'s work, not a handoff gap.
+
 ## Output (JSON)
 
 ```json

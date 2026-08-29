@@ -36,7 +36,8 @@ fixers:
   fixer-bootflow:
     description: chain control flow (stage handoff / console routing / getline timeout / shell mode gate)
     handles: [null_ret, console_silent, shell_exit_early, shell_mode_gate,
-              handoff_slot_missing, stage_handoff_missing]
+              handoff_slot_missing, stage_handoff_missing,
+              handoff_slot_empty, boot_info_word_missing, download_mode_entry]
     knowledge: [knowledge/faults_unified.md]
     tools: [capstone]
     edits: [machine_full.c]
@@ -125,7 +126,7 @@ build_layer: [stage_entry_el_mismatch, stage_decrypt_blocked]
 # start, so an agent file written at runtime is not loadable in that run.
   fixer-general:
     description: last resort, no domain boundary; edits any machine source, builds and runs
-    handles: [unowned]
+    handles: [unowned, qemu_abort]
     knowledge: [knowledge/faults_unified.md, knowledge/faults_storage.md, knowledge/kernel_gates.md]
     tools: [capstone, ninja, qemu]
     edits: [any]

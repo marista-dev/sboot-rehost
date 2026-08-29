@@ -17,7 +17,7 @@
  *   |                       -> (check_change verify) -> (ninja)            |
  *   +---------------------------------------------------------------------+
  *        |
- *   (verify.py stage 1) -> [verifier stage 2] -> REAL | FORCED
+ *   (verify.py stage 1) -> [verifier stage 2] -> VERIFIED | UNVERIFIED
  *
  * Goal advancement is decided by MEASUREMENT, not by the supervisor's claim:
  * only a milestone that the run script observed (and that passed the
@@ -41,7 +41,7 @@
 
 export const meta = {
   name: 'pipeline',
-  description: 'sboot-rehost 통합 파이프라인 — 도출 → 빌드 → (실행·분류·수정)* → 6/6 검증 → 재현 키트',
+  description: 'sboot-rehost 통합 파이프라인 — 도출 → 빌드 → (실행·분류·수정)* → 출처 검증 → 재현 키트',
   phases: [
     { title: 'Analyze', detail: 'static-analyzer 사전 도출 (하드 블로커 검사)' },
     { title: 'Build',   detail: 'machine 소스 생성 + ninja' },
@@ -137,9 +137,14 @@ let stageRungs = ['stage_entry']
 // The ladder is also a function of the surface, because static-analyzer may
 // correct the surface after this point and the goals must follow that correction
 // rather than force a re-run.
+// `kernel_entry` is the bootloader announcing the jump; `kernel_alive` is the
+// kernel printing its own banner. They are separate rungs because a kernel that
+// never executes leaves `Starting kernel...` as the last line of the console -
+// counting that as arrival reports a boot that did not happen.
 function goalsFor(surfaceName) {
   const f1 = stageRungs.concat([surfaceName])
-  const f2 = f1.concat(['medium_up', 'partitions', 'verify_ok', 'kernel_entry'])
+  const f2 = f1.concat(['medium_up', 'partitions', 'verify_ok',
+                        'kernel_entry', 'kernel_alive'])
   const f3 = f2.concat(['userspace', 'partitions_up'],
                        hasSuper ? ['super_mounted'] : [])
   return ({ F1: f1, F2: f2, F3: f3 })[target] || f2
@@ -489,7 +494,7 @@ log(`[분석] 등급 ${target} — 목표 사다리: ${goals.join(' → ')} (스
 // minute still says who asked for what.
 await shell('session-open', 'Analyze',
   `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" session-start ` +
-  `${shq('/sboot-rehost:rehost-full')} ${shq(`target=${target} soc=${socFamily} arch=${arch}`)} || true\n` +
+  `${shq('/sboot-rehost:start')} ${shq(`target=${target} soc=${socFamily} arch=${arch}`)} || true\n` +
   (INVOKED_WITH
     ? `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" prompt ${shq(INVOKED_WITH)} ` +
       `${shq('Analyze')} 0 || true\n` +
@@ -1662,13 +1667,13 @@ if (stopped) {
   await shell('write-resume', 'Loop',
     `bash "${PLUGIN}/scripts/py.sh" make_resume.py "${workdir}" ` +
     `--ladder ${shq(ladderArg)} ` +
-    `--command ${shq(`/sboot-rehost:rehost-full --target ${target}`)} || true\n` +
+    `--command ${shq(`/sboot-rehost:start ${target}`)} || true\n` +
     `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" note ` +
     `${shq(`정지(${stopReason}) — RESUME.md 생성. 재개 전에 "지문 이동=불변" 행을 먼저 보십시오.`)} || true`,
     OK_SCHEMA)
   await shell('session-close-stop', 'Loop',
     `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" session-end ` +
-    `${shq('/sboot-rehost:rehost-full')} ` +
+    `${shq('/sboot-rehost:start')} ` +
     `${shq(`정지 ${stopReason} · 도달 ${goalIndex}/${goals.length} · 회차 ${round}`)} || true`,
     OK_SCHEMA)
   log(`[정지] ${workdir}/RESUME.md 에 인계 내용을 적었습니다.`)
@@ -1680,7 +1685,7 @@ if (stopped) {
     best_progress: depth,
     tried_changes: summary?.tried_changes ?? [],
     resume_file: `${workdir}/RESUME.md`,
-    note: 'REAL 로 표기하지 마세요. 정직한 미완이며 같은 명령으로 재실행하면 이어서 ' +
+    note: '검증됨으로 표기하지 마세요. 정직한 미완이며 같은 명령으로 재실행하면 이어서 ' +
           `진행됩니다. 무엇을 시도했고 무엇이 남았는지는 ${workdir}/RESUME.md 에 있습니다.`,
   }
 }
@@ -1692,9 +1697,9 @@ if (!reachedAll) {
   await shell('resume-round-cap', 'Loop',
     `bash "${PLUGIN}/scripts/py.sh" make_resume.py "${workdir}" ` +
     `--ladder ${shq(ladderArg)} ` +
-    `--command ${shq(`/sboot-rehost:rehost-full --target ${target}`)} || true\n` +
+    `--command ${shq(`/sboot-rehost:start ${target}`)} || true\n` +
     `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" session-end ` +
-    `${shq('/sboot-rehost:rehost-full')} ` +
+    `${shq('/sboot-rehost:start')} ` +
     `${shq(`런타임 회차 한계(${ROUND_CAP}) · 도달 ${goalIndex}/${goals.length}`)} || true`,
     OK_SCHEMA)
   log(`[정지] 회차 한계 — ${workdir}/RESUME.md 에 인계 내용을 적었습니다.`)
@@ -1722,15 +1727,15 @@ const verifyCmd =
   `--input-token ${shq(activeSurface === 'fastboot' ? 'getvar:' : 'help')}`
 
 const verifier = await agent(
-  `This is stage 2 of the 6/6 verification.\n\n` +
+  `This is stage 2 of the origin verification (3 gates).\n\n` +
   `1. Run stage 1 (the script measurement) first:\n\`\`\`bash\n${verifyCmd}\n\`\`\`\n` +
   `   It writes ${workdir}/verdict_script.json.\n` +
   `   For the chain-trace item the script derives the expected per-stage PCs from ` +
   `   STATIC.md / stage_map.json; if it reports it could not find them, re-run with ` +
   `   explicit --pc values you read yourself.\n\n` +
   `2. Re-verify that measurement against the raw logs and bytes.\n` +
-  `   - Lowering the verdict (REAL -> FORCED) is always yours to make. When in doubt, lower it.\n` +
-  `   - Raising it (FORCED -> REAL) is only valid with byte-level evidence. Without ` +
+  `   - Lowering the verdict (VERIFIED -> UNVERIFIED) is always yours to make. When in doubt, lower it.\n` +
+  `   - Raising it (UNVERIFIED -> VERIFIED) is only valid with byte-level evidence. Without ` +
   `     that evidence the script verdict stands and your override is void.\n\n` +
   `3. Write ${workdir}/VERIFICATION.md - the user reads it. ` +
   `   Show both the script verdict and yours, and when they differ say which won and why.\n\n` +
@@ -1744,10 +1749,10 @@ const verifier = await agent(
 const passes = verifier?.final_passes ?? 0
 // The verification has six items. Written once so the log, the README and the
 // session record cannot drift apart from each other.
-const VERIFY_ITEMS = 6
-const verdict = verifier?.final_verdict ?? 'FORCED'
-log(`[검증] 스크립트 ${verifier?.script_passes ?? '?'}/${VERIFY_ITEMS} → ` +
-    `최종 ${passes}/${VERIFY_ITEMS} (${verdict})`)
+const VERIFY_GATES = 3
+const verdict = verifier?.final_verdict ?? 'UNVERIFIED'
+log(`[검증] 스크립트 ${verifier?.script_passes ?? '?'}/${VERIFY_GATES} → ` +
+    `최종 ${passes}/${VERIFY_GATES} (${verdict})`)
 
 // =============================================================================
 // Phase 5 - Package
@@ -1779,7 +1784,7 @@ log(`[분석] 회차 ${analysis?.rounds ?? '?'}건 · 정체 구간 ${analysis?.
 await agent(
   `Assemble the reproduction kit in ${workdir}/10_reproduce/.\n\n` +
   `Include:\n` +
-  `- README.md (INPUT.md summary, build and run steps, verdict ${passes}/${VERIFY_ITEMS} ${verdict})\n` +
+  `- README.md (INPUT.md summary, build and run steps, verdict ${passes}/${VERIFY_GATES} ${verdict})\n` +
   `- bootloader/ (copy of ${bootloader_path} - the whole container, not a carve)\n` +
   `- fw/ (the synthesised boot medium lu0.img, plus Image.patched and *.dtb if staged)\n` +
   `- stage_map.json (which stages ran, which were skipped and why)\n` +
@@ -1795,9 +1800,9 @@ await agent(
   `  - 정체 구간 ${analysis?.stall_stretches ?? '?'}개와 무엇이 각 구간을 끝냈는지 (5절)\n` +
   `  - 실제로 부팅을 전진시킨 변경 (7절)\n` +
   `Do not restate a number ANALYSIS.md does not contain, and do not soften one it does.\n\n` +
-  (verdict === 'REAL'
-    ? `The verdict is REAL. State it as "6/6 통과, REAL 판정" and nothing stronger.\n`
-    : `The verdict is FORCED. Do not write "REAL" or "성공" anywhere in the README.\n`) +
+  (verdict === 'VERIFIED'
+    ? `The verdict is VERIFIED. State it as "출처 검증 통과" and nothing stronger — it does NOT mean the boot completed.\n`
+    : `The verdict is UNVERIFIED. Do not write "검증됨" or "성공" anywhere in the README.\n`) +
   DOC_STYLE +
   `\nFinally: bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Package 완료"`,
   { label: 'package', phase: 'Package' }
@@ -1807,12 +1812,12 @@ await agent(
 // elapsed time is never computed, so a finished run reads like an abandoned one.
 await shell('session-close', 'Package',
   `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" session-end ` +
-  `${shq('/sboot-rehost:rehost-full')} ` +
-  `${shq(`${verdict} (${passes}/${VERIFY_ITEMS}) · 도달 ${goalIndex}/${goals.length} · 회차 ${round}`)} || true`,
+  `${shq('/sboot-rehost:start')} ` +
+  `${shq(`${verdict} (${passes}/${VERIFY_GATES}) · 도달 ${goalIndex}/${goals.length} · 회차 ${round}`)} || true`,
   OK_SCHEMA)
 
 return {
-  success: verdict === 'REAL',
+  success: verdict === 'VERIFIED',
   verdict,
   passes,
   target, goals, stages: prior?.stages ?? [],
@@ -1828,7 +1833,7 @@ return {
     rounds: `${workdir}/rounds.jsonl`,
     blockers: `${workdir}/blockers.jsonl`,
   },
-  note: verdict === 'REAL'
-    ? '6/6 통과, REAL 판정입니다.'
-    : 'FORCED 입니다. 6/6 에 미달했으므로 REAL·성공으로 표기하지 마세요.',
+  note: verdict === 'VERIFIED'
+    ? '출처 검증 통과입니다. 도달 여부는 마일스톤으로 따로 봅니다.'
+    : 'UNVERIFIED 입니다. 출처 검증에 미달했으므로 검증됨·성공으로 표기하지 마세요.',
 }

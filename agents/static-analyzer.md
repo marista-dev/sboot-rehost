@@ -297,7 +297,7 @@ Establish, as fact, whether an input path exists:
 
 Report `bl_surface` as `shell`, `fastboot`, or **`none`** when nothing has an
 input path. `none` is a hard blocker - say so rather than inventing a route.
-Forcing the listing command through a trampoline is FORCED, not a reachable
+Forcing the listing command through a trampoline is not a reachable
 surface.
 
 ### 14) Milestone tokens (required for every rung above the first)
@@ -320,7 +320,61 @@ contains is treated as self-injection.
 Without this file only the surface rung can be observed, so a run targeting
 grade B or C would never advance past A.
 
+**`kernel_entry` and `kernel_alive` are different rungs and must not share a
+token.** The bootloader printing `Starting kernel...` proves it reached the
+handoff, not that the kernel ran - a kernel that never executes leaves that line
+as the last line of the console. Derive `kernel_alive` from the **kernel image**
+(`Linux version`, the banner the kernel itself prints), never from the
+bootloader.
+
+```
+kernel_entry  <TAB>  <the bootloader's own line right before the jump>
+kernel_alive  <TAB>  <a string only the running kernel prints>
+```
+
 Write the results and the disassembly evidence into `STATIC.md`.
+
+### 14a) Kernel command line — write `cmdline_plan.json`
+
+**A kernel booting perfectly can print nothing at all.** If the bootloader
+selects `console=ram`, its output goes to a RAM buffer instead of the UART, and
+the console ends at `Starting kernel...` exactly as it would if the jump had
+failed. Silence is then not evidence of failure, and treating it as a stop point
+sends fixers after a fault that does not exist.
+
+Find every command-line candidate in the bootloader and record which one it
+selects by default:
+
+```bash
+strings <bootloader> | grep -E 'console=|earlycon|bootargs'
+```
+
+Typical result — all three present, the first selected:
+
+```
+console=ram loglevel=7 ignore_loglevel          <- default, invisible on UART
+console=ttySAC0,115200n8 loglevel=7
+earlycon=exynos4210,mmio32,0x10840000
+```
+
+Write `<workdir>/cmdline_plan.json`:
+
+```json
+{
+  "default": "console=ram loglevel=7 ignore_loglevel",
+  "uart": "console=ttySAC0,115200n8 earlycon=exynos4210,mmio32,0x10840000",
+  "source": "PARAM partition",
+  "evidence": "init_cmdline default at 0x…; both strings present in <image> at 0x…"
+}
+```
+
+`build_lu.py` writes the `uart` line into the PARAM partition of the synthesised
+medium. **This is not a bypass** - it uses the bootloader's own path
+(`setup_param_info` -> `sbl_set_bootargs`), and both strings already exist in the
+firmware. It is the same thing a boot option does on real hardware.
+
+If the command line does not come from a partition on this firmware, say where it
+does come from and leave `source` as what you found - do not guess.
 
 ---
 

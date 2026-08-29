@@ -287,7 +287,7 @@ Korean - it is surfaced to the user.
   to regenerate)
 - Proposing a fix inside the loop layer - name the stop point's layer, and let the
   classifier and the fixers do their work
-- Changing the 6/6 verdict (that is `verifier`)
+- Changing the origin verdict (that is `verifier`)
 - Reinterpreting or renaming the fingerprint
 - **Ignoring or deferring a stop condition** - the gravest violation here
 - Encouragement or optimism ("almost there"). Report state, nothing more.

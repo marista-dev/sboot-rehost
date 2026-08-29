@@ -68,7 +68,11 @@ fp_console_uniq() {
 }
 
 # fp_run_verdict <rc> <trace_log> <console_bytes> <stderr_file>
-#   Sets FP_RUN_FAILED (0|1) and FP_RUN_ERROR.
+#   Sets FP_RUN_FAILED (0|1), FP_RUN_FAULT (0|1) and FP_RUN_ERROR.
+#
+#   FP_RUN_FAILED = the harness never ran the firmware (BLOCKED_ENV).
+#   FP_RUN_FAULT  = QEMU died, but the guest had already produced output,
+#                   so this is a machine-source defect a fixer can repair.
 #
 # A QEMU that never started used to look exactly like a clean round: the pipe to
 # `tail` swallowed its exit code, and the fingerprint was written as all zeros.
@@ -78,15 +82,28 @@ fp_console_uniq() {
 # a verdict about the firmware.
 fp_run_verdict() {
     local rc="$1" log="$2" csz="$3" errf="${4:-}"
-    FP_RUN_FAILED=0; FP_RUN_ERROR=""
+    FP_RUN_FAILED=0; FP_RUN_ERROR=""; FP_RUN_FAULT=0; FP_RUN_FAULT_LINE=""
     # 124/137 are `timeout` killing the guest, which is how every round ends.
     case "$rc" in
         0|124|137) ;;
         *)
-            FP_RUN_FAILED=1
             FP_RUN_ERROR="QEMU 종료코드 ${rc}"
             if [ -n "$errf" ] && [ -s "$errf" ]; then
                 FP_RUN_ERROR="$FP_RUN_ERROR: $(tr '\n' ' ' < "$errf" | tail -c 200)"
+                # The assert line names the file and function that tripped, which
+                # is what a fixer needs to find the place.
+                FP_RUN_FAULT_LINE="$(grep -m1 -E 'Assertion|assert|abort|SIGSEGV' "$errf" 2>/dev/null | tail -c 300)"
+            fi
+            # A guest that printed before dying DID run. Calling that an
+            # environment failure sends it to BLOCKED_ENV, where no fixer is
+            # assigned - a machine bug then has to be repaired by hand. The
+            # blk_set_perm() assert (exit 250, 596 KB of console already out)
+            # was exactly this case.
+            if [ "${csz:-0}" -gt 0 ] || [ -s "$log" ]; then
+                FP_RUN_FAULT=1
+                FP_RUN_ERROR="$FP_RUN_ERROR — 콘솔이 ${csz:-0} 바이트 나온 뒤 죽었으므로 환경이 아니라 머신 결함입니다"
+            else
+                FP_RUN_FAILED=1
             fi
             return 0
             ;;

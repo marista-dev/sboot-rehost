@@ -137,26 +137,68 @@ def load_manifest(workdir, explicit):
         return None, path
 
 
+# Android sparse images (AP tar ships system/vendor/super this way) are a
+# container format, not the filesystem. Copying one byte-for-byte onto the medium
+# produces a disk the bootloader cannot parse, and the damage only surfaces much
+# later as an AVB failure - so refuse to build rather than write it silently.
+SPARSE_MAGIC = b"\x3a\xff\x26\xed"
+
+
+def is_sparse(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(4) == SPARSE_MAGIC
+    except OSError:
+        return False
+
+
+def load_cmdline_plan(workdir):
+    """The UART command line derived by static-analyzer, if it found one.
+
+    A bootloader that selects `console=ram` sends kernel output to a RAM buffer,
+    so a kernel that boots perfectly prints nothing on the serial console. Writing
+    the UART variant into PARAM uses the bootloader's own path
+    (setup_param_info -> sbl_set_bootargs); it is a boot option, not a patch.
+    """
+    path = os.path.join(workdir, "cmdline_plan.json")
+    if not os.path.isfile(path):
+        return None, None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            plan = json.load(fh)
+    except (OSError, ValueError):
+        return None, None
+    return plan.get("uart"), path
+
+
 def resolve(workdir, manifest):
-    """Return (partitions, derived_names). Missing sources are skipped, loudly."""
-    parts, missing = [], []
+    """Return (partitions, derived, missing, sparse).
+
+    Missing sources are skipped loudly; sparse ones stop the build outright."""
+    parts, missing, sparse = [], [], []
     if manifest:
         for p in manifest.get("partitions") or []:
             src = os.path.join(workdir, p.get("source", ""))
             if os.path.isfile(src):
+                if is_sparse(src):
+                    sparse.append(f'{p.get("name")} <- {p.get("source")}')
+                    continue
                 parts.append({"name": p["name"], "path": src,
                               "source": p.get("source")})
             else:
                 missing.append(f'{p.get("name")} <- {p.get("source")}')
-        return parts, True, missing
+        return parts, True, missing, sparse
 
     for name, candidates in DEFAULT_LAYOUT:
         for rel in candidates:
             src = os.path.join(workdir, rel)
             if os.path.isfile(src):
+                if is_sparse(src):
+                    sparse.append(f"{name} <- {rel}")
+                    break
                 parts.append({"name": name, "path": src, "source": rel})
                 break
-    return parts, False, missing
+    return parts, False, missing, sparse
 
 
 def main():
@@ -173,7 +215,17 @@ def main():
     block = args.block_size or (manifest or {}).get("block_size") or 4096
     out = args.out or os.path.join(wd, "fw", "lu0.img")
 
-    parts, derived, missing = resolve(wd, manifest)
+    parts, derived, missing, sparse = resolve(wd, manifest)
+    if sparse:
+        print(json.dumps({
+            "ok": False,
+            "reason": "sparse 이미지를 raw 로 풀지 않았습니다",
+            "sparse": sparse,
+            "hint": ("simg2img <in> <out> 으로 먼저 푸십시오. sparse 를 그대로 쓰면 "
+                     "부트로더가 파티션을 파싱하지 못하고, 그 결함은 한참 뒤 AVB 실패로 "
+                     "나타나 원인을 찾기 어렵습니다."),
+        }, ensure_ascii=False, indent=2))
+        return 1
     if not parts:
         print(json.dumps({
             "ok": False,
@@ -188,6 +240,18 @@ def main():
     array_lbas = align_up(ENTRY_SIZE * ENTRY_COUNT, block) // block
     last_usable = next_lba - 1
     total_lbas = next_lba + array_lbas + 1          # backup array + backup header
+
+    cmdline, cmdline_src = load_cmdline_plan(wd)
+    param_lba = next((p["start_lba"] for p in placed
+                      if p["name"].lower() == "param"), None)
+    if cmdline and param_lba is None:
+        cmdline = None                       # no PARAM partition to write it into
+
+    # The bootloader rewrites the GPT and treats the device as newly provisioned
+    # when the medium's total size changes - measured on Exynos 2400, where
+    # adding 30 MiB was enough to trigger a full re-init and a power-down. Pin
+    # the size in the manifest so swapping a partition cannot change it.
+    pinned = (manifest or {}).get("total_bytes")
 
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     ecrc = crc32(entries)
@@ -212,12 +276,28 @@ def main():
                         break
                     fh.write(chunk)
 
+        # The UART command line, appended to PARAM so the kernel prints where we
+        # can see it. Written after the partition image so it does not disturb a
+        # PARAM the firmware supplied; the bootloader scans this area for the
+        # bootargs string.
+        if cmdline and param_lba is not None:
+            payload = cmdline.encode() + b"\x00"
+            fh.seek(param_lba * block)
+            fh.write(payload)
+
         backup_array_lba = total_lbas - 1 - array_lbas
         fh.seek(backup_array_lba * block)
         fh.write(entries)
         fh.seek((total_lbas - 1) * block)
         fh.write(header(block, total_lbas - 1, 1, first_usable, last_usable,
                         backup_array_lba, ecrc))
+
+    actual = os.path.getsize(out)
+    size_warning = None
+    if pinned and actual != pinned:
+        size_warning = (f"매체 총 크기가 고정값과 다릅니다: {actual:,} != {pinned:,} — "
+                        "부트로더가 GPT 를 재작성하고 신규 프로비저닝으로 간주해 "
+                        "전원을 내릴 수 있습니다 (파티션을 바꿔도 총량은 유지하십시오)")
 
     result = {
         "ok": True,
@@ -230,7 +310,17 @@ def main():
                         "start_lba": p["start_lba"], "lbas": p["lbas"],
                         "bytes": p["size"]} for p in placed],
         "missing_sources": missing,
+        "cmdline_written": bool(cmdline),
+        "cmdline": cmdline,
+        "cmdline_source": cmdline_src if cmdline else None,
     }
+    if size_warning:
+        result["warning_size"] = size_warning
+    if cmdline is None and cmdline_src:
+        result["warning_cmdline"] = (
+            "cmdline_plan.json 은 있으나 PARAM 파티션이 없어 커맨드라인을 기록하지 "
+            "못했습니다 — 부트로더가 console=ram 을 고르면 커널이 떠도 시리얼에 "
+            "아무것도 안 나옵니다")
     if not derived:
         result["warning"] = (
             "파티션 이름을 도출하지 않고 **문서화된 기본값**을 썼습니다. 펌웨어가 다른 "

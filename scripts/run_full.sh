@@ -16,7 +16,7 @@
 #   ~/rehost/_traces/run_<run_n>.log           full trace       (WSL ext4)
 #
 # stdout: console= summary= trace= exceptions= console_size= far= elr= milestone=
-#         injected= origin_far= origin_elr= console_uniq= run_failed=
+#         injected= origin_far= origin_elr= console_uniq= run_failed= run_fault=
 #
 # run_full.sh - one round of the unified chain, from the first stage onward.
 #
@@ -69,7 +69,18 @@ fi
 MEDIUM="${MEDIUM:-$WORKDIR/fw/lu0.img}"
 MEDIUM_ARGS=()
 if [ -s "$MEDIUM" ]; then
-    MEDIUM_ARGS=(-drive "file=$MEDIUM,if=none,format=raw,id=lu0")
+    # snapshot=on by default: the bootloader really writes to PARAM and the DDI
+    # area, so without it a round inherits whatever the previous round left on
+    # disk. The round loop compares fingerprints assuming the machine source is
+    # the only variable; accumulated disk state breaks that, and reverting a
+    # change no longer reverts the run. Set MEDIUM_WRITABLE=1 for the rare round
+    # that needs to observe those writes - and record that it was set.
+    if [ "${MEDIUM_WRITABLE:-0}" = "1" ]; then
+        MEDIUM_ARGS=(-drive "file=$MEDIUM,if=none,format=raw,id=lu0")
+        echo "run_full: 매체를 쓰기 가능으로 엽니다 — 이 회차는 멱등하지 않습니다" >&2
+    else
+        MEDIUM_ARGS=(-drive "file=$MEDIUM,if=none,format=raw,id=lu0,snapshot=on")
+    fi
 else
     echo "run_full: 부팅 매체가 없습니다 ($MEDIUM) — 매체를 읽는 칸은 이 회차에서 도달 불가" >&2
 fi
@@ -362,6 +373,8 @@ cat > "$WORKDIR/fingerprint.json" <<JSON
   "milestones_reached": ${MILESTONES_JSON},
   "source_gate": { "injected": ${INJECTED}, "token": "${INJECTED_TOKEN_JSON}" },
   "run_failed": $([ "$FP_RUN_FAILED" -eq 1 ] && echo true || echo false),
+  "run_fault": $([ "${FP_RUN_FAULT:-0}" -eq 1 ] && echo true || echo false),
+  "run_fault_line": $(printf '%s' "${FP_RUN_FAULT_LINE:-}" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'),
   "run_error": "${RUN_ERROR_JSON}",
   "input": {
     "offered": ${FP_INPUT_OFFERED},
@@ -427,6 +440,7 @@ echo "origin_esr=$FP_ORIGIN_ESR"
 echo "milestone=$MILESTONE"
 echo "injected=$INJECTED"
 echo "run_failed=$FP_RUN_FAILED"
+echo "run_fault=${FP_RUN_FAULT:-0}"
 echo "timeout_bound=$TIMEOUT_BOUND"
 echo "storage_partition_table=$STORAGE"
 echo "input_offered=$FP_INPUT_OFFERED"
