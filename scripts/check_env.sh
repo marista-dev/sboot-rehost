@@ -65,6 +65,14 @@ fi
 command -v python3 >/dev/null 2>&1 || add "python3 가 없습니다"
 command -v ninja   >/dev/null 2>&1 || add "ninja 가 없습니다 (머신 재빌드에 필요)"
 python3 -c 'import capstone' >/dev/null 2>&1 || add "python capstone 모듈이 없습니다 (정적 도출에 필요)"
+# 언팩 도구. lz4 가 없으면 sboot.bin 을 꺼내지 못하고, simg2img 가 없으면 sparse 이미지를
+# raw 로 풀 수 없어 build_lu.py 가 매체 합성 단계에서 정지한다.
+command -v lz4 >/dev/null 2>&1 || command -v unlz4 >/dev/null 2>&1 \
+    || add "lz4 가 없습니다 (BL 패키지의 .lz4 해제에 필요)"
+if [ "$TARGET" != "F1" ]; then
+    command -v simg2img >/dev/null 2>&1 \
+        || add "simg2img 가 없습니다 (AP 의 sparse 이미지를 raw 로 푸는 데 필요 — 목표 $TARGET 은 매체를 읽습니다)"
+fi
 if [ "$TARGET" != "F1" ]; then
     command -v fdtdump >/dev/null 2>&1 || command -v dtc >/dev/null 2>&1 \
         || add "dtc/fdtdump 가 없습니다 (DTB 파싱에 필요 — 목표 $TARGET 은 커널 구간을 포함합니다)"
@@ -80,7 +88,7 @@ print(json.dumps({
     "os": kernel,
     "wsl": wsl,
     "problems": problems,
-    "hint": ("필요한 도구는 /sboot-rehost:start 가 설치합니다. "
+    "hint": ("필요한 도구는 /sboot-rehost:init 이 설치합니다. "
              "직접 설치하려면 scripts/setup_env.sh 를 참고하세요."
              if problems else ""),
 }, ensure_ascii=False))

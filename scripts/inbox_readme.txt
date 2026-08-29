@@ -1,6 +1,8 @@
 [sboot-rehost] 여기에 펌웨어를 넣으세요:
   .zip / BL_*.tar.md5 / AP_*.tar.md5   (또는 이미 푼 sboot.bin / boot.img / super.img)
 
+환경이 아직이면 먼저:  /sboot-rehost:init   (한 번만, 약 18분)
+
 그 다음 Claude Code 에서:
   /sboot-rehost:start            (목표 등급 기본 F2)
   /sboot-rehost:start F1         (부트로더 표면까지만)

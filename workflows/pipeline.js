@@ -331,6 +331,8 @@ const RUN_SCHEMA = {
   type: 'object',
   properties: {
     run_ok: { type: 'boolean' },
+    run_fault: { type: 'boolean' },
+    run_fault_line: { type: 'string' },
     run_error: { type: 'string' },
     milestone: { type: 'string' },
     milestones_reached: { type: 'array' },
@@ -687,7 +689,27 @@ const prior = await agent(
   `   checks each against the machine source, and anything the machine also\n` +
   `   contains is treated as self-injection.\n\n` +
 
-  `9. KERNEL SIDE (needed for the upper rungs): boot image layout, whether a\n` +
+  `   \`kernel_entry\` and \`kernel_alive\` must NOT share a token. The bootloader\n` +
+  `   printing "Starting kernel..." proves it reached the handoff, not that the\n` +
+  `   kernel ran - a kernel that never executes leaves that line as the LAST line\n` +
+  `   of the console. Derive \`kernel_alive\` from the kernel image itself.\n\n` +
+
+  `9. KERNEL COMMAND LINE. Write ${workdir}/cmdline_plan.json.\n` +
+  `   A kernel booting perfectly can print NOTHING: if the bootloader selects\n` +
+  `   \`console=ram\`, its output goes to a RAM buffer and the console ends at\n` +
+  `   "Starting kernel..." exactly as it would if the jump had failed. Silence is\n` +
+  `   then not evidence of failure, and treating it as a stop point sends fixers\n` +
+  `   after a fault that does not exist.\n` +
+  `     strings <bootloader> | grep -E 'console=|earlycon|bootargs'\n` +
+  `   {"default": "<the one it selects>", "uart": "<console= plus earlycon= that\n` +
+  `   reach the UART>", "source": "<where the command line comes from, e.g. the\n` +
+  `   PARAM partition>", "evidence": "<addresses>"}\n` +
+  `   build_lu.py writes the "uart" line into that partition. This is NOT a\n` +
+  `   bypass - it uses the bootloader's own path and both strings already exist\n` +
+  `   in the firmware. If it does not come from a partition here, say where it\n` +
+  `   does come from and do not guess.\n\n` +
+
+  `10. KERNEL SIDE (needed for the upper rungs): boot image layout, whether a\n` +
   `   ramdisk exists (ramdisk_size=0 means system-as-root - there is no\n` +
   `   initramfs and userspace does not exist until storage works), DTB skeleton\n` +
   `   (cpu / memory / GIC / UART / storage node), and the security gate sites.\n\n` +
@@ -695,7 +717,7 @@ const prior = await agent(
   `First record the phase:\n` +
   `  bash "${PLUGIN}/scripts/journal.sh" "${workdir}" phase "Analyze (static-analyzer prior)"\n` +
   `  bash "${PLUGIN}/scripts/py.sh" record.py "${workdir}" start analyze\n\n` +
-  `Work through the nine items above and append everything to STATIC.md - one\n` +
+  `Work through the ten items above and append everything to STATIC.md - one\n` +
   `accumulating record for this firmware, never overwritten.\n` +
   `Anything you cannot derive stays "미확정" with a confirm plan. Never borrow ` +
   `values from another device or build.\n\n` +
@@ -929,6 +951,53 @@ while (goalIndex < goals.length && !stopped && round < ROUND_CAP) {
   // which the stop conditions correctly read as a stall and then as EXHAUSTED -
   // "structurally unreachable" - about a QEMU that never started. Eight rounds
   // of the S921N log died exactly this way, so this is a stop, not a log line.
+  // QEMU died, but the guest had already printed. That is a defect in the machine
+  // we wrote, not a missing dependency - and the assert names the file and the
+  // function, so the place is already located. Sending it to BLOCKED_ENV stops
+  // the run and assigns nobody, which is how a blk_set_perm() omission ended up
+  // being repaired by hand outside the loop.
+  if (obs?.run_fault === true) {
+    log(`[루프] 회차 ${round}: QEMU 비정상 종료 — 콘솔이 나온 뒤이므로 머신 결함입니다 (qemu_abort)`)
+    await shell(`run-fault-${round}`, 'Loop',
+      `bash "${PLUGIN}/scripts/journal.sh" "${workdir}" note ` +
+      `${shq(`회차 ${round} qemu_abort: ${obs?.run_fault_line ?? ''}`)}`,
+      OK_SCHEMA)
+    const fix = await runGeneralFixer(round, goal,
+      'QEMU 가 비정상 종료했습니다. 게스트가 이미 출력을 냈으므로 환경 문제가 아니라 ' +
+      '머신 소스 결함입니다. assert 줄이 QEMU 소스 파일과 함수를 지목하므로 위치는 ' +
+      '이미 특정돼 있습니다.\n' +
+      `assert: ${obs?.run_fault_line ?? '(stderr 에 없음)'}\n` +
+      '전형적인 사례: blk_by_name() 으로 빌려온 BlockBackend 에 blk_set_perm() 을 ' +
+      '호출하지 않아 읽기는 되고 첫 쓰기에서 assert 로 죽는 경우.',
+      null, obs, { category: 'qemu_abort', evidence: { assert: obs?.run_fault_line } }, '')
+
+    if (!fix || fix.no_new_change || !fix.change_key) {
+      log(`[루프] 회차 ${round}: qemu_abort 에 대해 시도할 변경이 없습니다.`)
+      await shell(`abort-decline-${round}`, 'Loop',
+        journalTryEnd(round, 'qemu_abort', String(obs?.run_fault_line ?? ''),
+                      '시도할 변경 없음', obs?.summary ?? '') + `\n` +
+        recordRoundCmd(round, goal, obs, 'qemu_abort', GENERAL_FIXER, null,
+                       'stall', 0, true),
+        OK_SCHEMA)
+      stopped = true; stopReason = 'BLOCKED_BUILD'
+      break
+    }
+
+    log(`[루프] 회차 ${round}: ★ qemu_abort 처리 — ${fix.mechanism ?? ''}`)
+    await shell(`abort-record-${round}`, 'Loop',
+      `echo ${shq(fix.one_line_progress ?? '')} >> "${workdir}/PROGRESS.md"\n` +
+      journalTryEnd(round, 'qemu_abort', String(obs?.run_fault_line ?? ''),
+                    (fix.changes ?? []).map(c => `${c.file}: ${c.what}`).join(' / '),
+                    obs?.summary ?? '') + `\n` +
+      recordRoundCmd(round, goal, obs, 'qemu_abort', GENERAL_FIXER, fix.change_key,
+                     'applied', 0, false, fix?.rationale),
+      OK_SCHEMA)
+    roundLog.push({ round, goal, category: 'qemu_abort', fixer: GENERAL_FIXER,
+                    change_key: fix.change_key, rationale: fix.rationale })
+    round++
+    continue
+  }
+
   if (obs?.run_ok === false) {
     log(`[루프] 회차 ${round}: ★ 실행 자체가 실패했습니다 — ${obs?.run_error ?? 'fingerprint.json 없음'}`)
     await shell(`run-blocker-${round}`, 'Loop',

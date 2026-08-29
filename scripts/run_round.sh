@@ -70,6 +70,11 @@ observation = {
     # a QEMU that never started read as a stall and then as EXHAUSTED.
     "run_ok": bool(fp) and not fp.get("run_failed", False),
     "run_error": fp.get("run_error", ""),
+    # QEMU died AFTER the guest had produced output. That is a machine-source
+    # defect, not a harness problem, and the assert names the file and function -
+    # so it carries an owner and a location, unlike run_failed.
+    "run_fault": bool(fp.get("run_fault", False)),
+    "run_fault_line": fp.get("run_fault_line", ""),
 
     # raw observation from the run script
     "milestone": fp.get("milestone", "none"),
@@ -144,6 +149,10 @@ if not fp:
 elif fp.get("run_failed"):
     observation["note"] = ("실행이 실패했습니다 — " + str(fp.get("run_error", "")) +
                            " · 이것은 펌웨어 정지점이 아니라 하네스/환경 문제입니다")
+elif fp.get("run_fault"):
+    observation["note"] = ("QEMU 가 비정상 종료했으나 게스트가 이미 출력을 냈습니다 — "
+                           "환경이 아니라 머신 소스 결함입니다 (qemu_abort). "
+                           + str(fp.get("run_fault_line", "")))
 
 out = os.path.join(wd, "observation.json")
 with open(out, "w", encoding="utf-8") as fh:

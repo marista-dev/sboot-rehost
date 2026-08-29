@@ -9,7 +9,7 @@
       "name": "sboot-rehost",
       "source": "./",
       "description": "Firmware rehosting — one continuous chain from the bootloader container's first stage to the kernel mounting rootfs, autonomous by default. Mobile SoCs (Exynos, MediaTek, ...).",
-      "version": "0.22.0",
+      "version": "0.23.0",
       "category": "reverse-engineering",
       "tags": [
         "qemu",

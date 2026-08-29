@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 . "$(dirname "$0")/wsl_bridge.sh"
 # setup_env.sh — sboot-rehost 의 의존성 자동 설치
-# /sboot-rehost:start 의 게이트 단계가 호출. 사용자 동의 후만 실행.
+# /sboot-rehost:init 이 호출. 사용자 동의 후만 실행.
 # 소요: 약 18 분 (대부분 QEMU 빌드)
 
 set -e
@@ -18,6 +18,7 @@ sudo apt-get install -y \
     libglib2.0-dev libpixman-1-dev libslirp-dev \
     python3 python3-pip python3-venv \
     socat unzip wget curl tar lz4 file \
+    android-sdk-libsparse-utils \
     flex bison device-tree-compiler   # 커널/DTB (dtc=fdtdump, flex/bison=QEMU dtc)
 # rootfs 단계(dm-linear/모듈 로드)는 aarch64 크로스툴체인이 추가로 필요 —
 # 무루트 확보는 worked example 의 get_xtool.sh (공식 Ubuntu .deb apt-get download) 참고.
@@ -74,4 +75,4 @@ which meson && meson --version || true
 
 echo
 echo "OK: 환경 셋업 완료."
-echo "다음 단계: Claude Code 에서 /sboot-rehost:start 호출"
+echo "다음 단계: _inbox/ 에 펌웨어를 넣고 /sboot-rehost:start 호출"
