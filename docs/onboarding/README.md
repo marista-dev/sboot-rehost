@@ -15,8 +15,8 @@
 ```
 _inbox/ 에 펌웨어 배치
 /sboot-rehost:start [F1|F2|F3]      환경 준비부터 검증까지 자율 진행
-/sboot-rehost:rehost-status          진행 확인
-/sboot-rehost:rehost-export          완료 후 재현 키트
+/sboot-rehost:status          진행 확인
+/sboot-rehost:export          완료 후 재현 키트
 ```
 
 ## 한 문단 요약

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 . "$(dirname "$0")/wsl_bridge.sh"
 # make_export.sh — 완성된 워크스페이스 → "빌드 없이 바로 실행" 키트로 조립.
-# /sboot-rehost:rehost-export 스킬이 호출. 기계적 복사 + turnkey run/setup/build/.gitignore 생성.
+# /sboot-rehost:export 스킬이 호출. 기계적 복사 + turnkey run/setup/build/.gitignore 생성.
 # 문서(docs/*.md narrative)와 완료 확인·통지는 스킬이 담당.
 #
 # 사용법 (env 로 파라미터):

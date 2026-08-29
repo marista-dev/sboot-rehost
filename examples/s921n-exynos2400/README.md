@@ -17,7 +17,7 @@
 
 ## 사용
 
-`/sboot-rehost:rehost-setup` 의 인자/인테이크에서 본 INPUT.md 의 슬롯들이 대응 (트랙 1).
+당시 세팅 명령의 인자에서 본 INPUT.md 슬롯들이 대응한다 (폐기된 트랙 1).
 
 Phase 3 (회차 루프) 가 끝나면 `06_machine/machine.c` 가 본 폴더의 machine.c 와
 일치해야 함 (구조적으로). 정확히 동일한 patch 시퀀스로 완료될 필요는 없음 —

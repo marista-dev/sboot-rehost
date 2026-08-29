@@ -130,7 +130,7 @@ def futile_changes(rows, fingerprints):
 def best_progress(rows):
     """How far the firmware ever got, measured in distinct console lines.
 
-    A track-1 grade-A ladder has a single rung, so `best_milestone` stays null
+    An F1 ladder can have a single rung, so `best_milestone` stays null
     for a whole run even while the boot walks from 0 to PMIC to storage init.
     With no other measure of depth the loop could not tell progress from
     stagnation, and the stop report had nothing honest to say about how far it

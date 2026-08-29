@@ -133,7 +133,7 @@ should suspect an existing bypass's side effects before adding a new one.
 If the run reached a milestone, report it in `milestone_reached` instead of a
 category.
 
-| track | rungs |
+| 등급 | rungs |
 |---|---|
 | 1 (bootloader) | the surface — `shell` or `fastboot` — then `commands`, then `autoboot` |
 | 2 (kernel) | `userspace`, `rootfs`, `link_up`, `power_mode`, `scsi_attach`, `partitions_up`, `super_mounted` |

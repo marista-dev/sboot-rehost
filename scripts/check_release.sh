@@ -51,7 +51,13 @@ if [ -z "$STAMP" ]; then
   exit $fail
 fi
 
-CHANGED=$(git diff --name-only "$STAMP"..HEAD -- $SURFACE 2>/dev/null)
+# Committed changes since the version stamp, plus anything still in the working
+# tree. Without the second half the guard only fires after you commit - which is
+# exactly one step too late to stop the release you are about to make.
+CHANGED=$( { git diff --name-only "$STAMP"..HEAD -- $SURFACE 2>/dev/null
+             git diff --name-only HEAD -- $SURFACE 2>/dev/null
+             git ls-files --others --exclude-standard -- $SURFACE 2>/dev/null
+           } | sort -u )
 
 if [ -n "$CHANGED" ]; then
   N=$(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ')

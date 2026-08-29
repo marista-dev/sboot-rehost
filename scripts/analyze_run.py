@@ -557,7 +557,7 @@ def render(workdir, data):
     add("| 항목 | 값 |")
     add("|---|---|")
     for label, key in (("모델", "model"), ("빌드", "build"), ("SoC", "soc"),
-                       ("부트로더", "bootloader"), ("트랙", "track"), ("목표 등급", "target")):
+                       ("부트로더", "bootloader"), ("목표 등급", "target")):
         if slots.get(key):
             add(f"| {label} | {cell(slots[key])} |")
     add(f"| 기록된 회차 | {len(annotated)}회 |")

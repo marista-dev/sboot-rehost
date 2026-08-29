@@ -1,5 +1,5 @@
 ---
-name: rehost-status
+name: status
 description: rehost_workspaces/ 의 모든 펌웨어 워크스페이스 목록 + 각 워크스페이스의 진행 상태(등급/회차/최고 마일스톤/검증/정지 사유)를 한 화면으로 요약. metrics.jsonl·rounds.jsonl 로 소요 시간·토큰·시도한 변경도 집계. active 워크스페이스 표시. workdir=<id> 주면 그 워크스페이스만 상세.
 disable-model-invocation: true
 ---
@@ -40,8 +40,8 @@ sboot-rehost — 워크스페이스 (WORKROOT: <cwd>/rehost_workspaces)
 |   SM-X_..._9999 | F2 | 31 | medium_up | 미실행 | EXHAUSTED | 08-20 09:11 |
 
 active: <id>
-다음: /sboot-rehost:rehost-full (active 실행) · /sboot-rehost:rehost-setup <이름> (새 펌웨어)
-      /sboot-rehost:rehost-status workdir=<id> (상세) · /sboot-rehost:rehost-export (완료 시 키트)
+다음: /sboot-rehost:start (실행·재개) · _inbox/ 에 새 펌웨어를 넣고 /sboot-rehost:start (새 펌웨어)
+      /sboot-rehost:status workdir=<id> (상세) · /sboot-rehost:export (완료 시 키트)
 ```
 
 - **검증 열**: `P/6` (6/6=REAL, 그 외 FORCED). **부분 통과를 "완료" 로 쓰지 말 것.**

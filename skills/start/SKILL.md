@@ -82,6 +82,9 @@ QEMU 는 부트로더 컨테이너만 올리고 리셋 PC 를 **첫 실행 가�
 - `journal.sh <WS> session-start "/sboot-rehost:start" "<등급>"`
 - **사용자 입력 원문을 기록한다** — `invoked_with` 로 파이프라인에 넘기면
   `prompts.jsonl` 과 `JOURNAL.md` 에 원문이 남는다. 요약하지 않는다.
+- **`PROGRESS.md` 머리말을 만든다** — `templates/PROGRESS.md.tmpl` 의 placeholder를
+  채워 워크스페이스에 쓴다. 회차 루프는 여기에 한 줄씩 **추가만** 하므로, 머리말이
+  없으면 나중에 그 이력이 어느 펌웨어·어느 등급의 것인지 알 수 없다.
 
 **SoC 계열은 추측하지 말고 매직으로 판별한다.** 결과는 탐색 힌트(`profiles/`)를 고르는
 데만 쓰이고, 값 자체는 static-analyzer 가 대상에서 도출한다.
@@ -189,8 +192,8 @@ pipeline.js({
 
 ## 구 명령
 
-`rehost-init` · `rehost-setup` · `rehost-full` 을 **대체**한다. 세 단계로 나뉘어 있던
+`rehost-init` · `rehost-setup` · `rehost-full` 을 **대체**하고 그 셋은 삭제됐다. 나뉘어 있던
 이유는 폴더 생성과 펌웨어 인식과 실행이 각각 사용자 결정을 요구했기 때문인데, 지금은
 전부 상태에서 도출되므로 가를 이유가 없다.
 
-남는 명령: **`start`**(실행) · **`rehost-status`**(조회) · **`rehost-export`**(키트 재생성).
+남는 명령: **`start`**(실행) · **`status`**(조회) · **`export`**(키트 재생성).

@@ -235,7 +235,7 @@ that lets the run stop honestly. Prescribe the target, not the edit.
 
 ### Read the roster before prescribing
 
-You are given the fixers implemented on this track; their domains are in
+You are given the fixers implemented in this plugin; their domains are in
 `fixers/registry.yaml`. Read it, then decide which one owns this mechanism and put
 it in `prescribed_fixer`. That pick outranks the classifier's, because you read
 the machine sources and the derived facts this round and the classifier does not.

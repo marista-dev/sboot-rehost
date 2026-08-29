@@ -233,8 +233,9 @@ count in the file would look derived and stop anyone from questioning it.
 
 Grade C means the bootloader carries on into a normal boot, and that requires
 reading the boot medium: the partition table first, then the next stage. The chain
-does not implement a storage controller, so on this track the medium is a stub
-and the table cannot load. That is a **track boundary, not a firmware fault**,
+does not implement a storage controller yet, so the medium is a stub and the
+table cannot load. That is a **defect in the medium we synthesised, not a
+firmware fault**,
 and the loop has to be able to tell the two apart - otherwise it spends rounds
 prescribing memory windows for a partition table that was never going to arrive.
 

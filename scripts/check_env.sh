@@ -80,7 +80,7 @@ print(json.dumps({
     "os": kernel,
     "wsl": wsl,
     "problems": problems,
-    "hint": ("필요한 도구는 /sboot-rehost:rehost-init 이 설치합니다. "
+    "hint": ("필요한 도구는 /sboot-rehost:start 가 설치합니다. "
              "직접 설치하려면 scripts/setup_env.sh 를 참고하세요."
              if problems else ""),
 }, ensure_ascii=False))

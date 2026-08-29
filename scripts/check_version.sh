@@ -127,7 +127,7 @@ hint = (
     "  2) /plugin install sboot-rehost@sboot-rehost-marketplace   (등록을 최신으로)\n"
     "  3) /reload-plugins   또는 Claude Code 재시작\n"
     "  4) 그래도 안 되면  rm -rf ~/.claude/plugins/cache  후 재설치\n"
-    "확인: /sboot-rehost:rehost-full 이 명령 목록에 보이면 최신이 로드된 것입니다."
+    "확인: /sboot-rehost:start 가 명령 목록에 보이면 최신이 로드된 것입니다."
 )
 
 print(json.dumps({

@@ -816,9 +816,11 @@ V4=$(python3 "$S/verify.py" "$IW" --track 1 --bl3 "$IW/bl3.bin" --trace "$IW/07_
 chk "머신이 RX 를 채우면 항목4 불통과" \
     "$(echo "$V4" | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][3]["pass"])')" "False"
 
-# 구현 범위가 문서에 못박혀 있는가
-grep -q "BL33" "$REPO/skills/rehost-bootloader/SKILL.md"
-chk "SKILL 에 실행 범위 명시"    "$?" "0"
+# 실행 명령이 하나이고, 그 문서에 범위가 못박혀 있는가
+grep -q "리셋 PC" "$REPO/skills/start/SKILL.md"
+chk "start SKILL 에 실행 범위 명시"  "$?" "0"
+chk "파이프라인을 부르는 스킬은 하나" \
+    "$(grep -l 'pipeline.js' "$REPO"/skills/*/SKILL.md | wc -l | tr -d ' ')" "1"
 
 # =============================================================================
 # 18b. 파티션표 가용성 — 등급 C 는 매체를 읽어야 도달한다 (S921N PIT 회귀)

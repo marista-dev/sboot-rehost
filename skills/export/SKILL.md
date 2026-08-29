@@ -1,11 +1,11 @@
 ---
-name: rehost-export
+name: export
 description: 완성된 리호스팅을 "빌드 없이 바로 실행" 가능한 공유 키트로 내보낸다. active(또는 workdir=<id>) 워크스페이스의 목표 등급 완료를 확인한 뒤, examples/ 구조처럼 프리빌트 QEMU + 펌웨어/디스크 이미지 + machine 소스 + 스크립트 + docs + evidence 를 rehost_exports/<model>_<build>/<target>/ 에 조립. 이 폴더는 항상 gitignore. 생성 위치를 사용자에게 안내.
 disable-model-invocation: true
 ---
 
 당신은 **결과물 내보내기(export)** 오케스트레이터. 사용자가 sboot/kernel 목표까지 도달한 뒤
-`/sboot-rehost:rehost-export` 를 부르면, **다른 사람이 빌드 없이 바로 실행**할 수 있는 키트를 만든다.
+`/sboot-rehost:export` 를 부르면, **다른 사람이 빌드 없이 바로 실행**할 수 있는 키트를 만든다.
 
 - 대상: active(또는 `workdir=<id>`) 워크스페이스.
 - 산출: `<cwd>/rehost_exports/<model>_<build>/<target>/` (등급별로 폴더가 하나씩).
@@ -20,7 +20,7 @@ INPUT.md 의 `target` 확인 후 그 등급의 **목표 도달**을 검증:
 - 등급별 최종 칸: **F1**=부트로더 표면, **F2**=`kernel_entry`, **F3**=`rootfs` 마운트.
   콘솔/VERIFICATION 로 확인. 미도달이면 "미완 — export 불가" 안내 후 종료.
 
-완료면: `bash <PLUGIN>/scripts/journal.sh <WS> session-start "/sboot-rehost:rehost-export" "키트 생성 <target>"`.
+완료면: `bash <PLUGIN>/scripts/journal.sh <WS> session-start "/sboot-rehost:export" "키트 생성 <target>"`.
 
 ## Step 1 — 대상 경로 결정
 
@@ -116,10 +116,10 @@ bash -c 'mkdir -p "<cwd>/rehost_exports"; printf "*\n" > "<cwd>/rehost_exports/.
 포함:  bin/qemu-system-aarch64 (프리빌트) · firmware/ · machine/ · scripts/ · docs/ · evidence/ · run.sh
 바로 실행(받는 사람):  cd <경로> && bash run.sh     (오류 시 bash setup.sh 먼저)
 공유:  이 폴더를 zip/복사로 전달 (git 에는 안 올라감).
-같은 펌웨어를 다른 등급으로:  그 워크스페이스를 active 로 두고 /sboot-rehost:rehost-export.
+같은 펌웨어를 다른 등급으로:  그 워크스페이스를 active 로 두고 /sboot-rehost:export.
 ```
 
-`journal.sh <WS> session-end "/sboot-rehost:rehost-export" "키트 -> rehost_exports/<firmware>/<target>"`.
+`journal.sh <WS> session-end "/sboot-rehost:export" "키트 -> rehost_exports/<firmware>/<target>"`.
 
 ---
 

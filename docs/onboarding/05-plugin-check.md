@@ -11,7 +11,7 @@
 |---|---|---|
 | 플러그인 이름 | `sboot-rehost` | `.claude-plugin/plugin.json` |
 | 마켓플레이스 | `sboot-rehost-marketplace` | `.claude-plugin/marketplace.json` |
-| 저장소 버전 | `0.21.0` | `plugin.json` |
+| 저장소 버전 | `0.22.0` | `plugin.json` |
 | 명령 접두사 | `/sboot-rehost:` | 플러그인 이름에서 파생 |
 
 ---
@@ -26,7 +26,7 @@
 
 ### 파이프라인이 먼저 막는다
 
-`/sboot-rehost:rehost-full` 은 다른 무엇보다 먼저 버전을 확인하고, 어긋나면 `BLOCKED_VERSION`
+`/sboot-rehost:start` 는 다른 무엇보다 먼저 버전을 확인하고, 어긋나면 `BLOCKED_VERSION`
 으로 **정지한다.** 경고하고 진행하지 않는다.
 
 ```bash
@@ -80,8 +80,13 @@ VS Code 확장이면 `/plugins` → Marketplaces 탭 → 해당 마켓플레이�
 
 ### 최신인지 판별하는 가장 빠른 방법
 
-명령 목록에 **`/sboot-rehost:rehost-full`** 이 보이면 최신이다.
-`rehost-bootloader` 나 `rehost-kernel` 만 보이고 `rehost-full` 이 없으면 v0.19.0 이전이다.
+명령 목록에 **`/sboot-rehost:start`** 가 보이면 최신이다.
+
+| 보이는 것 | 버전 |
+|---|---|
+| `start` | v0.21.0 이상 |
+| `rehost-full` 은 있으나 `start` 가 없음 | v0.19.0 ~ v0.20.x |
+| `rehost-bootloader` · `rehost-kernel` 만 있음 | v0.19.0 이전 (트랙 시대) |
 
 ---
 
@@ -97,16 +102,16 @@ VS Code 확장이면 `/plugins` → Marketplaces 탭 → 해당 마켓플레이�
 ## 5. 구성 요소 확인
 
 ```bash
-V=0.21.0
+V=0.22.0
 R=~/.claude/plugins/cache/sboot-rehost-marketplace/sboot-rehost/$V
-ls $R/skills/    # rehost-init rehost-setup rehost-full rehost-status rehost-export
+ls $R/skills/    # start status export  (셋뿐이어야 한다)
 ls $R/agents/    # static-analyzer supervisor fault-classifier fixer-* verifier
 ls $R/scripts/   # check_version.sh stage_map.py build_lu.py run_full.sh ...
 ```
 
 | 있어야 하는 것 | 없으면 |
 |---|---|
-| `skills/rehost-full/` | v0.19.0 이전 |
+| `skills/start/` | v0.21.0 이전 |
 | `scripts/check_version.sh` · `stage_map.py` · `build_lu.py` | v0.19.0 이전 |
 | `agents/fixer-secureboot.md` | v0.19.0 이전 |
 | `knowledge/faults_unified.md` | v0.19.0 이전 |

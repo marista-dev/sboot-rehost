@@ -7,6 +7,59 @@
 
 ---
 
+## 0.22.0 — 2026-08-29
+
+**명령 셋만 남기고 전부 정리한다. 이름에서 중복도 없앤다.**
+
+### 명령 표면 — 8개 → 3개
+
+| 이제 | 역할 |
+|---|---|
+| `/sboot-rehost:start [F1\|F2\|F3]` | 실행 (환경 준비부터 검증까지) |
+| `/sboot-rehost:status` | 조회 |
+| `/sboot-rehost:export` | 재현 키트 |
+
+- `rehost-init` · `rehost-setup` · `rehost-full` · `rehost-bootloader` · `rehost-kernel`
+  **삭제**. 0.21.0 에서 안내 스텁으로 남겨뒀으나, 명령 목록에 8개가 뜨는 것이 정리하려던
+  바로 그 문제였다. 명령 목록에 이들이 보이면 옛 버전이 로드된 것이다.
+- `rehost-status` → **`status`**, `rehost-export` → **`export`**.
+  네임스페이스가 이미 `/sboot-rehost:` 이므로 `rehost-` 접두는 중복이었다.
+
+### 죽은 명령을 가리키던 살아 있는 코드
+
+문서가 아니라 **실행 경로**에 남아 있던 것들이다.
+
+- `make_resume.py` 의 `--command` 기본값이 `rehost-full` — 정지 시 사용자에게 **재개
+  명령으로 출력되는 값**이었다. 없는 명령을 안내하고 있었다.
+- `check_version.sh` 가 "`rehost-full` 이 보이면 최신"이라고 안내
+- `check_env.sh` 가 "`rehost-init` 이 설치합니다"라고 안내
+- `setup_env.sh` 가 "다음 단계: `rehost-full` 호출"로 끝남
+- `inbox_readme.txt`(사용자가 드롭 폴더에서 읽는 파일)이 `rehost-setup` 을 안내
+
+### `PROGRESS.md` 머리말이 만들어지지 않고 있었다
+
+회차 루프가 `PROGRESS.md` 에 한 줄씩 **추가만** 하는데 머리말을 만드는 곳이 없어서,
+그 이력이 어느 펌웨어·어느 등급의 것인지 알 수 없는 상태로 쌓였다.
+`templates/PROGRESS.md.tmpl` 이 그 자리인데 **아무도 참조하지 않는 고아 파일**이었고,
+`{TRACK}` placeholder 를 그대로 갖고 있었다. 트랙 슬롯을 없애고 `start` 에 배선했다.
+
+### 릴리스 검문이 커밋 전에는 막지 못했다
+
+`check_release.sh` 가 `git diff STAMP..HEAD` 만 봐서 **작업 트리의 변경을 보지 못했다.**
+커밋한 뒤에야 경고하므로 정작 막아야 할 시점에는 조용했다. 스테이지·미추적 파일까지
+포함하도록 고쳤다.
+
+### 트랙 잔재
+
+`fault-classifier` 의 표 머리 `| track |`, `supervisor` 의 "fixers implemented on this
+track", `static-analyzer` 의 "**track boundary**, not a firmware fault"(0.19.0 에서
+폐기된 개념), `analyze_run.py` 가 `INPUT.md` 에서 읽던 `트랙` 슬롯을 정리했다.
+
+`--track` 을 조용히 무시하는 `static_rotate.py` · `derived_facts.py` 의 숨은 인자는
+옛 워크스페이스 호환을 위해 남긴다.
+
+---
+
 ## 0.21.0 — 2026-08-29
 
 **명령은 `start` 하나, 검증은 "지어낸 로그 차단"만.**

@@ -18,7 +18,7 @@ Inputs (all optional; a missing one is reported as missing, never as empty):
 Output: <workdir>/RESUME.md  (overwritten each stop - it describes the present)
 
 Usage:
-  make_resume.py <workdir> [--ladder a,b,c] [--command "/sboot-rehost:rehost-full"]
+  make_resume.py <workdir> [--ladder a,b,c] [--command "/sboot-rehost:start"]
 
 The fingerprint signature is imported from stop_conditions rather than rebuilt,
 so "did this change move anything" is answered the same way the stop conditions
@@ -253,7 +253,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("workdir")
     ap.add_argument("--ladder", default="", help="쉼표로 구분한 목표 사다리")
-    ap.add_argument("--command", default="/sboot-rehost:rehost-full",
+    ap.add_argument("--command", default="/sboot-rehost:start",
                     help="재개에 쓸 명령 한 줄")
     args = ap.parse_args()
     wd = args.workdir
