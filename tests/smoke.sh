@@ -62,7 +62,7 @@ make_qemu "$ROOT/con1.txt" "$ROOT/trc1.txt"
 printf 'S-BOOT # \x00Following commands are supported\x00help\x00' > "$WD/bl3.bin"
 printf '| shell_func | 0x9021f3dc | prompt xref |\n' > "$WD/STATIC.md"
 
-QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD" 1 sboot-test 1 shell "shell" "$WD/bl3.bin" help > "$ROOT/obs1.json" 2>/dev/null
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD" sboot-test 1 shell "shell" "$WD/bl3.bin" help > "$ROOT/obs1.json" 2>/dev/null
 python3 -c "import json;json.load(open('$ROOT/obs1.json'))" 2>/dev/null && ok "observation.json 이 유효한 JSON" || bad "observation.json 파싱"
 M=$(python3 -c "import json;print(json.load(open('$ROOT/obs1.json'))['milestone'])" 2>/dev/null)
 chk "마일스톤 shell 도달" "$M" "shell"
@@ -78,7 +78,7 @@ hdr "2. 트랙 1 — 자가주입 차단 (머신이 문자열을 갖고 있음)"
 WD2=$(new_ws t1inj)
 printf 'static const char*p="S-BOOT # ";\nqemu_chr_fe_write_all(c,b,1);\n' > "$WD2/06_machine/machine.c"
 cp "$WD/bl3.bin" "$WD2/bl3.bin"
-QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD2" 1 sboot-test 1 shell "shell" "$WD2/bl3.bin" help > "$ROOT/obs2.json" 2>/dev/null
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD2" sboot-test 1 shell "shell" "$WD2/bl3.bin" help > "$ROOT/obs2.json" 2>/dev/null
 M2=$(python3 -c "import json;print(json.load(open('$ROOT/obs2.json'))['milestone'])" 2>/dev/null)
 I2=$(python3 -c "import json;print(json.load(open('$ROOT/obs2.json'))['injected'])" 2>/dev/null)
 chk "도달로 인정 안 함" "$M2" "none"
@@ -92,46 +92,62 @@ printf '' > "$ROOT/con3.txt"
 printf 'Taking exception 4 [Data Abort]\nFAR 0x12860010\nELR 0xf48343a4\nTaking exception 4 [Data Abort]\n' > "$ROOT/trc3.txt"
 make_qemu "$ROOT/con3.txt" "$ROOT/trc3.txt"
 cp "$WD/bl3.bin" "$WD3/bl3.bin"
-QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD3" 1 sboot-test 1 shell "shell" "$WD3/bl3.bin" help > "$ROOT/obs3.json" 2>/dev/null
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD3" sboot-test 1 shell "shell" "$WD3/bl3.bin" help > "$ROOT/obs3.json" 2>/dev/null
 F=$(python3 -c "import json;d=json.load(open('$ROOT/obs3.json'));print(d['far'])" 2>/dev/null)
 E=$(python3 -c "import json;d=json.load(open('$ROOT/obs3.json'));print(d['exceptions'])" 2>/dev/null)
 chk "FAR 를 16진 문자열로 보존" "$F" "0x12860010"
 chk "예외 2 건 계수" "$E" "2"
 
 # =============================================================================
-hdr "4. 트랙 2 — 마일스톤 사다리 (가장 높은 것 채택)"
+hdr "4. 커널측 마일스톤 사다리 (가장 높은 것 채택)"
+# 통합 설계에서 관측 문자열은 도출값이다 — static-analyzer 가 milestone_tokens.txt 에
+# 쓰고, run_full.sh 는 그 파일만 스캔한다. 벤더 문자열을 코드에 박지 않기 때문이다.
+kernel_tokens() {   # $1 = workdir
+  printf 'userspace\tRun /init\nlink_up\tufshcd\npower_mode\tPower mode change\nscsi_attach\tAttached SCSI disk\nrootfs\terofs\npartitions_up\tsda: sda\n' \
+    > "$1/milestone_tokens.txt"
+}
 WD4=$(new_ws t2)
+kernel_tokens "$WD4"
+# 통합 플로우에 커널 단독 실행은 없다 — 부트로더 컨테이너가 항상 리셋 진입점이다
+printf 'Run /init\x00ufshcd\x00Power mode change\x00Attached SCSI disk\x00erofs\x00' > "$WD4/fw.bin"
 printf 'int y;\n' > "$WD4/06_machine/machine_kernel.c"
 touch "$WD4/fw/Image.patched"
 printf 'Run /init\nscsi host0: ufshcd\nPower mode change(0): M(1)G(3)\n[sda] Attached SCSI disk\n' > "$ROOT/con4.txt"
 printf 'kernel trace\n' > "$ROOT/trc4.txt"
 make_qemu "$ROOT/con4.txt" "$ROOT/trc4.txt"
-QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD4" 2 test-kernel 1 link_up "userspace,link_up,power_mode,scsi_attach,partitions_up" > "$ROOT/obs4.json" 2>/dev/null
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD4" test-kernel 1 link_up "userspace,link_up,power_mode,scsi_attach,partitions_up" "$WD4/fw.bin" > "$ROOT/obs4.json" 2>/dev/null
 M4=$(python3 -c "import json;print(json.load(open('$ROOT/obs4.json'))['milestone'])" 2>/dev/null)
 chk "최고 마일스톤 scsi_attach" "$M4" "scsi_attach"
 
 # 4b. 트랙 2 자가주입 — 낮은 단이 오염되면 높은 단도 인정 금지
 WD4B=$(new_ws t2inj)
+kernel_tokens "$WD4B"
+# 통합 플로우에 커널 단독 실행은 없다 — 부트로더 컨테이너가 항상 리셋 진입점이다
+printf 'Run /init\x00ufshcd\x00Power mode change\x00Attached SCSI disk\x00erofs\x00' > "$WD4B/fw.bin"
 printf 'qemu_log("Run /init");\n' > "$WD4B/06_machine/machine_kernel.c"
 touch "$WD4B/fw/Image.patched"
-QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD4B" 2 test-kernel 1 link_up "userspace,link_up,power_mode,scsi_attach" > "$ROOT/obs4b.json" 2>/dev/null
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD4B" test-kernel 1 link_up "userspace,link_up,power_mode,scsi_attach" "$WD4B/fw.bin" > "$ROOT/obs4b.json" 2>/dev/null
 M4B=$(python3 -c "import json;print(json.load(open('$ROOT/obs4b.json'))['milestone'])" 2>/dev/null)
 I4B=$(python3 -c "import json;print(json.load(open('$ROOT/obs4b.json'))['injected'])" 2>/dev/null)
 chk "오염 시 상위 단도 불인정" "$M4B" "none"
-chk "트랙 2 자가주입 감지"     "$I4B" "True"
+chk "커널측 자가주입 감지"    "$I4B" "True"
 
-# 4c. 사다리가 건너뛴 단 때문에 하위 도달이 가려지지 않아야 한다
-#     (K3 사다리에는 rootfs 가 없다. 최고 마일스톤만 보면 userspace 도달이 숨는다)
+# 4c. 사다리에 없는 단에 도달해도 하위 도달이 가려지지 않아야 한다.
+#     milestone 은 "이 사다리에서 어디까지"이고, milestones_reached 는 "무엇을 봤나"다.
+#     둘을 하나로 합치면, 사다리 밖 단에 도달한 회차가 목표 판정을 흐린다.
 WD4C=$(new_ws t2skip)
+kernel_tokens "$WD4C"
+# 통합 플로우에 커널 단독 실행은 없다 — 부트로더 컨테이너가 항상 리셋 진입점이다
+printf 'Run /init\x00ufshcd\x00Power mode change\x00Attached SCSI disk\x00erofs\x00' > "$WD4C/fw.bin"
 printf 'int q;\n' > "$WD4C/06_machine/machine_kernel.c"
 touch "$WD4C/fw/Image.patched"
 printf 'Run /init\nerofs: (device dm-0): mounted\n' > "$ROOT/con4c.txt"
 printf 'trace\n' > "$ROOT/trc4c.txt"
 make_qemu "$ROOT/con4c.txt" "$ROOT/trc4c.txt"
-QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD4C" 2 test-kernel 1 userspace "userspace,link_up,power_mode" > "$ROOT/obs4c.json" 2>/dev/null
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$WD4C" test-kernel 1 userspace "userspace,link_up,power_mode" "$WD4C/fw.bin" > "$ROOT/obs4c.json" 2>/dev/null
 TOP=$(python3 -c "import json;print(json.load(open('$ROOT/obs4c.json'))['milestone'])" 2>/dev/null)
 LIST=$(python3 -c "import json;print(','.join(json.load(open('$ROOT/obs4c.json'))['milestones_reached']))" 2>/dev/null)
-chk "최고 마일스톤은 rootfs" "$TOP" "rootfs"
+chk "사다리 안 최고 단은 userspace" "$TOP" "userspace"
 chk "도달 목록에 userspace 포함" "$LIST" "userspace,rootfs"
 # 파이프라인의 사다리 인덱스 계산을 그대로 재현
 IDX=$(node -e '
@@ -247,7 +263,7 @@ grep -q "try #1" "$WD/JOURNAL.md" && ok "JOURNAL 에 회차 시작 기록" || ba
 hdr "10. QEMU 실행 실패 시 정직한 보고"
 FW=$(new_ws qfail)
 printf 'int z;\n' > "$FW/06_machine/machine.c"
-QEMU="/nonexistent/qemu" bash "$S/run_round.sh" "$FW" 1 m 1 shell "shell" "$FW/bl3.bin" help > "$ROOT/obsf.json" 2>/dev/null
+QEMU="/nonexistent/qemu" bash "$S/run_round.sh" "$FW" m 1 shell "shell" "$FW/bl3.bin" help > "$ROOT/obsf.json" 2>/dev/null
 RF=$(python3 -c "import json;print(json.load(open('$ROOT/obsf.json'))['run_ok'])" 2>/dev/null)
 chk "run_ok=false 로 정직 보고" "$RF" "False"
 
@@ -271,10 +287,10 @@ chk "K3 중간 마일스톤은 항목2 불통과" "$(echo "$V" | python3 -c 'imp
 chk "UFS 단계를 미완으로 보고"        "$(echo "$V" | python3 -c 'import json,sys;print("미완" in json.load(sys.stdin)["ufs_controller"]["stage"])')" "True"
 chk "마크다운 강조 우회 4항목 인식"    "$(echo "$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][4]["pass"])')" "True"
 
-# 11c. partitions_up 도달 시 K3a 완료
+# 11c. partitions_up 도달 시 "최소 완료"
 printf 'Run /init\nscsi host0: ufshcd\n[sda] Attached SCSI disk\nsda: sda1 sda2\n' > "$KW/07_logs/kboot_1.txt"
 V=$(python3 "$S/verify.py" "$KW" --track 2 --target K3 --trace "$KW/07_logs/kboot_1.log" 2>/dev/null)
-chk "partitions_up → K3a 완료" "$(echo "$V" | python3 -c 'import json,sys;print("K3a" in json.load(sys.stdin)["ufs_controller"]["stage"])')" "True"
+chk "partitions_up → 최소 완료" "$(echo "$V" | python3 -c 'import json,sys;print("최소 완료" in json.load(sys.stdin)["ufs_controller"]["stage"])')" "True"
 
 # 11d. 소스 negative — 주석·#include 는 출력이 아니다
 CW=$(new_ws srcneg)
@@ -290,17 +306,27 @@ chk "주석·#include 는 누출로 안 셈" "$(echo "$V" | python3 -c 'import j
 ZW=$(new_ws zeroinit); : > "$ZW/fw/initramfs.cpio.gz"; touch "$ZW/fw/Image.patched"
 printf 'int z;\n' > "$ZW/06_machine/machine_kernel.c"
 printf 'boot\n' > "$ROOT/conz.txt"; printf 'trace\n' > "$ROOT/trcz.txt"; make_qemu "$ROOT/conz.txt" "$ROOT/trcz.txt"
-cat > "$BIN/fake-qemu-args" <<'EOF'
+cat > "$BIN/fake-qemu-args" <<EOF
 #!/usr/bin/env bash
-echo "$@" > /tmp/qemu_args_seen.txt
+echo "\$@" > "$ROOT/qemu_args_seen.txt"
 OUT=""; LOG=""
-while [ $# -gt 0 ]; do case "$1" in -serial) OUT="${2#file:}"; shift 2;; -D) LOG="$2"; shift 2;; *) shift;; esac; done
-[ -n "$OUT" ] && echo boot > "$OUT"; [ -n "$LOG" ] && echo trace > "$LOG"
+# -serial 값이 file: 로 시작할 때만 파일이다. 무조건 접두를 벗기면 \`-serial stdio\` 가
+# "stdio" 라는 파일명이 되어 실행한 폴더(저장소 루트)에 찌꺼기를 남긴다.
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -serial) case "\$2" in file:*) OUT="\${2#file:}";; esac; shift 2;;
+    -D) LOG="\$2"; shift 2;;
+    *) shift;;
+  esac
+done
+[ -n "\$OUT" ] && echo boot > "\$OUT"
+[ -n "\$LOG" ] && echo trace > "\$LOG"
+exit 0
 EOF
 chmod +x "$BIN/fake-qemu-args"
 QEMU="$BIN/fake-qemu-args" bash "$S/run_full.sh" "$ZW" test-kernel 1 >/dev/null 2>&1
-if grep -q '\-initrd' /tmp/qemu_args_seen.txt 2>/dev/null; then bad "0 바이트 initramfs 가 QEMU 로 전달됨"; else ok "0 바이트 initramfs 는 전달 안 함"; fi
-rm -f /tmp/qemu_args_seen.txt
+if grep -q '\-initrd' "$ROOT/qemu_args_seen.txt" 2>/dev/null; then bad "0 바이트 initramfs 가 QEMU 로 전달됨"; else ok "0 바이트 initramfs 는 전달 안 함"; fi
+rm -f "$ROOT/qemu_args_seen.txt"
 
 # =============================================================================
 hdr "12. 벤더 다양성 — MediaTek (LK / MT6833 사례 회귀)"
@@ -330,7 +356,7 @@ FW=$(new_ws mtk_fb); printf 'int q;\n' > "$FW/06_machine/machine.c"
 printf 'fastboot_init()\nfastboot: processing commands\n[fastboot: command buf]-[getvar:version]\n' > "$ROOT/confb.txt"
 printf 'no exceptions\n' > "$ROOT/trcfb.txt"; make_qemu "$ROOT/confb.txt" "$ROOT/trcfb.txt"
 printf 'x' > "$FW/lk.bin"
-QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$FW" 1 mtk-bootloader 1 fastboot "fastboot" "$FW/lk.bin" help fastboot > "$ROOT/obsfb.json" 2>/dev/null
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$FW" mtk-bootloader 1 fastboot "fastboot" "$FW/lk.bin" help fastboot > "$ROOT/obsfb.json" 2>/dev/null
 chk "fastboot 표면 마일스톤 인식" "$(python3 -c "import json;print(json.load(open('$ROOT/obsfb.json'))['milestone'])" 2>/dev/null)" "fastboot"
 
 # 12c. fastboot 표면에서 머신이 입력 명령을 지어내면 항목4 불통과
@@ -352,7 +378,7 @@ printf 'S-BOOT # help\nFollowing commands\nreset: OK\nautoboot aborted..\n' > "$
 printf 'trace\n' > "$ROOT/trcg.txt"; make_qemu "$ROOT/cong.txt" "$ROOT/trcg.txt"
 printf 'shell\tFollowing commands\ncommands\treset: OK\nautoboot\tautoboot aborted\n' > "$GW/milestone_tokens.txt"
 printf 'x' > "$GW/bl.bin"
-QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$GW" 1 bl-test 1 shell "shell,commands,autoboot" "$GW/bl.bin" help shell > "$ROOT/obsg.json" 2>/dev/null
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$GW" bl-test 1 shell "shell,commands,autoboot" "$GW/bl.bin" help shell > "$ROOT/obsg.json" 2>/dev/null
 LISTG=$(python3 -c "import json;print(','.join(json.load(open('$ROOT/obsg.json'))['milestones_reached']))" 2>/dev/null)
 TOPG=$(python3 -c "import json;print(json.load(open('$ROOT/obsg.json'))['milestone'])" 2>/dev/null)
 chk "등급 단(commands·autoboot) 관측" "$LISTG" "shell,commands,autoboot"
@@ -506,8 +532,8 @@ grep -q "rebuild" "$REPO/agents/supervisor.md"
 chk "supervisor 가 rebuild 를 안다" "$?" "0"
 
 
-# 16. 최후수단 fixer + 트랙 경계
-printf '\n\033[1m== 16. fixer-general · 트랙 경계 ==\033[0m\n'
+# 16. 최후수단 fixer + 담당 경계
+printf '\n\033[1m== 16. fixer-general · 담당 경계 ==\033[0m\n'
 
 # 범위 무제한 fixer 가 정지를 막지 못해야 한다
 GW2=$(new_ws general)
@@ -540,21 +566,19 @@ PY7
 GJ2=$(python3 "$S/stop_conditions.py" "$GW2" --ladder shell)
 chk "진전 중이면 소진 아님"        "$(echo "$GJ2" | python3 -c 'import json,sys;print(json.load(sys.stdin)["stop"])')" "False"
 
-# 트랙 1 에 스토리지/커널 fixer 가 새지 않는가
+# 통합 플로우에는 트랙별 fixer 분리가 없다. 한 실행이 부트로더와 커널을 모두 지나므로
+# 스토리지·커널 fixer 도 같은 목록에 있어야 한다.
 T1=$(python3 - <<'PY8'
 import re, pathlib
 s = pathlib.Path("workflows/pipeline.js").read_text()
-m = re.search(r"FIXERS_BY_TRACK = \{\s*1: \[([^\]]*)\]", s)
-print(m.group(1).replace("'", "").replace(" ", "") if m else "PARSE_FAIL")
+m = re.search(r"KNOWN_FIXERS = \[([^\]]*)\]", s, re.S)
+print(",".join(re.findall(r"'([^']+)'", m.group(1))) if m else "PARSE_FAIL")
 PY8
 )
-chk "트랙 1 fixer 목록"            "$T1" "fixer-memory,fixer-el3,fixer-bootflow"
-grep -q 'fixer-storage' <<< "$T1"
-chk "트랙 1 에 스토리지 fixer 없음" "$?" "1"
-
-# 최후수단은 순위로 오르지 않는다
-grep -q "KNOWN_FIXERS = FIXERS_BY_TRACK" "$REPO/workflows/pipeline.js"
-chk "general 은 KNOWN_FIXERS 밖"   "$?" "0"
+chk "fixer 목록이 단일"  "$T1" \
+    "fixer-memory,fixer-el3,fixer-bootflow,fixer-secureboot,fixer-storage,fixer-kernel"
+grep -q 'fixer-general' <<< "$T1"
+chk "general 은 순위 목록 밖"      "$?" "1"
 grep -q 'reached_by: decline_only' "$REPO/fixers/registry.yaml"
 chk "registry 에 도달 조건 명시"   "$?" "0"
 grep -q 'fixer_candidates.md' "$REPO/agents/fixer-general.md"
@@ -585,7 +609,7 @@ printf '' > "$ROOT/cono.txt"
 } > "$ROOT/trco.txt"
 make_qemu "$ROOT/cono.txt" "$ROOT/trco.txt"
 printf 'x' > "$OW/bl.bin"
-QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$OW" 1 sboot-test 1 shell "shell" "$OW/bl.bin" help > "$ROOT/obso.json" 2>/dev/null
+QEMU="$BIN/fake-qemu" bash "$S/run_round.sh" "$OW" sboot-test 1 shell "shell" "$OW/bl.bin" help > "$ROOT/obso.json" 2>/dev/null
 gj() { python3 -c "import json;print(json.load(open('$1'))['$2'])" 2>/dev/null; }
 chk "최초 FAR 를 뽑는다"        "$(gj "$ROOT/obso.json" origin_far)" "0xf4865914"
 chk "최초 ESR 도 뽑는다"        "$(gj "$ROOT/obso.json" origin_esr)" "0x25/0x96000046"
@@ -619,7 +643,7 @@ exit 1
 EOF
 chmod +x "$BIN/fake-qemu-dead"
 printf 'x' > "$NW/bl.bin"
-QEMU="$BIN/fake-qemu-dead" bash "$S/run_round.sh" "$NW" 1 m 1 shell "shell" "$NW/bl.bin" help > "$ROOT/obsn.json" 2>/dev/null
+QEMU="$BIN/fake-qemu-dead" bash "$S/run_round.sh" "$NW" m 1 shell "shell" "$NW/bl.bin" help > "$ROOT/obsn.json" 2>/dev/null
 chk "실행 실패를 run_ok=false 로"  "$(gj "$ROOT/obsn.json" run_ok)" "False"
 RE=$(python3 -c "import json;print('종료코드' in json.load(open('$ROOT/obsn.json'))['run_error'])" 2>/dev/null)
 chk "실패 사유를 문장으로 남김"    "$RE" "True"
@@ -758,7 +782,7 @@ chmod +x "$BIN/fake-qemu-gate"
 HW=$(new_ws harness); printf 'int h;\n' > "$HW/06_machine/machine.c"
 printf 'shell\tS-BOOT # \ncommands\tFollowing commands are supported\n' > "$HW/milestone_tokens.txt"
 printf 'x' > "$HW/bl.bin"
-TIMEOUT=6 QEMU="$BIN/fake-qemu-gate" bash "$S/run_round.sh" "$HW" 1 t 1 shell "shell,commands" "$HW/bl.bin" help shell > "$ROOT/obsh.json" 2>/dev/null
+TIMEOUT=6 QEMU="$BIN/fake-qemu-gate" bash "$S/run_round.sh" "$HW" t 1 shell "shell,commands" "$HW/bl.bin" help shell > "$ROOT/obsh.json" 2>/dev/null
 chk "CR 연타로 게이트 통과 → 셸 도달" \
     "$(python3 -c "import json;print(json.load(open('$ROOT/obsh.json'))['milestone'])" 2>/dev/null)" "commands"
 chk "머신 자가주입 아님" \
@@ -774,7 +798,7 @@ printf 'shell\tS-BOOT # \n' > "$HW2/milestone_tokens.txt"
 printf 'x' > "$HW2/bl.bin"
 printf '{"autoboot_interrupt":{"bytes":"\\r","count":5,"contiguous":true,"empty_poll_budget":0,"evidence":"gate @0x1234 cmp w8,#5"}}\n' \
     > "$HW2/input_plan.json"
-GATE_CR=5 TIMEOUT=6 QEMU="$BIN/fake-qemu-gate" bash "$S/run_round.sh" "$HW2" 1 t 1 shell "shell" "$HW2/bl.bin" help shell > /dev/null 2>&1
+GATE_CR=5 TIMEOUT=6 QEMU="$BIN/fake-qemu-gate" bash "$S/run_round.sh" "$HW2" t 1 shell "shell" "$HW2/bl.bin" help shell > /dev/null 2>&1
 grep -q "x5 (derived" "$HW2/07_logs/input_1.txt" 2>/dev/null
 chk "도출된 연타 수를 사용"      "$?" "0"
 chk "5연타 게이트도 통과" \
@@ -797,8 +821,8 @@ grep -q "rx_seed" "$REPO/templates/machine_full.c.tmpl"
 chk "템플릿에 자가 시드 없음"    "$?" "1"
 grep -q "qemu_chr_fe_accept_input" "$REPO/templates/machine_full.c.tmpl"
 chk "accept_input 호출 있음"     "$?" "0"
-grep -q "{{ENTRY_PC}}" "$REPO/templates/machine_full.c.tmpl"
-chk "진입 PC 가 로드주소와 별개 슬롯" "$?" "0"
+grep -q "{{RESET_PC}}" "$REPO/templates/machine_full.c.tmpl"
+chk "리셋 PC 가 적재주소와 별개 슬롯" "$?" "0"
 
 # 검증 항목 4 — shell 표면에서도 자가입력을 잡는가
 IW=$(new_ws item4)
@@ -849,7 +873,7 @@ printf 'shell\tS-BOOT # \n' > "$PW/milestone_tokens.txt"
 printf 'x' > "$PW/bl.bin"
 printf 'missing\tThere is no pit binary\nmissing\tpit_check_integrity: invalid pit.\nok\tpit_check_integrity: pit is valid\n' \
     > "$PW/storage_tokens.txt"
-TIMEOUT=3 QEMU="$BIN/fake-qemu-pit" bash "$S/run_round.sh" "$PW" 1 t 1 shell "shell" "$PW/bl.bin" help shell >/dev/null 2>&1
+TIMEOUT=3 QEMU="$BIN/fake-qemu-pit" bash "$S/run_round.sh" "$PW" t 1 shell "shell" "$PW/bl.bin" help shell >/dev/null 2>&1
 chk "파티션표 부재를 관측" \
     "$(python3 -c "import json;print(json.load(open('$PW/observation.json'))['storage_partition_table'])" 2>/dev/null)" "missing"
 chk "판정 근거 토큰을 남김" \
@@ -859,7 +883,7 @@ chk "표면 도달은 영향 없음" \
     "$(python3 -c "import json;print(json.load(open('$PW/observation.json'))['milestone'])" 2>/dev/null)" "shell"
 
 # 표가 정상이면 ok 로 관측되어야 한다
-PIT_OK=1 TIMEOUT=3 QEMU="$BIN/fake-qemu-pit" bash "$S/run_round.sh" "$PW" 1 t 2 shell "shell" "$PW/bl.bin" help shell >/dev/null 2>&1
+PIT_OK=1 TIMEOUT=3 QEMU="$BIN/fake-qemu-pit" bash "$S/run_round.sh" "$PW" t 2 shell "shell" "$PW/bl.bin" help shell >/dev/null 2>&1
 chk "정상이면 ok 로 관측" \
     "$(python3 -c "import json;print(json.load(open('$PW/observation.json'))['storage_partition_table'])" 2>/dev/null)" "ok"
 
@@ -868,19 +892,21 @@ chk "정상이면 ok 로 관측" \
 NW=$(new_ws pit_unknown); printf 'int p;\n' > "$NW/06_machine/machine.c"
 printf 'shell\tS-BOOT # \n' > "$NW/milestone_tokens.txt"
 printf 'x' > "$NW/bl.bin"
-TIMEOUT=3 QEMU="$BIN/fake-qemu-pit" bash "$S/run_round.sh" "$NW" 1 t 1 shell "shell" "$NW/bl.bin" help shell >/dev/null 2>&1
+TIMEOUT=3 QEMU="$BIN/fake-qemu-pit" bash "$S/run_round.sh" "$NW" t 1 shell "shell" "$NW/bl.bin" help shell >/dev/null 2>&1
 chk "토큰 파일 없으면 unknown"  \
     "$(python3 -c "import json;print(json.load(open('$NW/observation.json'))['storage_partition_table'])" 2>/dev/null)" "unknown"
 
 # 규칙이 문서·지식표·등록부에 등재됐는가
+# BLOCKED_STORAGE 는 0.19.0 에서 폐기됐다 — 매체를 직접 합성하므로 파티션표 부재는
+# 트랙 경계가 아니라 합성 이미지의 결함이고, fixer-storage 가 담당한다.
 grep -q "BLOCKED_STORAGE" "$REPO/CLAUDE.md"
-chk "블로커 코드가 CLAUDE.md 에" "$?" "0"
+chk "폐기된 블로커가 문서에 없음" "$?" "1"
 grep -q "partition_table_unavailable" "$REPO/knowledge/faults_unified.md"
 chk "정지점이 지식표에"          "$?" "0"
 grep -q "partition_table_unavailable" "$REPO/fixers/registry.yaml"
 chk "담당 없음으로 등록"         "$?" "0"
-grep -q "STORAGE_DEPENDENT_RUNGS" "$REPO/workflows/pipeline.js"
-chk "의존 칸이 파이프라인에"      "$?" "0"
+grep -q "partition_table_unavailable" "$REPO/knowledge/faults_unified.md"
+chk "정지점이 통합 분류표에"      "$?" "0"
 grep -q "storage_tokens.txt" "$REPO/agents/static-analyzer.md"
 chk "도출 지시가 분석가에"        "$?" "0"
 
@@ -929,9 +955,9 @@ chk "단계 시간이 회차에서 분리됨" \
 # 토큰은 누적값이라 델타로 복원되어야 한다 (일부 이벤트에만 실려 있어도)
 chk "단계별 토큰이 0 이 아님" \
     "$(python3 -c 'import json;p=json.load(open("'"$AW"'/analysis.json"))["phases"];print(p["Analyze"]["tokens"]>0 and p["Build"]["tokens"]>0)')" "True"
-grep -q "## 10. 소요 원인 분석" "$AW/ANALYSIS.md"
+grep -q "소요 원인 분석" "$AW/ANALYSIS.md"
 chk "원인 분석 절이 있음"        "$?" "0"
-grep -q "## 11. 기록의 한계" "$AW/ANALYSIS.md"
+grep -q "기록의 한계" "$AW/ANALYSIS.md"
 chk "기록 한계를 밝힘"          "$?" "0"
 grep -q "관측을 움직이지 못한 변경" "$AW/ANALYSIS.md"
 chk "무효 변경을 짚음"          "$?" "0"
@@ -1050,6 +1076,79 @@ printf "$GOOD_CONSOLE" > "$VG/07_logs/console_1.txt"
 printf 'static void n(void){ snprintf(nm,8,"rehost.itmon%%d",i); memory_region_init_io(&r,NULL,&o,s,"itmon",4); }\n' \
   > "$VG/06_machine/machine_full.c"
 chk "객체 이름은 오탐이 아님"     "$(vg_gate 1)" "True"
+
+
+# =============================================================================
+printf '\n\033[1m== 22. 매체 합성과 실행 실패 판정 ==\033[0m\n'
+
+# --- sparse 이미지는 raw 로 풀지 않으면 정지한다 -----------------------------
+# 그대로 복사하면 부트로더가 파티션을 파싱하지 못하고, 그 결함은 한참 뒤 AVB 실패로
+# 나타나 원인을 찾기 어렵다. 조용히 잘못된 바이트를 쓰는 것보다 멈추는 편이 낫다.
+BW=$(new_ws medium)
+printf '\x3a\xff\x26\xed' > "$BW/fw/system.img"; head -c 4096 /dev/zero >> "$BW/fw/system.img"
+BJ=$(python3 "$S/build_lu.py" "$BW" --out "$BW/fw/lu0.img" 2>/dev/null)
+chk "sparse 를 감지해 정지"  "$(echo "$BJ" | python3 -c 'import json,sys;print(json.load(sys.stdin)["ok"])')" "False"
+echo "$BJ" | grep -q 'sparse'
+chk "  이유를 sparse 로 밝힘"  "$?" "0"
+
+# --- 커맨드라인을 PARAM 파티션에 심는다 --------------------------------------
+# 부트로더가 console=ram 을 고르면 커널이 완벽히 떠도 시리얼에 한 줄도 안 나온다.
+# PARAM 기록은 부트로더의 정상 경로를 쓰므로 우회가 아니다.
+CW2=$(new_ws cmdline)
+mkdir -p "$CW2/02_unpacked"
+head -c 8192 /dev/zero > "$CW2/02_unpacked/param.bin"
+head -c 4096 /dev/urandom > "$CW2/fw/boot.img"
+printf '{"default":"console=ram","uart":"console=ttySAC0,115200n8 earlycon=exynos4210,mmio32,0x10840000"}\n' \
+  > "$CW2/cmdline_plan.json"
+CJ=$(python3 "$S/build_lu.py" "$CW2" --out "$CW2/fw/lu0.img" 2>/dev/null)
+chk "커맨드라인을 기록함"      "$(echo "$CJ" | python3 -c 'import json,sys;print(json.load(sys.stdin)["cmdline_written"])')" "True"
+strings "$CW2/fw/lu0.img" 2>/dev/null | grep -q 'earlycon=exynos4210'
+chk "  매체 안에 실제로 존재"  "$?" "0"
+
+# 계획이 있어도 PARAM 이 없으면 심지 않고, 그 사실을 밝힌다
+CW3=$(new_ws cmdline_noparam)
+head -c 4096 /dev/urandom > "$CW3/fw/boot.img"
+cp "$CW2/cmdline_plan.json" "$CW3/cmdline_plan.json"
+NJ=$(python3 "$S/build_lu.py" "$CW3" --out "$CW3/fw/lu0.img" 2>/dev/null)
+chk "PARAM 없으면 기록 안 함"  "$(echo "$NJ" | python3 -c 'import json,sys;print(json.load(sys.stdin)["cmdline_written"])')" "False"
+echo "$NJ" | grep -q 'warning_cmdline'
+chk "  못 심었음을 보고"       "$?" "0"
+
+# --- 총 크기가 바뀌면 경고한다 ----------------------------------------------
+# 30 MiB 만 늘려도 부트로더가 GPT 를 재작성하고 신규 프로비저닝으로 간주해 전원을 내린다.
+SW=$(new_ws medium_size)
+head -c 4096 /dev/urandom > "$SW/fw/boot.img"
+printf '{"block_size":4096,"total_bytes":1,"partitions":[{"name":"boot","source":"fw/boot.img"}]}\n' \
+  > "$SW/lu_manifest.json"
+SJ=$(python3 "$S/build_lu.py" "$SW" --out "$SW/fw/lu0.img" 2>/dev/null)
+echo "$SJ" | grep -q 'warning_size'
+chk "총 크기 변화를 경고"      "$?" "0"
+
+# --- 콘솔이 나온 뒤의 비정상 종료는 환경이 아니라 머신 결함이다 ---------------
+# QEMU 가 assert 로 죽어도 게스트가 이미 출력을 냈다면 실행은 된 것이다. 이걸
+# BLOCKED_ENV 로 처리하면 담당이 배정되지 않아 손으로 고쳐야 한다 (blk_set_perm 사례).
+FV=$(mktemp -d)
+printf 'qemu: block/io.c:2006: Assertion `child->perm & BLK_PERM_WRITE` failed.\n' > "$FV/err.txt"
+printf 'trace\n' > "$FV/log.txt"
+verdict() {   # $1=rc $2=console_bytes [$3=trace파일] -> "failed fault"
+  ( . "$S/fingerprint_lib.sh"
+    fp_run_verdict "$1" "${3:-$FV/log.txt}" "$2" "$FV/err.txt"
+    echo "$FP_RUN_FAILED ${FP_RUN_FAULT:-0}" )
+}
+: > "$FV/empty.log"
+chk "정상 종료는 둘 다 0"        "$(verdict 0 1000)"   "0 0"
+chk "timeout(124) 도 실패 아님"  "$(verdict 124 1000)" "0 0"
+chk "콘솔 있는 assert → 머신 결함" "$(verdict 250 596865)" "0 1"
+# 트레이스도 콘솔도 0 이어야 "실행된 적 없음"이다. 트레이스가 있으면 QEMU 는 돈 것이다.
+chk "콘솔·트레이스 0 → 환경 문제" "$(verdict 250 0 "$FV/empty.log")" "1 0"
+chk "트레이스만 있어도 실행됨"    "$(verdict 250 0)"                  "0 1"
+rm -rf "$FV"
+
+# --- 매체는 기본이 snapshot 이다 --------------------------------------------
+# 부트로더가 PARAM·DDI 에 실제로 쓰므로, 그대로 두면 회차가 이전 회차의 디스크
+# 상태를 물려받아 지문 비교가 오염된다.
+grep -q 'snapshot=on' "$S/run_full.sh"
+chk "매체를 snapshot 으로 염"   "$?" "0"
 
 
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"

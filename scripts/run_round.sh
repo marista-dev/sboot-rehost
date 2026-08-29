@@ -38,7 +38,7 @@ bash "$HERE/check_change.sh" "$WD" snapshot "$RUN_N" >/dev/null 2>&1 || true
 # One chain, one run script. The bootloader loads what comes after it, so there
 # is nothing to branch on here any more.
 RUN_RC=0
-bash "$HERE/run_full.sh" "$WD" "$MACHINE" "$CONTAINER" "$CMD" "$RUN_N" "$SURFACE" >/dev/null || RUN_RC=$?
+bash "$HERE/run_full.sh" "$WD" "$MACHINE" "$CONTAINER" "$CMD" "$RUN_N" "$SURFACE" "$LADDER" >/dev/null || RUN_RC=$?
 
 STOP_TMP="$(mktemp)"
 python3 "$HERE/stop_conditions.py" "$WD" --ladder "$LADDER" > "$STOP_TMP" 2>/dev/null || echo '{}' > "$STOP_TMP"

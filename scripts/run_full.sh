@@ -43,6 +43,10 @@ CONTAINER="$3"        # the bootloader container, loaded whole
 CMD="${4:-help}"
 RUN_N="${5:-1}"
 SURFACE="${6:-shell}"      # shell (UART console) | fastboot (USB dispatch)
+# The goal ladder, comma-separated, lowest rung first. Without it the "highest
+# rung reached" pick could only see the bootloader-side rungs, so a run that
+# reached scsi_attach or kernel_alive still reported milestone=none.
+LADDER="${7:-}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 QEMU="${QEMU:-$HOME/qemu-build/qemu-10.2.2/build/qemu-system-aarch64}"
@@ -273,8 +277,13 @@ fi
 # Injection is dominant: a contaminated console credits nothing at all.
 [ "$INJECTED" = "true" ] && REACHED=""
 
-# Highest rung wins, in ladder order.
-for m in "$SURFACE" commands autoboot; do
+# Highest rung wins, in ladder order. The ladder is derived per firmware, so it
+# is passed in rather than hard-coded - the previous list named only the
+# bootloader rungs, which meant a kernel-side milestone was matched into
+# REACHED and then never selected as THE milestone.
+RUNG_ORDER="${LADDER//,/ }"
+[ -n "$RUNG_ORDER" ] || RUNG_ORDER="$SURFACE commands autoboot"
+for m in $RUNG_ORDER; do
     case " $REACHED " in *" $m "*) MILESTONE="$m" ;; esac
 done
 MILESTONES_JSON=$(python3 -c 'import sys,json;print(json.dumps(sys.argv[1].split()))' "$REACHED")
@@ -282,9 +291,9 @@ MILESTONES_JSON=$(python3 -c 'import sys,json;print(json.dumps(sys.argv[1].split
 # --- Storage readiness (partition table) -------------------------------------
 # Grade C means the bootloader carries on into a normal boot, which requires
 # reading the boot medium. The medium is modelled here, so
-# this track the medium is a stub and the table cannot load - a track boundary,
-# not a firmware fault. Recording which one it was keeps the loop from
-# prescribing memory windows for a partition table that was never going to come.
+# an absent table means the synthesised image is wrong, not that the firmware
+# failed. Recording which one it was keeps the loop from prescribing memory
+# windows for a partition table that was never going to come.
 #
 # The strings are vendor-specific, so static-analyzer derives them into
 # storage_tokens.txt as "<ok|missing><TAB><token>".
