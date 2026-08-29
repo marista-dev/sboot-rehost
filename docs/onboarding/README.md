@@ -13,10 +13,8 @@
 ## 빠른 시작
 
 ```
-/sboot-rehost:rehost-init            설치 후 1회
 _inbox/ 에 펌웨어 배치
-/sboot-rehost:rehost-setup <이름>    워크스페이스 생성
-/sboot-rehost:rehost-full            통합 체인 실행 (자율)
+/sboot-rehost:start [F1|F2|F3]      환경 준비부터 검증까지 자율 진행
 /sboot-rehost:rehost-status          진행 확인
 /sboot-rehost:rehost-export          완료 후 재현 키트
 ```
@@ -26,6 +24,6 @@ _inbox/ 에 펌웨어 배치
 부트로더 컨테이너를 한 번 적재하고, 첫 스테이지부터 커널이 rootfs 를 마운트할 때까지 하나의
 연속 실행으로 간다. 다음 단계 적재는 펌웨어 자신의 코드가 수행하므로 QEMU 에 커널을 직접
 넘기지 않는다. 실행 불가한 스테이지는 건너뛰되 그 사실을 기록한다. 도달 여부는 실행 증거로만
-판정하며, 6항목을 전부 통과할 때만 REAL 로 표기한다.
+판정하며, 게이트 3항을 전부 통과할 때만 `VERIFIED` 로 표기한다.
 
 > 운영 규칙의 정본은 저장소 루트의 [CLAUDE.md](../../CLAUDE.md) 다.

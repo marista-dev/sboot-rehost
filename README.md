@@ -26,10 +26,8 @@
 ## 사용
 
 ```
-/sboot-rehost:rehost-init            설치 후 1회
 _inbox/ 에 펌웨어 배치
-/sboot-rehost:rehost-setup <이름>    워크스페이스 생성
-/sboot-rehost:rehost-full            통합 체인 실행 (자율)
+/sboot-rehost:start [F1|F2|F3]      환경 준비부터 검증까지 자율 진행
 /sboot-rehost:rehost-status          진행 확인
 /sboot-rehost:rehost-export          완료 후 재현 키트
 ```
@@ -71,7 +69,7 @@ _inbox/ 에 펌웨어 배치
 - **출력 출처 검증** — 콘솔 문자열이 머신 소스에도 있으면 해당 도달을 무효화 (매 회차 자동)
 - **변경 1건 검문** — diff 로 회차당 변경 수를 강제
 - **정지 판정 우선** — 에이전트가 정지를 뒤집으면 강제 정지 + 모순 기록
-- **6항목 검증** — 전부 통과할 때만 REAL. 부분 점수 없음
+- **출처 검증 게이트 3항** — 머신·에이전트가 지어낸 콘솔을 막는다. 통과해도 부팅 완주를 뜻하지 않는다
 
 ### 검증 6항목
 

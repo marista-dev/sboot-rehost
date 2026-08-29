@@ -44,19 +44,26 @@ QEMU 위에서 모바일 기기 펌웨어를 **원본 바이너리 그대로** �
 칸이 만들어진 뒤 공통 후단이 붙는다. 스테이지 수가 펌웨어마다 다르기 때문이다.
 
 ```
-stage_entry × N  →  <표면>  →  medium_up  →  partitions
-                 →  verify_ok  →  kernel_entry  →  userspace  →  rootfs
+stage_entry × N  →  <표면>  →  medium_up  →  partitions  →  verify_ok
+                 →  kernel_entry  →  kernel_alive  →  userspace  →  rootfs
 ```
 
 | 등급 | 범위 | 뜻 |
 |---|---|---|
 | **F1** | 스테이지 진입 전부 + 표면 | 부트로더 체인이 실제로 동작 |
-| **F2** | F1 + `medium_up` · `partitions` · `verify_ok` · `kernel_entry` | 부트로더가 커널을 적재·검증·기동 |
+| **F2** | F1 + `medium_up` · `partitions` · `verify_ok` · `kernel_entry` · **`kernel_alive`** | 커널이 실제로 실행 |
 | **F3** | F2 + `userspace` · `partitions_up` (+ `super_mounted`) | rootfs 마운트까지 완주 |
 
 - 각 칸의 관측 문자열은 static-analyzer 가 도출해 `milestone_tokens.txt` 에 기록한다.
   벤더 문자열을 코드에 직접 넣지 않는다.
 - `super.img` 가 없는 펌웨어는 `super_mounted` 를 목표에 넣지 않는다 (`has_super`).
+- **`kernel_entry` 와 `kernel_alive` 는 다르다.** 앞은 부트로더가 `Starting kernel...` 을
+  찍은 것이고, 뒤는 커널이 자기 배너(`Linux version`)를 찍은 것이다. 점프 선언만으로
+  도달로 세면, 커널이 실행되지 않은 실행을 완주로 보고하게 된다.
+- **커널이 조용하면 커맨드라인부터 본다.** 부트로더가 `console=ram` 을 고르면 커널이
+  완벽히 떠도 시리얼에 한 줄도 안 나온다. 침묵은 실패의 증거가 아니다.
+  static-analyzer 가 `cmdline_plan.json` 에 후보를 도출하고 `build_lu.py` 가 PARAM
+  파티션에 UART 조합을 기록한다 — 부트로더의 정상 경로이므로 우회가 아니다.
 - **F1 은 매체 모델 없이 도달 가능하다.** 첫 스테이지는 이전 단계가 남긴 함수 포인터로
   블록을 읽으므로, 스토리지 모델이 없어도 진행된다. F1 을 확정한 뒤 F2 로 간다.
 
@@ -105,9 +112,10 @@ stage_entry × N  →  <표면>  →  medium_up  →  partitions
 | `fingerprint_lib.sh` | 최초 예외 추출 · 콘솔 고유 줄 수 · 실행 실패 판정 |
 | `sync_machine.sh` | 워크스페이스 소스를 QEMU 트리에 반영 |
 | `check_change.sh` | 변경 1건 검문 (diff + 우회 기록) |
+| `check_release.sh` | 버전을 올리지 않은 배포 차단 |
 | `revert_change.sh` | 반증된 우회를 해당 회차 변경만 역패치 |
 | `stop_conditions.py` | 정지 조건 계산 |
-| `verify.py` | 6항목 측정 |
+| `verify.py` | 게이트 3항 + 참고 지표 측정 |
 | `record.py` · `journal.sh` | 측정치·경위 기록 |
 | `make_resume.py` | 정지 시 인계 문서 생성 |
 | `analyze_run.py` | 소요·비용·정체 구간·해결 경위 분석 |
@@ -125,7 +133,7 @@ stage_entry × N  →  <표면>  →  medium_up  →  partitions
 ## 5. 흐름
 
 ```
-[버전 확인] → [환경 확인] → [static-analyzer 도출] → (하드 블로커면 정지)
+start → [버전 확인] → [환경 확인] → [언팩·sparse 해제] → [static-analyzer 도출]
    ↓
 [Build] 머신 소스 생성 + 매체 합성 + ninja → (빌드 실패면 정지)
    ↓
@@ -141,7 +149,7 @@ stage_entry × N  →  <표면>  →  medium_up  →  partitions
 │        → check_change → sync_machine → ninja                  │
 └──────────────────────────────────────────────────────────────┘
    ↓
-verify.py 측정 → verifier 재검증 → REAL 또는 FORCED → 재현 키트
+verify.py 게이트 3항 → verifier 재검증 → VERIFIED 또는 UNVERIFIED → 재현 키트
 ```
 
 ---
@@ -296,39 +304,46 @@ AND 담당 fixer 전원이 "시도할 변경 없음"
 
 ---
 
-## 11. 검증 (6항목)
+## 11. 검증 — 게이트 3항
 
 ```
 1단계  verify.py       → verdict_script.json    (측정)
 2단계  verifier 에이전트 → 원시 로그·바이트 재검증  (최종 판정)
 ```
 
-| 방향 | 규칙 |
-|---|---|
-| 낮추기 (REAL → FORCED) | verifier 판단이 우선. 의심스러우면 낮춘다 |
-| 올리기 (FORCED → REAL) | 바이트 수준 증거를 제시할 때만 |
+판정을 막는 것은 셋뿐이다. 목적은 하나 — **머신이나 에이전트가 만들어 낸 콘솔이 진짜
+부팅으로 읽히지 않게 하는 것.**
 
-| # | 항목 | 통과 조건 |
+| # | 게이트 | 통과 조건 |
 |---|---|---|
-| 1 | 체인 실행 트레이스 | 스테이지 진입 PC 가 `-d in_asm` 로그에 **순서대로** 등장 + 커널 진입 |
-| 2 | 출력 바이트 대조 | 콘솔 토큰이 펌웨어 바이너리에 파일 오프셋으로 존재 |
-| 3 | 소스 반증 | 머신 C 소스에 동일 출력 문자열 0개 |
-| 4 | 검증 양방향 | 정상 이미지 통과 **그리고** 1바이트 훼손 시 실패 |
-| 5 | 스토리지 이중 구동 | 같은 모델을 부트로더 드라이버와 커널 드라이버가 **둘 다** 구동 |
-| 6 | 우회 기록 | 네 항목으로 전부 기재 |
+| 1 | **소스 negative** | 머신 C 가 출력하는 문자열이 콘솔에 나타나지 않는다 |
+| 2 | **출력 출처** | 콘솔의 **고정 문자열**이 펌웨어 이미지 안에 존재한다 |
+| 3 | **입력 출처** | 머신이 자기 수신 버퍼를 채우지 않는다 |
 
-**6/6 만 REAL. 5/6 이하는 FORCED.** 부분 점수는 없다.
+판정: **`VERIFIED`(출처 검증 통과)** / **`UNVERIFIED`(출처 검증 실패)**.
 
-항목 4 가 중요한 이유: **항상 통과하는 검증기는 항상 통과하는 스텁과 구별되지 않는다.**
-훼손된 이미지가 실패해야 검증이 실제로 수행됐다는 증거가 된다.
+**출처 검증 통과는 부팅 완주를 뜻하지 않는다.** 도달 여부는 마일스톤으로 따로 본다.
 
-항목 5 가 중요한 이유: 스토리지 모델을 한 드라이버에 맞추면 다른 드라이버에서 깨진다.
-두 드라이버가 같은 모델을 구동한다는 사실 자체가 검증 장치다.
+### 참고 지표 (게이트 아님 — 측정해서 보고만 한다)
 
-`.ko` 부재는 불가를 뜻하지 않는다. 벤더 드라이버가 커널에 빌트인(`CONFIG_SCSI_UFS_*=y`)이면
-`.ko` 는 설계상 존재하지 않으며, 빌트인 드라이버가 모델을 구동한다.
+체인 PC 트레이스 · 검증 양방향 · 스토리지 이중 구동 · 우회 기록.
+전부를 통과 조건으로 두면 실제 진전이 `FORCED` 하나로 묻히므로 판정에서 뺐다.
 
----
+### 항목 2 의 대조 범위
+
+**런타임 조립분(`%d`·`%s` 치환값)은 대조하지 않는다.** 콘솔의 숫자는 펌웨어 안에 없는
+것이 정상이며, 그것을 미발견으로 세면 진짜 콘솔이 실패로 뜬다.
+콘솔은 같은 UART 를 쓰는 **모든 펌웨어 성분**(부트로더·ldfw·tzsw·ACPM·커널)이 함께
+찍으므로, 대조 대상도 `02_unpacked/` 의 성분 전부다.
+
+### 완화해도 지키는 것
+
+| 규칙 | 왜 |
+|---|---|
+| **추측 스텁 금지** | 특히 적응형 토글. 잘못된 분기로 보내고 다른 펌웨어에서 재현되지 않는다 |
+| **우회는 우회로 표기** | `bypasses.md` 4항목. 부작용 항목이 정체 시 가장 먼저 참조된다 |
+| **도달하지 못한 지점은 그렇게 기록** | |
+| **검증 결과 자체는 위조하지 않는다** | 상태 워드는 바꿔도 반환값·실패 출력은 둔다 |
 
 ## 12. 기록
 
@@ -378,20 +393,29 @@ AND 담당 fixer 전원이 "시도할 변경 없음"
 
 ## 14. 명령
 
+**실행 명령은 `start` 하나다.**
+
 | 명령 | 역할 |
 |---|---|
-| `/sboot-rehost:rehost-init` | 설치 후 1회. 작업 폴더 생성 + 의존성 설치 |
-| `/sboot-rehost:rehost-setup <이름>` | 펌웨어 인식 + 워크스페이스 생성 + `INPUT.md` 작성 |
-| **`/sboot-rehost:rehost-full`** | **통합 체인 실행** → `pipeline.js({target: 'F1'\|'F2'\|'F3'})` |
-| `/sboot-rehost:rehost-status` | 진행·검증·정지 요약 |
-| `/sboot-rehost:rehost-export` | 완료 확인 후 재현 키트 조립 |
+| **`/sboot-rehost:start [F1\|F2\|F3]`** | **유일한 실행 명령.** 환경 준비 → 펌웨어 인식 → 워크스페이스 → 도출 → 매체 → 머신 빌드 → 회차 루프 → 검증 → 재현 키트까지 한 번에 자율 진행 |
+| `/sboot-rehost:rehost-status` | 진행·검증·정지 요약 (조회 전용) |
+| `/sboot-rehost:rehost-export` | 재현 키트 재생성 |
 
-흐름: `rehost-init` → `_inbox/` 에 펌웨어 배치 → `rehost-setup` → `rehost-full` → `rehost-export`
+`start` 는 **상태를 보고 스스로 다음을 정한다.**
 
-> `rehost-bootloader` 와 `rehost-kernel` 은 v0.19.0 에서 `rehost-full` 로 대체됐다.
-> 두 명령은 안내만 하고 종료한다.
+| 상태 | 동작 |
+|---|---|
+| 작업 폴더·의존성 없음 | 만들고 설치(백그라운드) 후 진행 |
+| `_inbox/` 비어 있음 | 펌웨어를 넣으라고 안내하고 **종료** |
+| 펌웨어 있음 | 인식 → 워크스페이스 → 끝까지 진행 |
+| 워크스페이스가 이미 있음 | 이어서 진행 (재개) |
 
----
+등급은 인자로만 받고 기본값은 **F2**. 질문하지 않는다.
+
+흐름: `_inbox/` 에 펌웨어 배치 → `start` → (필요하면) `rehost-export`
+
+> `rehost-init` · `rehost-setup` · `rehost-full` · `rehost-bootloader` · `rehost-kernel`
+> 은 v0.21.0 에서 `start` 로 대체됐다. 다섯 명령 모두 안내만 하고 종료한다.
 
 ## 15. 작업 디렉터리
 
