@@ -26,7 +26,7 @@
 ## 사용
 
 ```
-/sboot-rehost:init                  설치 후 1회 — QEMU 빌드 + 폴더 (약 18분)
+/sboot-rehost:init                  설치 후 1회 — 옛 캐시 삭제 + QEMU 빌드 + 폴더
 _inbox/ 에 펌웨어 배치
 /sboot-rehost:start [F1|F2|F3]      인식부터 검증까지 자율 진행
 /sboot-rehost:status                진행 확인

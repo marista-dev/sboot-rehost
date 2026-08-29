@@ -1151,6 +1151,48 @@ grep -q 'snapshot=on' "$S/run_full.sh"
 chk "매체를 snapshot 으로 염"   "$?" "0"
 
 
+# =============================================================================
+printf '\n\033[1m== 23. 옛 버전 캐시 강제 정리 · push 게이트 ==\033[0m\n'
+# 캐시는 버전마다 폴더가 남는다. 옛 폴더가 있으면 옛 스킬·에이전트가 다시 로드될 수
+# 있고, 그러면 회차·로그·판정이 전부 옛 규칙을 따른다. 실제로 0.2.0 과 0.17.0 이
+# 남아 있고 세션이 0.17.0 을 로드한 상태가 관측됐다 — 저장소가 0.24.0 인데도.
+
+PC="$ROOT/purge"; mkdir -p "$PC/cache/mk/sboot-rehost"/{0.2.0,0.17.0,9.9.9} "$PC/other/sboot-rehost/1.0.0"
+mkdir -p "$PC/cache/other-plugin/1.0.0"
+printf '{"plugins":[{"name":"sboot-rehost","version":"0.17.0"}]}\n' > "$PC/reg.json"
+
+purge() { CACHE_ROOT="$PC/cache" REGISTRY="$PC/reg.json" bash "$S/purge_cache.sh" "$@" 2>/dev/null; }
+J=$(purge --keep 9.9.9 --dry-run)
+chk "최신만 남기기로 판정"    "$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["keep"])')" "9.9.9"
+chk "옛 버전 2개를 지울 대상"  "$(echo "$J" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["removed"]))')" "2"
+chk "dry-run 은 실제로 안 지움" "$([ -d "$PC/cache/mk/sboot-rehost/0.2.0" ] && echo yes)" "yes"
+
+# 세션이 옛 버전을 로드 중이면 막아야 한다 — 캐시를 지워도 로드된 것은 안 바뀐다
+chk "옛 버전 로드 시 종료코드 1" \
+    "$(CACHE_ROOT="$PC/cache" REGISTRY="$PC/reg.json" bash "$S/purge_cache.sh" --keep 9.9.9 --dry-run >/dev/null 2>&1; echo $?)" "1"
+
+# 실제 삭제
+purge --keep 9.9.9 >/dev/null
+chk "옛 버전이 실제로 지워짐"  "$([ -d "$PC/cache/mk/sboot-rehost/0.2.0" ] || echo gone)" "gone"
+chk "최신은 남음"             "$([ -d "$PC/cache/mk/sboot-rehost/9.9.9" ] && echo kept)" "kept"
+chk "다른 플러그인은 안 건드림" "$([ -d "$PC/cache/other-plugin/1.0.0" ] && echo safe)" "safe"
+
+# 세션이 최신이면 통과한다
+printf '{"plugins":[{"name":"sboot-rehost","version":"9.9.9"}]}\n' > "$PC/reg.json"
+chk "최신 로드 시 종료코드 0" \
+    "$(CACHE_ROOT="$PC/cache" REGISTRY="$PC/reg.json" bash "$S/purge_cache.sh" --keep 9.9.9 >/dev/null 2>&1; echo $?)" "0"
+
+# --- push 전 버전 검문 -------------------------------------------------------
+# check_release.sh 는 사람이 부를 때만 돌았다. 0.19.0 이 그렇게 새어나갔으므로
+# 잊을 수 없는 자리(pre-push)에 둔다.
+[ -x "$REPO/scripts/git-hooks/pre-push" ]
+chk "pre-push 훅이 실행 가능"  "$?" "0"
+grep -q 'check_release.sh' "$REPO/scripts/git-hooks/pre-push"
+chk "  훅이 릴리스 검문을 부름" "$?" "0"
+grep -q 'core.hooksPath' "$REPO/scripts/install_git_hooks.sh"
+chk "설치 스크립트가 있음"     "$?" "0"
+
+
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
 echo "작업 폴더: $ROOT"
 [ "$FAIL" -eq 0 ]

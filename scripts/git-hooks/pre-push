@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# pre-push — 버전을 올리지 않은 배포를 push 단계에서 막는다.
+#
+# check_release.sh 는 이미 있었지만 사람이 부를 때만 돌았다. 0.19.0 이 실제로 그렇게
+# 새어나갔다 — 버전을 박은 커밋 뒤로 커밋 3 개가 같은 번호로 46 개 파일을 내보냈고,
+# 0.19.0 을 이미 받은 환경은 그 수정을 받지 못했다. 검문은 잊을 수 없는 자리에 둔다.
+#
+# 설치: bash scripts/install_git_hooks.sh
+# 우회: git push --no-verify   (의도적으로만)
+set -u
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -x "$ROOT/scripts/check_release.sh" ] || exit 0
+
+OUT="$(bash "$ROOT/scripts/check_release.sh" 2>&1)"; RC=$?
+if [ "$RC" -eq 1 ]; then
+    echo "$OUT" >&2
+    echo >&2
+    echo "pre-push: 버전을 올리지 않은 채 push 하려 합니다 — 막았습니다." >&2
+    echo "  plugin.json 과 marketplace.json 의 version 을 올리고 CHANGELOG 에 항목을 추가하십시오." >&2
+    echo "  의도적으로 넘기려면: git push --no-verify" >&2
+    exit 1
+fi
+echo "$OUT"
+exit 0

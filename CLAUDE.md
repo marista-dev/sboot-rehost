@@ -102,6 +102,7 @@ stage_entry × N  →  <표면>  →  medium_up  →  partitions  →  verify_ok
 | 이름 | 역할 |
 |---|---|
 | `workflows/pipeline.js` | 전체 흐름 제어. 관측 사실에 근거한 정지를 에이전트가 뒤집지 못하게 강제 |
+| `purge_cache.sh` | **옛 버전 캐시 강제 삭제 (`init` 의 첫 단계)** |
 | `check_version.sh` | **플러그인 버전 확인 (첫 게이트)** |
 | `check_env.sh` | 실행 환경 사전 점검 |
 | `stage_map.py` | 스테이지 지도 도출 (엔트로피 · 진입 스텁 · 문자열 · 적재 주소) |
@@ -112,7 +113,8 @@ stage_entry × N  →  <표면>  →  medium_up  →  partitions  →  verify_ok
 | `fingerprint_lib.sh` | 최초 예외 추출 · 콘솔 고유 줄 수 · 실행 실패 판정 |
 | `sync_machine.sh` | 워크스페이스 소스를 QEMU 트리에 반영 |
 | `check_change.sh` | 변경 1건 검문 (diff + 우회 기록) |
-| `check_release.sh` | 버전을 올리지 않은 배포 차단 |
+| `check_release.sh` | 버전을 올리지 않은 배포 차단 (`pre-push` 훅이 호출) |
+| `install_git_hooks.sh` | `pre-push` 릴리스 검문 활성화 |
 | `revert_change.sh` | 반증된 우회를 해당 회차 변경만 역패치 |
 | `stop_conditions.py` | 정지 조건 계산 |
 | `verify.py` | 게이트 3항 + 참고 지표 측정 |
@@ -398,10 +400,15 @@ AND 담당 fixer 전원이 "시도할 변경 없음"
 
 | 명령 | 역할 |
 |---|---|
-| `/sboot-rehost:init` | **설치 후 1회.** QEMU 10.2.2 빌드 + 의존성 + 작업 폴더 생성 (약 18분) |
+| `/sboot-rehost:init` | **설치 후 1회.** 옛 버전 캐시 삭제 → QEMU 10.2.2 빌드 + 의존성 + 작업 폴더 (약 18분) |
 | **`/sboot-rehost:start [F1\|F2\|F3]`** | **실행.** 펌웨어 인식 → 워크스페이스 → 도출 → 매체 → 머신 빌드 → 회차 루프 → 검증 → 재현 키트까지 자율 진행 |
 | `/sboot-rehost:status` | 진행·검증·정지 요약 (조회 전용) |
 | `/sboot-rehost:export` | 재현 키트 재생성 |
+
+`init` 은 **옛 버전 캐시를 먼저 지운다.** 캐시는 버전마다 폴더가 남고, 옛 폴더가 있으면
+어떤 경로로든 옛 스킬·에이전트가 다시 로드될 수 있다. 세션이 이미 로드한 것은 캐시를
+지워도 바뀌지 않으므로, 옛 버전을 로드 중이면 **거기서 멈추고 재시작을 요구한다** —
+정리했다고 보고하면서 옛 코드로 계속 도는 것이 가장 나쁘다.
 
 `init` 을 분리해 둔 이유는 **QEMU 빌드가 18분**이기 때문이다. 실행 명령 안에 넣으면
 리호스팅을 시작한 줄 아는 사용자를 그만큼 기다리게 한다. 환경은 펌웨어가 몇 개든
