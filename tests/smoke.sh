@@ -1256,6 +1256,66 @@ chk "암호화로 시작하면 쪼개지 않음" \
     "$(python3 -c "import json;d=json.load(open('$SMW/sm2.json'));print(d['stages'][0]['state'])" 2>/dev/null)" "encrypted"
 
 
+# =============================================================================
+printf '\n\033[1m== 25. 트레이스 용량 (디스크를 채워 기계를 죽이지 않는다) ==\033[0m\n'
+# `-d int,in_asm,nochain` 은 폴트 루프에서 회차당 10~12 GB 를 쓴다. 15회차가 281 GB
+# 디스크를 채우고 WSL 이 재시작된 적이 있다. 정작 파이프라인이 읽는 것은 넷뿐이다 —
+# 예외 개수, 최초 예외 블록, 마지막 FAR/ELR, 스테이지 진입 PC 의 등장 순서.
+
+TFW="$ROOT/tracefilter"; mkdir -p "$TFW"
+python3 - "$TFW/big.log" <<'PYGEN'
+import sys
+w = open(sys.argv[1], "w")
+w.write("Taking exception 4 [Data Abort]\n")
+w.write("...ESR 0x25/0x96000046 FAR 0x12860010 ELR 0x9021f3dc\n")
+w.write("0xc9000000:  stp x29, x30, [sp, #-16]!\n")
+for i in range(20000):
+    w.write("0x%x:  nop\n" % (0x91000000 + i * 4))
+w.write("0x02100000:  mrs x1, currentel\n")
+for i in range(20000):
+    w.write("0x%x:  nop\n" % (0x92000000 + i * 4))
+w.write("Taking exception 4 [Data Abort]\n")
+w.write("...FAR 0x12869999 ELR 0x90210000\n")
+w.close()
+PYGEN
+
+python3 "$S/trace_filter.py" --out "$TFW/small.log" --stats "$TFW/st.json" \
+    --watch 0xc9000000,0x02100000 < "$TFW/big.log"
+
+BIG=$(wc -c < "$TFW/big.log" | tr -d ' ')
+SMALL=$(wc -c < "$TFW/small.log" | tr -d ' ')
+[ "$SMALL" -lt $((BIG / 100)) ]
+chk "1% 미만으로 줄어듦"          "$?" "0"
+
+tj() { python3 -c "import json;print($1)" 2>/dev/null; }
+chk "예외 개수는 원본 전체 기준"  "$(tj "json.load(open('$TFW/st.json'))['exceptions']")" "2"
+chk "감시 PC 를 등장 순서대로"    \
+    "$(tj "','.join(e['pc'] for e in json.load(open('$TFW/st.json'))['stage_entries_seen'])")" \
+    "0xc9000000,0x02100000"
+
+# 최초 예외 블록이 살아 있어야 fp_origin 이 원인을 뽑는다
+( . "$S/fingerprint_lib.sh"; fp_origin "$TFW/small.log" "$TFW/origin.txt"
+  echo "$FP_ORIGIN_TYPE|$FP_ORIGIN_ESR|$FP_ORIGIN_FAR" ) > "$TFW/orig.txt"
+chk "최초 예외를 그대로 뽑음" "$(cat "$TFW/orig.txt")" \
+    "Data Abort|0x25/0x96000046|0x12860010"
+
+# 마지막 FAR/ELR 은 기록용으로 꼬리에 남아야 한다
+grep -q '0x12869999' "$TFW/small.log"
+chk "마지막 FAR 이 꼬리에 남음"   "$?" "0"
+
+# 입력이 없으면 빈 파일이어야 한다. "트레이스·콘솔 0바이트"가 QEMU 가 아예 실행되지
+# 않았다는 신호이고, 여기에 안내 줄을 쓰면 환경 실패가 펌웨어 판정으로 둔갑한다.
+printf '' | python3 "$S/trace_filter.py" --out "$TFW/empty.log" --stats "$TFW/e.json"
+chk "빈 입력이면 빈 파일"        "$(wc -c < "$TFW/empty.log" | tr -d ' ')" "0"
+
+# 디스크가 부족하면 회차를 시작하지 않는다
+DW=$(new_ws diskguard); printf 'x' > "$DW/bl.bin"
+printf '### 우회1\n- 대상: t\n- 이유: r\n- 방법: m\n- 부작용: s\n' > "$DW/06_machine/bypasses.md"
+RC=$(MIN_FREE_MB=999999999 QEMU="$BIN/fake-qemu" bash "$S/run_full.sh" \
+       "$DW" m "$DW/bl.bin" help 1 shell >/dev/null 2>&1; echo $?)
+chk "디스크 부족이면 시작 안 함"  "$RC" "3"
+
+
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
 echo "작업 폴더: $ROOT"
 [ "$FAIL" -eq 0 ]

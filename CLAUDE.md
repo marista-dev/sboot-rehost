@@ -110,6 +110,7 @@ stage_entry × N  →  <표면>  →  medium_up  →  partitions  →  verify_ok
 | `run_round.sh` | 회차 1회 수행 → 관측 문서 1개 (`observation.json`) |
 | `run_full.sh` | QEMU 실행 → 지문 추출 · 출력 출처 검증 · 실행 실패 판정 |
 | `uart_harness.py` | QEMU 외부에서 콘솔 입력 주입 |
+| `trace_filter.py` | 트레이스를 스트리밍으로 걸러 필요한 부분만 남김 (10 GB → 수 MB) |
 | `fingerprint_lib.sh` | 최초 예외 추출 · 콘솔 고유 줄 수 · 실행 실패 판정 |
 | `sync_machine.sh` | 워크스페이스 소스를 QEMU 트리에 반영 |
 | `check_change.sh` | 변경 1건 검문 (diff + 우회 기록) |

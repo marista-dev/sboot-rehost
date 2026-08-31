@@ -106,6 +106,22 @@ ORIGIN="$WORKDIR/07_logs/origin_${RUN_N}.txt"
 INLOG="$WORKDIR/07_logs/input_${RUN_N}.txt"
 ERRF="$WORKDIR/07_logs/qemu_${RUN_N}.stderr.txt"
 LOG="$TRACE_DIR/run_${RUN_N}.log"
+TRACE_STATS="$WORKDIR/07_logs/trace_${RUN_N}.json"
+
+# 디스크가 차면 회차가 아니라 기계가 죽는다. 15회차가 각 10~12 GB 를 남겨 281 GB 를
+# 채우고 WSL 이 재시작된 적이 있으므로, 남은 공간을 회차 전에 확인한다.
+FREE_MB=$(df -Pm "$TRACE_DIR" 2>/dev/null | awk 'NR==2{print $4}')
+MIN_FREE_MB="${MIN_FREE_MB:-4096}"
+if [ -n "$FREE_MB" ] && [ "$FREE_MB" -lt "$MIN_FREE_MB" ]; then
+    echo "run_full: 디스크 여유가 ${FREE_MB} MB 뿐입니다 (최소 ${MIN_FREE_MB} MB) — 회차를 시작하지 않습니다" >&2
+    echo "run_failed=1"
+    exit 3
+fi
+
+# 지난 회차 트레이스는 최근 것만 남긴다. 필터를 거치므로 각각 수 MB 지만,
+# 회차가 백 단위로 늘면 그것도 쌓인다.
+TRACE_KEEP="${TRACE_KEEP:-10}"
+ls -1t "$TRACE_DIR"/run_*.log 2>/dev/null | tail -n +$((TRACE_KEEP + 1)) | xargs -r rm -f 2>/dev/null || true
 # What the harness did, machine-readable. Without it a round cannot say whether
 # the interrupt pattern ever got in front of the gate, and a harness failure is
 # recorded as a verdict about the firmware.
@@ -140,6 +156,42 @@ python3 "$HERE/record.py" "$WORKDIR" start "run_${RUN_N}" >/dev/null 2>&1 || tru
 #
 # The exit code matters: piping it into `tail` threw it away, so a QEMU that
 # never started reported success and the round looked clean.
+# The trace goes through a filter, not straight to disk. `-d int,in_asm,nochain`
+# writes 10-12 GB on a firmware that faults in a loop, and none of that volume is
+# read: the pipeline consumes the exception count, the FIRST exception block, the
+# last FAR/ELR, and whether each stage entry PC appeared. trace_filter.py keeps
+# exactly that in bounded space, so the log stays a few MB however long the run.
+WATCH=$(python3 - "$WORKDIR/stage_map.json" <<'PYW' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+pcs = []
+for st in d.get("stages", []):
+    base = st.get("base")
+    if st.get("state") == "exec" and isinstance(base, int):
+        pcs.append(hex(base))
+print(",".join(pcs))
+PYW
+)
+
+FIFO="$(mktemp -u "${TMPDIR:-/tmp}/sboot_trace.XXXXXX")"
+FILTER_PID=""
+if mkfifo "$FIFO" 2>/dev/null; then
+    python3 "$HERE/trace_filter.py" --out "$LOG" --stats "$TRACE_STATS" \
+        --watch "$WATCH" < "$FIFO" &
+    FILTER_PID=$!
+    # 쓰기 쪽 FD 를 셸이 잡고 있어야 한다. QEMU 가 -D 를 아예 열지 않는 경우
+    # (실행 실패, 인자 오류) 필터가 EOF 를 못 받아 wait 가 영원히 멈춘다.
+    exec 9>"$FIFO"
+    TRACE_TARGET="$FIFO"
+else
+    # 필터를 못 걸면 원본을 그대로 쓴다. 용량은 커지지만 회차를 잃지는 않는다.
+    echo "run_full: FIFO 를 만들지 못해 트레이스를 그대로 씁니다 (용량 주의)" >&2
+    TRACE_TARGET="$LOG"
+fi
+
 RUN_RC=0
 python3 "$HERE/uart_harness.py" \
     --console "$OUT" --input-log "$INLOG" --summary "$INSUM" \
@@ -149,8 +201,14 @@ python3 "$HERE/uart_harness.py" \
     -- "$QEMU" \
     -M "$MACHINE" -m "$MEM" -display none -serial stdio \
     -kernel "$CONTAINER" ${MEDIUM_ARGS[@]+"${MEDIUM_ARGS[@]}"} \
-    -d int,in_asm,nochain -D "$LOG" \
+    -d int,in_asm,nochain -D "$TRACE_TARGET" \
     2> "$ERRF" || RUN_RC=$?
+
+if [ -n "$FILTER_PID" ]; then
+    exec 9>&-                       # 마지막 쓰기 쪽을 닫아 필터에 EOF 를 준다
+    wait "$FILTER_PID" 2>/dev/null || true
+    rm -f "$FIFO" 2>/dev/null || true
+fi
 tail -3 "$ERRF" 2>/dev/null || true
 
 # --- What the input path actually did ------------------------------------
@@ -193,7 +251,13 @@ PY
 # NOTE: grep -c exits 1 when the count is zero while still printing "0".
 # Using `|| echo 0` would emit TWO lines and corrupt the JSON below, so assign
 # first and fall back only on a non-zero exit.
-EXC=$(grep -c "Taking exception" "$LOG" 2>/dev/null) || EXC=0
+# 필터가 원본 전체를 세므로 잘린 로그를 grep 하지 않는다. 필터를 못 걸었을 때만
+# 로그에서 직접 센다.
+EXC=$(python3 -c "
+import json,sys
+try: print(json.load(open('$TRACE_STATS'))['exceptions'])
+except Exception: sys.exit(1)" 2>/dev/null) \
+  || EXC=$(grep -c "Taking exception" "$LOG" 2>/dev/null) || EXC=0
 [ -n "$EXC" ] || EXC=0
 if [ -f "$OUT" ]; then CSZ=$(wc -c < "$OUT" | tr -d ' '); else CSZ=0; fi
 CUNIQ=$(fp_console_uniq "$OUT")
