@@ -102,6 +102,12 @@ Then read the JSON back and confirm each stage against the binary:
 
 ### 0b) Skip plan
 
+A stage that begins in plaintext and continues into ciphertext is split in two:
+the executable head keeps the entry stub, the ciphertext tail is skipped. If a
+stage you know to be executable comes back `encrypted`, check that boundary
+before accepting the map - swallowing the head moves the reset PC forward to the
+bootloader, which is the shortcut this flow exists to avoid.
+
 For every stage the map marked `encrypted`, say which executable stage the
 previous one must be redirected to, and **prove the skip is safe**: list the
 absolute addresses the next stage reads before it writes anything, and classify

@@ -6,7 +6,7 @@
 |---|---|
 | 플러그인 이름 | `sboot-rehost` |
 | 마켓플레이스 | `sboot-rehost-marketplace` |
-| 저장소 버전 | `0.25.3` |
+| 저장소 버전 | `0.26.0` |
 | 명령 접두사 | `/sboot-rehost:` |
 
 ---
@@ -93,7 +93,7 @@ VS Code 확장이면 `/plugins` → Marketplaces 탭 → 새로고침 → 재시
 ## 5. 구성 요소 확인
 
 ```bash
-V=0.25.3
+V=0.26.0
 R=~/.claude/plugins/cache/sboot-rehost-marketplace/sboot-rehost/$V
 ls $R/skills/    # init start status export  (넷뿐이어야 한다)
 ls $R/agents/    # static-analyzer supervisor fault-classifier fixer-* verifier

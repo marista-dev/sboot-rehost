@@ -332,6 +332,36 @@ def load_profile_hints(profile):
     return hints
 
 
+def split_at_encryption(lo, hi, runs, grid):
+    """A stage that begins in plaintext and continues into ciphertext is TWO
+    stages, not one encrypted stage.
+
+    The previous rule marked the whole stub-to-stub span `encrypted` when more
+    than 60% of its bytes were high-entropy. On Exynos 9820 that discarded BL1:
+    20 KB of plaintext with the entry stub at 0x10, sitting in front of EPBL's
+    38 KB of ciphertext. 38912/59392 = 65.5%, so the executable head was skipped
+    with the tail and the reset PC moved forward to the bootloader - which is
+    exactly the "start at BL33" shortcut this flow exists to avoid. Exynos 2400
+    has the same shape (32 KB plaintext head).
+
+    The entry stub sits at `lo`, so the head is the part that can actually be
+    entered. The tail starts on ciphertext and cannot be, whatever its ratio.
+    """
+    enc = [r for r in runs if r["label"] == "enc"
+           and r["end"] > lo and r["start"] < hi]
+    if not enc:
+        return [(lo, hi, "exec")]
+
+    cut = max(min(r["start"] for r in enc), lo)
+    if cut - lo < grid:
+        # No plaintext head worth entering: the stage begins in ciphertext.
+        return [(lo, hi, "encrypted")]
+    if hi - cut < grid:
+        # Ciphertext is a trailing fragment (packed data, keys), not a stage.
+        return [(lo, hi, "exec")]
+    return [(lo, cut, "exec"), (cut, hi, "encrypted")]
+
+
 def build_map(data, arch, hints, grid):
     runs = entropy_runs(data, grid)
     if arch == "arm64":
@@ -346,35 +376,37 @@ def build_map(data, arch, hints, grid):
         # last one. Regions before the first stub are stage 0 (the entry stage,
         # whose stub is the image header rather than a CurrentEL test).
         edges = [0] + bounds + [len(data)]
-        for i in range(len(edges) - 1):
-            lo, hi = edges[i], edges[i + 1]
-            if hi - lo < grid:
+        for span_lo, span_hi in zip(edges, edges[1:]):
+            if span_hi - span_lo < grid:
                 continue
-            strs = strings_in(data, lo, hi)
-            name, scores = label_region(strs, hints)
-            enc = [r for r in runs if r["label"] == "enc"
-                   and r["start"] >= lo and r["end"] <= hi]
-            enc_bytes = sum(r["end"] - r["start"] for r in enc)
-            state = "encrypted" if enc_bytes > (hi - lo) * 0.6 else "exec"
-            entry = next((s for s in stubs if s["stage_start"] == lo), None)
-            stage = {
-                "index": i,
-                "name": name or f"stage{i}",
-                "identified": bool(name),
-                "file_range": [lo, hi],
-                "size": hi - lo,
-                "state": state,
-                "entry_pc_file_offset": entry["stage_start"] if entry else None,
-                "vbar_writes": entry["vbar_writes"] if entry else [],
-                "encrypted_bytes": enc_bytes,
-                "evidence": {
-                    "label_scores": scores,
-                    "sample_strings": [s for _, s in strs[:6]],
-                },
-            }
-            if state == "exec":
-                stage.update({"base": derive_base(data, lo, hi)})
-            stages.append(stage)
+            for lo, hi, state in split_at_encryption(span_lo, span_hi, runs, grid):
+                if hi - lo < grid:
+                    continue
+                strs = strings_in(data, lo, hi)
+                name, scores = label_region(strs, hints)
+                enc_bytes = sum(min(r["end"], hi) - max(r["start"], lo)
+                                for r in runs if r["label"] == "enc"
+                                and r["end"] > lo and r["start"] < hi)
+                entry = next((s for s in stubs if s["stage_start"] == lo), None)
+                i = len(stages)
+                stage = {
+                    "index": i,
+                    "name": name or f"stage{i}",
+                    "identified": bool(name),
+                    "file_range": [lo, hi],
+                    "size": hi - lo,
+                    "state": state,
+                    "entry_pc_file_offset": entry["stage_start"] if entry else None,
+                    "vbar_writes": entry["vbar_writes"] if entry else [],
+                    "encrypted_bytes": enc_bytes,
+                    "evidence": {
+                        "label_scores": scores,
+                        "sample_strings": [s for _, s in strs[:6]],
+                    },
+                }
+                if state == "exec":
+                    stage.update({"base": derive_base(data, lo, hi)})
+                stages.append(stage)
 
     return {
         "image_size": len(data),

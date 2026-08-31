@@ -1193,6 +1193,69 @@ grep -q 'core.hooksPath' "$REPO/scripts/install_git_hooks.sh"
 chk "설치 스크립트가 있음"     "$?" "0"
 
 
+# =============================================================================
+printf '\n\033[1m== 24. 스테이지 경계: 평문 앞부분을 암호화에 흘려보내지 않는다 ==\033[0m\n'
+# 옛 규칙은 스텁-스텁 구간의 암호화 비율이 60% 를 넘으면 구간 전체를 encrypted 로
+# 표시했다. Exynos 9820 에서 BL1(20 KB 평문, 진입 스텁 0x10)이 EPBL(38 KB 암호화)과
+# 한 구간이라 65.5% 가 되어 함께 버려졌고, 리셋 PC 가 BL33 으로 밀렸다.
+# 그러면 "첫 스테이지부터 연속 실행"이 성립하지 않는다.
+
+SMW="$ROOT/stagemap"; mkdir -p "$SMW"
+python3 - "$SMW/fake.bin" <<'PYGEN'
+import random, struct, sys
+def stub():
+    return (struct.pack("<I", 0x14000001) + struct.pack("<I", 0x10000000) +
+            struct.pack("<I", 0xD5384241) + struct.pack("<I", 0xD51EC000))
+def plain(n, seed):
+    rnd = random.Random(seed); b = bytearray()
+    toks = [b"Pass: Loading EPBL\x00", b"DMC\x00", b"Samsung S-Boot 4.0\x00"]
+    while len(b) < n:
+        b += rnd.choice(toks) if rnd.random() < 0.25 else struct.pack("<I", 0xA9BF7BFD)
+    return bytes(b[:n])
+def cipher(n, seed):
+    rnd = random.Random(seed); return bytes(rnd.randrange(256) for _ in range(n))
+# G977N 배치: BL1 평문 20 KB → EPBL 암호화 38 KB → BL2 평문
+img = stub() + plain(0x5000 - 16, 1) + cipher(0xe800 - 0x5000, 2) \
+    + stub() + plain(0x30000 - 0xe800 - 16, 3)
+open(sys.argv[1], "wb").write(img)
+PYGEN
+
+python3 "$S/stage_map.py" "$SMW/fake.bin" --out "$SMW/sm.json" --quiet >/dev/null 2>&1
+SM="$SMW/sm.json"
+q() { python3 -c "import json;d=json.load(open('$SM'));$1" 2>/dev/null; }
+
+chk "평문 앞부분이 exec 로 남음" \
+    "$(q 'print(d["stages"][0]["state"])')" "exec"
+chk "  그 범위가 암호화 시작 전까지" \
+    "$(q 'print(hex(d["stages"][0]["file_range"][1]))')" "0x5000"
+chk "암호화 구간은 따로 분리" \
+    "$(q 'print(d["stages"][1]["state"])')" "encrypted"
+chk "첫 실행 가능 스테이지가 파일 선두" \
+    "$(q 'print([s["file_range"][0] for s in d["stages"] if s["state"]=="exec"][0])')" "0"
+chk "진입 스텁이 그 스테이지에 붙음" \
+    "$(q 'print(d["stages"][0]["entry_pc_file_offset"])')" "0"
+chk "건너뛸 스테이지는 하나뿐" \
+    "$(q 'print(sum(1 for s in d["stages"] if s["state"]!="exec"))')" "1"
+
+# 반대 경우: 구간이 암호화로 시작하면 쪼개지 않는다
+python3 - "$SMW/enc_first.bin" <<'PYGEN'
+import random, struct, sys
+def stub():
+    return (struct.pack("<I", 0x14000001) + struct.pack("<I", 0x10000000) +
+            struct.pack("<I", 0xD5384241) + struct.pack("<I", 0xD51EC000))
+def plain(n, seed):
+    rnd = random.Random(seed); b = bytearray()
+    while len(b) < n: b += struct.pack("<I", 0xA9BF7BFD)
+    return bytes(b[:n])
+def cipher(n, seed):
+    rnd = random.Random(seed); return bytes(rnd.randrange(256) for _ in range(n))
+open(sys.argv[1], "wb").write(cipher(0x8000, 9) + stub() + plain(0x8000 - 16, 3))
+PYGEN
+python3 "$S/stage_map.py" "$SMW/enc_first.bin" --out "$SMW/sm2.json" --quiet >/dev/null 2>&1
+chk "암호화로 시작하면 쪼개지 않음" \
+    "$(python3 -c "import json;d=json.load(open('$SMW/sm2.json'));print(d['stages'][0]['state'])" 2>/dev/null)" "encrypted"
+
+
 printf '\n\033[1m════════ 결과: %d 통과 / %d 실패 ════════\033[0m\n' "$PASS" "$FAIL"
 echo "작업 폴더: $ROOT"
 [ "$FAIL" -eq 0 ]
